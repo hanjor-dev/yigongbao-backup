@@ -11,6 +11,7 @@ yigongbao-backup-server/data/
 yigongbao-backup-server/*.log
 yigongbao-backup-server/.env
 yigongbao-backup-server/.env.*
+!yigongbao-backup-server/.env.example
 
 # IDE and operating-system files
 .idea/
