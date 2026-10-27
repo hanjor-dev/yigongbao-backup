@@ -300,7 +300,17 @@ export function useBackupConsole() {
         const result = await api('/admin/jobs');
         jobs.value = result.data || [];
         if (selectedJobId.value) {
-          selectedJob.value = jobs.value.find((job) => String(job.id) === String(selectedJobId.value)) || selectedJob.value;
+          const matched = jobs.value.find((job) => String(job.id) === String(selectedJobId.value));
+          if (matched) {
+            selectedJob.value = matched;
+          } else {
+            // 任务可能已被清理或数据库重建，避免继续轮询一个不存在的任务。
+            stopJobPolling();
+            selectedJobId.value = null;
+            selectedJob.value = null;
+            jobOrders.value = [];
+            jobFiles.value = [];
+          }
         }
       } catch (error) { notice.value = error.message; }
     }
@@ -324,7 +334,16 @@ export function useBackupConsole() {
         jobFiles.value = fileResult.data || [];
         if (selectedJob.value && isTerminalJob(selectedJob.value)) stopJobPolling();
       } catch (error) {
-        if (!silent) notice.value = error.message || '任务详情加载失败';
+        if (error?.message?.includes('任务不存在')) {
+          stopJobPolling();
+          selectedJobId.value = null;
+          selectedJob.value = null;
+          jobOrders.value = [];
+          jobFiles.value = [];
+          notice.value = '任务已不存在，已清除当前任务选择';
+        } else if (!silent) {
+          notice.value = error.message || '任务详情加载失败';
+        }
       } finally {
         jobLoading.value = false;
       }
