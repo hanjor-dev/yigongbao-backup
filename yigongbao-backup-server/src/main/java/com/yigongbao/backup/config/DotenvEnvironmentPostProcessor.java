@@ -31,6 +31,8 @@ public final class DotenvEnvironmentPostProcessor implements EnvironmentPostProc
         }
         try {
             Map<String, Object> values = parse(Files.readAllLines(envFile, StandardCharsets.UTF_8));
+            values.entrySet().removeIf(entry -> System.getenv(entry.getKey()) != null
+                    || System.getProperty(entry.getKey()) != null);
             if (!values.isEmpty()) {
                 environment.getPropertySources().addFirst(new MapPropertySource(PROPERTY_SOURCE_NAME, values));
             }
