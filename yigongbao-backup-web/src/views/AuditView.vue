@@ -2,16 +2,4 @@
 import { useBackupContext } from '../composables/useBackupContext.js';
 const { auditRows, loadAudit } = useBackupContext();
 </script>
-
-<template>
-  <section class="card page-card">
-    <div class="toolbar"><div><div class="eyebrow">TRACEABILITY</div><h2>审计日志</h2></div><button @click="loadAudit">刷新</button></div>
-    <div class="table-wrap">
-      <table><thead><tr><th>时间</th><th>操作人</th><th>操作</th><th>资源</th><th>结果</th><th>请求号</th></tr></thead>
-      <tbody>
-        <tr v-for="row in auditRows" :key="row.id || row.requestId"><td>{{row.createdAt || row.time || '-'}}</td><td>{{row.operatorName || row.operator || row.username || '-'}}</td><td>{{row.action || row.operation || '-'}}</td><td>{{row.resource || row.target || '-'}}</td><td><status-badge :value="row.result || row.status" /></td><td>{{row.requestId || '-'}}</td></tr>
-      </tbody></table>
-      <empty-state v-if="!auditRows.length" message="暂无审计日志" />
-    </div>
-  </section>
-</template>
+<template><div class="page-stack"><section class="page-heading"><div><div class="eyebrow">TRACEABILITY</div><h2>审计日志</h2><p>所有登录、备份、恢复与清理操作均可追溯。</p></div><el-button @click="loadAudit"><el-icon><Refresh /></el-icon>刷新日志</el-button></section><el-card shadow="never" class="table-card"><el-table :data="auditRows" class="data-table"><el-table-column prop="createdAt" label="时间" min-width="170" /><el-table-column label="操作人" min-width="130"><template #default="{ row }">{{ row.operatorName || row.operator || row.username || '-' }}</template></el-table-column><el-table-column label="操作" min-width="180"><template #default="{ row }">{{ row.action || row.operation || '-' }}</template></el-table-column><el-table-column label="资源" min-width="150"><template #default="{ row }">{{ row.resource || row.target || '-' }}</template></el-table-column><el-table-column label="结果" width="120"><template #default="{ row }"><status-badge :value="row.result || row.status" /></template></el-table-column><el-table-column prop="requestId" label="请求号" min-width="250" /><template #empty><el-empty description="暂无审计日志" /></template></el-table></el-card></div></template>

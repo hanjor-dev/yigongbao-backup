@@ -33,11 +33,11 @@ const currentView = computed(() => pageViews[page.value] || OrdersView);
 </script>
 
 <template>
-  <div class="shell">
+  <div class="shell app-root">
     <LoginView v-if="!token" />
     <BackupLayout v-else>
       <component :is="currentView" />
     </BackupLayout>
-    <p class="notice">{{ notice }}</p>
+    <el-alert v-if="notice" class="global-notice" type="warning" :closable="false" show-icon><template #title>{{ notice }}</template></el-alert>
   </div>
 </template>
