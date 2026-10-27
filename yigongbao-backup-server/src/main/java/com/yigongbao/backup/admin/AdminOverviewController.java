@@ -42,7 +42,7 @@ public class AdminOverviewController {
     }
 
     @GetMapping("/audit")
-    public ApiResponse<List<AuditLogEntity>> audit(@RequestParam(defaultValue = "100") int limit) {
+    public ApiResponse<List<AuditLogEntity>> audit(@RequestParam(name = "limit", defaultValue = "100") int limit) {
         admin();
         int safeLimit = Math.max(1, Math.min(limit, 500));
         List<AuditLogEntity> rows = auditLogMapper.selectList(Wrappers.<AuditLogEntity>query()

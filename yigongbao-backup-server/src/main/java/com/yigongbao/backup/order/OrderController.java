@@ -42,16 +42,16 @@ public class OrderController {
     /** 分页查询全部订单快照，并支持订单号、创建时间和快照状态筛选。 */
     @GetMapping
     public ApiResponse<Page<OrderSnapshotEntity>> list(
-            @RequestParam(defaultValue = "1") long current,
-            @RequestParam(defaultValue = "20") long size,
-            @RequestParam(required = false) String orderCode,
-            @RequestParam(required = false) String createdFrom,
-            @RequestParam(required = false) String createdTo,
-            @RequestParam(required = false) String snapshotStatus,
-            @RequestParam(required = false) String sourceStatus,
-            @RequestParam(required = false) String cloudRollup,
-            @RequestParam(required = false) String hotRollup,
-            @RequestParam(required = false) String coldRollup) {
+            @RequestParam(name = "current", defaultValue = "1") long current,
+            @RequestParam(name = "size", defaultValue = "20") long size,
+            @RequestParam(name = "orderCode", required = false) String orderCode,
+            @RequestParam(name = "createdFrom", required = false) String createdFrom,
+            @RequestParam(name = "createdTo", required = false) String createdTo,
+            @RequestParam(name = "snapshotStatus", required = false) String snapshotStatus,
+            @RequestParam(name = "sourceStatus", required = false) String sourceStatus,
+            @RequestParam(name = "cloudRollup", required = false) String cloudRollup,
+            @RequestParam(name = "hotRollup", required = false) String hotRollup,
+            @RequestParam(name = "coldRollup", required = false) String coldRollup) {
         StpUtil.checkLogin();
         if (current < 1 || size < 1) {
             throw new IllegalArgumentException("分页参数必须大于零");
@@ -101,7 +101,7 @@ public class OrderController {
 
     /** 查询单个订单快照；不存在时按契约返回 404。 */
     @GetMapping("/{id}")
-    public ResponseEntity<ApiResponse<OrderSnapshotEntity>> detail(@PathVariable long id) {
+    public ResponseEntity<ApiResponse<OrderSnapshotEntity>> detail(@PathVariable("id") long id) {
         StpUtil.checkLogin();
         if (id < 1) {
             return ResponseEntity.notFound().build();
@@ -115,7 +115,7 @@ public class OrderController {
 
     /** 查询订单关联资产及其三态存储状态。 */
     @GetMapping("/{id}/assets")
-    public ResponseEntity<ApiResponse<List<AssetEntity>>> assets(@PathVariable long id) {
+    public ResponseEntity<ApiResponse<List<AssetEntity>>> assets(@PathVariable("id") long id) {
         StpUtil.checkLogin();
         if (id < 1 || snapshots.selectById(id) == null) {
             return ResponseEntity.notFound().build();
@@ -129,7 +129,7 @@ public class OrderController {
 
     /** 下载订单级压缩包，文件不存在时返回 404。 */
     @GetMapping("/{id}/package/download")
-    public ResponseEntity<?> download(@PathVariable long id) throws IOException {
+    public ResponseEntity<?> download(@PathVariable("id") long id) throws IOException {
         StpUtil.checkLogin();
         OrderSnapshotEntity snapshot = snapshots.selectById(id);
         if (snapshot == null || snapshot.getOrderCode() == null
