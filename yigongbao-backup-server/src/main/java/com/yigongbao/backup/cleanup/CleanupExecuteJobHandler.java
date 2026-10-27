@@ -7,6 +7,7 @@ import com.yigongbao.backup.job.JobHandler;
 import com.yigongbao.backup.storage.api.SpacePlanner.SpaceReservation;
 import com.yigongbao.backup.storage.api.SpaceReservationService;
 import com.yigongbao.backup.storage.reservation.InMemorySpaceReservationService;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Component;
 
 /** 后台轮询并消费 COS 清理 permit。 */
@@ -16,6 +17,7 @@ public class CleanupExecuteJobHandler implements JobHandler {
     private final ObjectMapper mapper;
     private final SpaceReservationService reservations;
 
+    @Autowired
     public CleanupExecuteJobHandler(PermitPollingService poller, ObjectMapper mapper,
                                     SpaceReservationService reservations) {
         this.poller = poller;

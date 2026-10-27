@@ -7,6 +7,7 @@ import com.yigongbao.backup.job.JobHandler;
 import com.yigongbao.backup.storage.api.SpacePlanner.SpaceReservation;
 import com.yigongbao.backup.storage.api.SpaceReservationService;
 import com.yigongbao.backup.storage.reservation.InMemorySpaceReservationService;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Component;
 
 /** 后台执行 COS 清理试运行并固化结果。 */
@@ -16,6 +17,7 @@ public class CleanupDryRunJobHandler implements JobHandler {
     private final ObjectMapper mapper;
     private final SpaceReservationService reservations;
 
+    @Autowired
     public CleanupDryRunJobHandler(CleanupService cleanup, ObjectMapper mapper,
                                    SpaceReservationService reservations) {
         this.cleanup = cleanup;
