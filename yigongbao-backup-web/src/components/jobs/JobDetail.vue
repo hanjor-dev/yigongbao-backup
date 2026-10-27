@@ -1,9 +1,54 @@
 <script setup>
+import { computed } from 'vue';
 import { useBackupContext } from '../../composables/useBackupContext.js';
+
 const { selectedJob, jobOrders, jobFiles, jobLoading, jobProgress, cancelJob, retryJob } = useBackupContext();
-const terminalStates = ['SUCCEEDED','FAILED','CANCELLED','CANCELED'];
-const jobState = (job) => job.state || job.status || '';
+const terminalStates = ['SUCCEEDED', 'FAILED', 'CANCELLED', 'CANCELED'];
+const jobState = (job) => job?.state || job?.status || '';
+const progress = computed(() => selectedJob.value ? jobProgress(selectedJob.value) : 0);
 </script>
+
 <template>
-  <div v-if="selectedJob" class="job-detail detail"><div class="job-summary"><strong>任务 {{selectedJob.id}}</strong><status-badge :value="jobState(selectedJob)" /><span>进度：{{jobProgress(selectedJob)}}%</span><span v-if="jobLoading">正在刷新…</span><button v-if="!terminalStates.includes(jobState(selectedJob))" @click="cancelJob()">取消任务</button><button v-if="terminalStates.includes(jobState(selectedJob)) && jobState(selectedJob) !== 'SUCCEEDED'" @click="retryJob()">重试任务</button></div><p v-if="selectedJob.failureCode" class="error-text">失败原因：{{selectedJob.failureCode}} {{selectedJob.failureEvidence || ''}}</p><h3>订单明细</h3><div class="table-wrap"><table><thead><tr><th>订单</th><th>状态</th><th>失败原因</th></tr></thead><tbody><tr v-for="row in jobOrders" :key="row.id || row.sourceOrderId"><td>{{row.sourceOrderId || row.snapshotId}}</td><td><status-badge :value="row.status" /></td><td class="error-text">{{row.failureCode || ''}} {{row.failureMessage || ''}}</td></tr></tbody></table><empty-state v-if="!jobOrders.length" message="暂无订单明细" /></div><h3>文件明细</h3><div class="table-wrap"><table><thead><tr><th>订单</th><th>资产</th><th>步骤</th><th>状态</th><th>进度</th><th>失败原因</th></tr></thead><tbody><tr v-for="row in jobFiles" :key="row.id || row.assetIdentity"><td>{{row.sourceOrderId || '-'}}</td><td>{{row.assetIdentity || '-'}}</td><td>{{row.step || '-'}}</td><td><status-badge :value="row.status" /></td><td>{{row.bytesDone || 0}} / {{row.bytesTotal || 0}}</td><td class="error-text">{{row.failureCode || ''}} {{row.failureMessage || ''}}</td></tr></tbody></table><empty-state v-if="!jobFiles.length" message="暂无文件明细" /></div></div>
+  <el-card v-if="selectedJob" class="job-detail detail" shadow="never">
+    <template #header>
+      <div class="detail-heading">
+        <div>
+          <span class="eyebrow">TASK DETAIL</span>
+          <h3>任务 {{ selectedJob.id }}</h3>
+        </div>
+        <div class="detail-actions">
+          <el-tag :type="jobState(selectedJob) === 'SUCCEEDED' ? 'success' : jobState(selectedJob) === 'FAILED' ? 'danger' : 'info'" effect="light">
+            {{ jobState(selectedJob) || 'UNKNOWN' }}
+          </el-tag>
+          <el-button v-if="!terminalStates.includes(jobState(selectedJob))" type="danger" plain @click="cancelJob()">取消任务</el-button>
+          <el-button v-if="terminalStates.includes(jobState(selectedJob)) && jobState(selectedJob) !== 'SUCCEEDED'" type="primary" plain @click="retryJob()">重试任务</el-button>
+        </div>
+      </div>
+    </template>
+
+    <div class="job-progress-panel">
+      <div class="progress-meta"><span>整体进度</span><strong>{{ progress }}%</strong><span v-if="jobLoading" class="muted">正在刷新…</span></div>
+      <el-progress :percentage="progress" :status="jobState(selectedJob) === 'FAILED' ? 'exception' : jobState(selectedJob) === 'SUCCEEDED' ? 'success' : undefined" :stroke-width="10" />
+    </div>
+    <el-alert v-if="selectedJob.failureCode" type="error" :closable="false" show-icon class="mb-16">
+      失败原因：{{ selectedJob.failureCode }} {{ selectedJob.failureEvidence || '' }}
+    </el-alert>
+
+    <h4>订单明细</h4>
+    <el-table :data="jobOrders" stripe border class="mb-24" empty-text="暂无订单明细">
+      <el-table-column label="订单" min-width="180"><template #default="{ row }">{{ row.sourceOrderId || row.snapshotId }}</template></el-table-column>
+      <el-table-column label="状态" width="140"><template #default="{ row }"><status-badge :value="row.status" /></template></el-table-column>
+      <el-table-column label="失败原因" min-width="260"><template #default="{ row }"><span class="error-text">{{ row.failureCode || '' }} {{ row.failureMessage || '' }}</span></template></el-table-column>
+    </el-table>
+
+    <h4>文件明细</h4>
+    <el-table :data="jobFiles" stripe border empty-text="暂无文件明细">
+      <el-table-column prop="sourceOrderId" label="订单" min-width="160" />
+      <el-table-column prop="assetIdentity" label="资产" min-width="220" />
+      <el-table-column prop="step" label="步骤" width="140" />
+      <el-table-column label="状态" width="130"><template #default="{ row }"><status-badge :value="row.status" /></template></el-table-column>
+      <el-table-column label="进度" width="180"><template #default="{ row }">{{ row.bytesDone || 0 }} / {{ row.bytesTotal || 0 }}</template></el-table-column>
+      <el-table-column label="失败原因" min-width="260"><template #default="{ row }"><span class="error-text">{{ row.failureCode || '' }} {{ row.failureMessage || '' }}</span></template></el-table-column>
+    </el-table>
+  </el-card>
 </template>
