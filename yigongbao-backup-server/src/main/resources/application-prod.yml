@@ -1,6 +1,11 @@
 server:
   port: ${BACKUP_SERVER_PORT:18080}
   shutdown: graceful
+logging:
+  file:
+    name: ${BACKUP_LOG_FILE:./logs/yigongbao-backup-server.log}
+  level:
+    root: ${BACKUP_LOG_LEVEL:INFO}
 spring:
   application:
     name: yigongbao-backup-server
