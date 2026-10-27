@@ -1,0 +1,71 @@
+/* 生产后台视觉层：冷灰纸面 + 靛青操作色，服务密集型订单与任务场景。 */
+:root {
+  --page: #eef2f7; --panel: #fcfdff; --panel-soft: #f7f9fc; --ink: #172033; --muted: #66748a;
+  --line: #dfe5ef; --accent: #4f46b8; --accent-strong: #40389e; --accent-soft: #eeedff;
+  --success: #16794a; --warning: #956400; --danger: #b42318; --radius: 14px;
+  --shadow: 0 10px 30px rgba(34,49,92,.08);
+}
+html, body { min-height: 100%; overflow-x: clip; }
+body { background: var(--page); color: var(--ink); }
+header { background: linear-gradient(135deg, #20274a, #303867); box-shadow: 0 2px 14px rgba(23,32,51,.2); }
+.brand { letter-spacing: .01em; }
+main { max-width: 1380px; padding: 0 22px 48px; }
+nav { align-items: center; flex-wrap: wrap; padding: 10px; background: rgba(252,253,255,.88); border: 1px solid rgba(223,229,239,.9); border-radius: 16px; box-shadow: var(--shadow); }
+nav button { background: transparent; border: 1px solid transparent; color: #48536a; min-height: 38px; }
+nav button:hover:not(:disabled) { color: var(--accent); background: var(--accent-soft); }
+nav button.active { background: var(--accent); color: #fff; box-shadow: 0 5px 14px rgba(79,70,184,.22); }
+.password-box { display: flex; align-items: center; gap: 6px; margin-left: auto; }
+.password-box input { width: 160px; margin: 0; }
+.card { background: var(--panel); border: 1px solid var(--line); border-radius: var(--radius); box-shadow: var(--shadow); padding: 24px; }
+.toolbar { gap: 12px; margin-bottom: 16px; }
+.toolbar h2 { margin-bottom: 0; font-size: 20px; letter-spacing: -.01em; }
+button { border-radius: 8px; background: var(--accent); transition: background .16s ease, transform .16s ease, box-shadow .16s ease; }
+button:hover:not(:disabled) { background: var(--accent-strong); transform: translateY(-1px); box-shadow: 0 5px 12px rgba(79,70,184,.2); }
+button:focus-visible, input:focus-visible, select:focus-visible { outline: 3px solid #a5b4fc; outline-offset: 1px; }
+input, select { background: #fbfcff; border-color: #cfd8e6; }
+table { border-spacing: 0; overflow: hidden; border: 1px solid var(--line); border-radius: 12px; }
+th { background: #f4f6fb; color: #55637a; font-size: 12px; letter-spacing: .02em; }
+th, td { border-bottom-color: #edf0f5; }
+tbody tr:hover { background: #fafaff; }
+.overview-grid { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 14px; margin: 18px 0 22px; }
+.metric-card { background: linear-gradient(145deg, #fcfdff, #f8f9ff); border: 1px solid #e1e5f2; border-radius: 12px; padding: 18px; min-height: 112px; box-shadow: 0 4px 16px rgba(47,58,105,.05); }
+.metric-label { display: block; color: var(--muted); font-size: 12px; font-weight: 600; letter-spacing: .04em; }
+.metric-value { display: block; margin-top: 9px; font-size: 28px; font-variant-numeric: tabular-nums; color: #252b5c; }
+.empty-state { text-align: center; color: #8190a6; padding: 44px 12px; }
+.empty-icon { display: block; color: #aab4c5; font-size: 26px; margin-bottom: 8px; }
+.status-badge { display: inline-flex; align-items: center; min-height: 24px; padding: 3px 9px; border-radius: 999px; font-size: 12px; font-weight: 650; white-space: nowrap; background: #eef1f6; color: #667085; }
+.status-success { background: #e4f7ed; color: var(--success); }
+.status-progress { background: #fff3d6; color: var(--warning); }
+.status-danger { background: #ffe8e7; color: var(--danger); }
+.notice { min-height: 22px; padding: 8px 12px; border-radius: 8px; background: #fff4f3; }
+.progress { background: #e7eaf3; }
+.progress span { background: linear-gradient(90deg, #4f46b8, #7c73e6); }
+.diagnostics, .warning { border-radius: 10px; }
+.detail { background: var(--panel-soft); border: 1px solid #e6eaf2; }
+.pager { justify-content: flex-end; color: var(--muted); }
+.pager button { min-width: 78px; }
+@media (max-width: 900px) { main { padding: 0 12px 32px; } .overview-grid { grid-template-columns: 1fr 1fr; } .filters { grid-template-columns: 1fr 1fr; } .password-box { margin-left: 0; width: 100%; } }
+@media (max-width: 560px) { header { padding: 0 16px; } .brand { font-size: 17px; } main { margin: 12px; padding: 0 0 28px; } nav { border-radius: 12px; } nav button { flex: 1 1 auto; } .overview-grid { grid-template-columns: 1fr; } .card { padding: 16px; border-radius: 12px; } .toolbar { align-items: flex-start; flex-direction: column; } table { display: block; overflow-x: auto; white-space: nowrap; } th, td { min-height: 44px; } .password-box input { flex: 1; width: auto; } }
+@media (prefers-reduced-motion: reduce) { *, *::before, *::after { animation-duration: .01ms !important; transition-duration: .01ms !important; scroll-behavior: auto !important; } }
+.page-card { min-width: 0; }
+.eyebrow { color: var(--accent); font-size: 11px; font-weight: 800; letter-spacing: .16em; text-transform: uppercase; margin-bottom: 5px; }
+.toolbar-actions, .row-actions, .detail-header, .job-summary { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.table-wrap { width: 100%; overflow-x: auto; }
+.table-wrap table { min-width: 720px; }
+.json-preview { margin: 16px 0 0; padding: 14px; border: 1px solid var(--line); border-radius: 10px; background: #f5f7fb; color: #46536b; font: 12px/1.6 ui-monospace, SFMono-Regular, Consolas, monospace; }
+.inline-form { display: flex; align-items: flex-end; gap: 10px; flex-wrap: wrap; }
+.inline-form label { min-width: 220px; color: var(--muted); font-size: 12px; font-weight: 650; }
+.inline-form input, .inline-form select { margin: 6px 0 0; }
+.form-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 14px; margin-bottom: 14px; }
+.form-grid .detail { margin-top: 0; }
+.detail-header { justify-content: space-between; }
+.detail-header h3 { margin: 0; }
+.file-list { margin: 8px 0 18px; padding-left: 20px; color: var(--ink); }
+.file-list li { margin: 7px 0; }
+.file-list span { color: var(--muted); margin-left: 6px; }
+.mono { font-family: ui-monospace, SFMono-Regular, Consolas, monospace; font-size: 12px; }
+.notice-inline { margin: 12px 0 0; color: var(--danger); }
+.login form { display: grid; gap: 10px; }
+.login label { color: var(--muted); font-size: 12px; font-weight: 650; }
+.login label input { margin: 6px 0 0; }
+@media (max-width: 560px) { .form-grid { grid-template-columns: 1fr; } .toolbar-actions { width: 100%; } }

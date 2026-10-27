@@ -1,0 +1,39 @@
+server:
+  port: 18080
+spring:
+  application:
+    name: yigongbao-backup-server
+  datasource:
+    url: ${BACKUP_DB_URL:jdbc:mysql://127.0.0.1:3306/yigongbao_backup?useUnicode=true&characterEncoding=utf8&serverTimezone=UTC}
+    username: ${BACKUP_DB_USERNAME:backup}
+    password: ${BACKUP_DB_PASSWORD:}
+mybatis-plus:
+  # 本项目禁止 Mapper XML，SQL 仅允许注解或 MyBatis-Plus Wrapper。
+  mapper-locations: []
+  global-config:
+    db-config:
+      logic-delete-field: isDeleted
+      logic-delete-value: 1
+      logic-not-delete-value: 0
+sa-token:
+  token-name: backup-token
+  is-concurrent: false
+backup:
+  storage:
+    root: ${BACKUP_HOT_ROOT:./data}
+    managed-roots: ${BACKUP_MANAGED_STORAGE_ROOTS:./data,./cold-disks}
+  schedule:
+    interval-ms: ${BACKUP_SCHEDULE_INTERVAL_MS:1800000}
+  job:
+    recovery-interval-ms: ${BACKUP_JOB_RECOVERY_INTERVAL_MS:60000}
+  online:
+    enabled: ${BACKUP_ONLINE_ENABLED:false}
+    auth-mode: ${BACKUP_ONLINE_AUTH_MODE:NONE}
+    base-url: ${YIGONGBAO_ONLINE_BASE_URL:}
+    connect-timeout: ${BACKUP_ONLINE_CONNECT_TIMEOUT:PT10S}
+    request-timeout: ${BACKUP_ONLINE_REQUEST_TIMEOUT:PT60S}
+    key-id: ${BACKUP_HMAC_KEY_ID:}
+    key-secret: ${BACKUP_HMAC_KEY_SECRET:}
+    key-secret-ref: ${BACKUP_HMAC_KEY_SECRET_REF:}
+    bearer-token: ${BACKUP_ONLINE_BEARER_TOKEN:}
+    scope: ${BACKUP_ONLINE_SCOPE:BACKUP}

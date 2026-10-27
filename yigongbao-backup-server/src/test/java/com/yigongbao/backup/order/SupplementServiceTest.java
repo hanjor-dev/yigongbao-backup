@@ -1,0 +1,7 @@
+package com.yigongbao.backup.order;
+import com.yigongbao.backup.storage.local.LocalDirectoryArtifactStore; import org.junit.jupiter.api.Test; import java.io.*; import java.nio.file.*; import java.util.Set;
+import static org.assertj.core.api.Assertions.*;
+class SupplementServiceTest {
+ @Test void validatesConfiguredTypeSizeAndOrderId() throws Exception { var root=Files.createTempDirectory("supp"); var s=new SupplementService(new LocalDirectoryArtifactStore(root),Set.of("step","dwg"),10); String id=s.upload("o","a.step",new ByteArrayInputStream("ok".getBytes()),2); assertThat(id).isNotBlank(); assertThat(s.open("o",id).readAllBytes()).containsExactly(new byte[]{'o','k'}); assertThatThrownBy(()->s.upload("o","a.exe",new ByteArrayInputStream(new byte[1]),1)).isInstanceOf(IllegalArgumentException.class); assertThatThrownBy(()->s.upload("o","a.dwg",new ByteArrayInputStream(new byte[11]),11)).isInstanceOf(IllegalArgumentException.class); assertThatThrownBy(()->s.upload("../x","a.dwg",new ByteArrayInputStream(new byte[1]),1)).isInstanceOf(IllegalArgumentException.class); }
+ @Test void rejectsActualStreamLargerThanDeclaredLimit() throws Exception { var root=Files.createTempDirectory("supp-limit"); var s=new SupplementService(new LocalDirectoryArtifactStore(root),Set.of("step"),3); assertThatThrownBy(()->s.upload("o","a.step",new ByteArrayInputStream(new byte[4]),1)).isInstanceOf(IOException.class); }
+}

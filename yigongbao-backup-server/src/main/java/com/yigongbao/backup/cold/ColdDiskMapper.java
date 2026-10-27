@@ -1,0 +1,1 @@
+package com.yigongbao.backup.cold; import com.baomidou.mybatisplus.core.mapper.BaseMapper; import org.apache.ibatis.annotations.Mapper; /** 冷备介质数据访问接口。 */ @Mapper public interface ColdDiskMapper extends BaseMapper<ColdDiskEntity>{}

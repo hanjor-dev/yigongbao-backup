@@ -1,0 +1,23 @@
+# Java/Maven build outputs
+yigongbao-backup-server/target/
+yigongbao-backup-server/dist/
+
+# Node/Vite dependencies and build output
+yigongbao-backup-web/node_modules/
+yigongbao-backup-web/dist/
+
+# Local runtime data and secrets
+yigongbao-backup-server/data/
+yigongbao-backup-server/*.log
+yigongbao-backup-server/.env
+yigongbao-backup-server/.env.*
+
+# IDE and operating-system files
+.idea/
+.vscode/
+*.iml
+.DS_Store
+Thumbs.db
+
+# Internal planning state is not part of the distributable system source
+.superpowers/

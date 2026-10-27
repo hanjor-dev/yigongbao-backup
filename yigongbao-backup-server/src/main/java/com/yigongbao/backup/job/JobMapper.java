@@ -1,0 +1,1 @@
+package com.yigongbao.backup.job; import com.baomidou.mybatisplus.core.mapper.BaseMapper; import org.apache.ibatis.annotations.Mapper; /** 长任务持久化访问接口。 */ @Mapper public interface JobMapper extends BaseMapper<JobEntity>{}

@@ -1,0 +1,694 @@
+openapi: 3.1.0
+info:
+  title: 医工宝本地备份服务 API
+  version: 1.0.0
+  description: >-
+    本地备份管理端接口。所有 ID 和字节数均为十进制字符串，时间使用 RFC 3339；
+    普通用户仅可访问认证、订单、下载和补传接口，admin 路径要求 ADMIN 角色。
+servers:
+  - url: https://backup.local
+security:
+  - BearerAuth: []
+paths:
+  /api/v1/auth/login:
+    post:
+      security: []
+      operationId: login
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: '#/components/schemas/LoginRequest'}
+      responses:
+        '200': {$ref: '#/components/responses/LoginSucceeded'}
+        '400': {$ref: '#/components/responses/BadRequest'}
+        '401': {$ref: '#/components/responses/Unauthorized'}
+        '429': {$ref: '#/components/responses/RateLimited'}
+  /api/v1/auth/logout:
+    post:
+      operationId: logout
+      parameters: [{$ref: '#/components/parameters/IdempotencyKey'}]
+      responses:
+        '200': {$ref: '#/components/responses/CommandSucceeded'}
+        '401': {$ref: '#/components/responses/Unauthorized'}
+  /api/v1/auth/profile:
+    get:
+      operationId: getProfile
+      responses:
+        '200': {$ref: '#/components/responses/ProfileSucceeded'}
+        '401': {$ref: '#/components/responses/Unauthorized'}
+  /api/v1/auth/password:
+    put:
+      operationId: changeOwnPassword
+      parameters: [{$ref: '#/components/parameters/IdempotencyKey'}]
+      requestBody: {$ref: '#/components/requestBodies/PasswordChange'}
+      responses:
+        '200': {$ref: '#/components/responses/CommandSucceeded'}
+        '400': {$ref: '#/components/responses/BadRequest'}
+        '401': {$ref: '#/components/responses/Unauthorized'}
+  /api/v1/admin/accounts:
+    get:
+      operationId: listAccounts
+      parameters:
+        - {$ref: '#/components/parameters/Cursor'}
+        - {$ref: '#/components/parameters/PageSize'}
+        - {$ref: '#/components/parameters/HighWatermark'}
+      responses:
+        '200': {$ref: '#/components/responses/PageSucceeded'}
+        '403': {$ref: '#/components/responses/Forbidden'}
+  /api/v1/admin/accounts/{id}/status:
+    put:
+      operationId: updateAccountStatus
+      parameters:
+        - {$ref: '#/components/parameters/Id'}
+        - {$ref: '#/components/parameters/IdempotencyKey'}
+      requestBody: {$ref: '#/components/requestBodies/StatusChange'}
+      responses:
+        '200': {$ref: '#/components/responses/CommandSucceeded'}
+        '403': {$ref: '#/components/responses/Forbidden'}
+        '409': {$ref: '#/components/responses/Conflict'}
+  /api/v1/admin/accounts/{id}/password:
+    put:
+      operationId: resetAccountPassword
+      parameters:
+        - {$ref: '#/components/parameters/Id'}
+        - {$ref: '#/components/parameters/IdempotencyKey'}
+      requestBody: {$ref: '#/components/requestBodies/PasswordChange'}
+      responses:
+        '200': {$ref: '#/components/responses/CommandSucceeded'}
+        '403': {$ref: '#/components/responses/Forbidden'}
+  /api/v1/admin/accounts/{id}/field-ownership:
+    put:
+      operationId: updateFieldOwnership
+      parameters:
+        - {$ref: '#/components/parameters/Id'}
+        - {$ref: '#/components/parameters/IdempotencyKey'}
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: '#/components/schemas/FieldOwnershipRequest'}
+      responses:
+        '200': {$ref: '#/components/responses/CommandSucceeded'}
+        '403': {$ref: '#/components/responses/Forbidden'}
+        '409': {$ref: '#/components/responses/Conflict'}
+  /api/v1/admin/accounts/sync-jobs:
+    post:
+      operationId: createAccountSyncJob
+      parameters: [{$ref: '#/components/parameters/IdempotencyKey'}]
+      responses:
+        '200': {$ref: '#/components/responses/CommandSucceeded'}
+        '403': {$ref: '#/components/responses/Forbidden'}
+        '409': {$ref: '#/components/responses/Conflict'}
+  /api/v1/orders:
+    get:
+      operationId: listOrders
+      parameters:
+        - {$ref: '#/components/parameters/Cursor'}
+        - {$ref: '#/components/parameters/PageSize'}
+        - {$ref: '#/components/parameters/HighWatermark'}
+        - {name: orderCode, in: query, schema: {type: string}}
+        - {name: createdFrom, in: query, schema: {$ref: '#/components/schemas/Rfc3339Time'}}
+        - {name: createdTo, in: query, schema: {$ref: '#/components/schemas/Rfc3339Time'}}
+        - {name: snapshotStatus, in: query, schema: {type: string}}
+      responses:
+        '200':
+          description: 订单游标页
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/OrderPageEnvelope'}
+        '400': {$ref: '#/components/responses/BadRequest'}
+  /api/v1/orders/{id}:
+    get:
+      operationId: getOrder
+      parameters: [{$ref: '#/components/parameters/Id'}]
+      responses:
+        '200':
+          description: 订单快照详情
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/OrderEnvelope'}
+        '404': {$ref: '#/components/responses/NotFound'}
+  /api/v1/orders/{id}/assets:
+    get:
+      operationId: listOrderAssets
+      parameters: [{$ref: '#/components/parameters/Id'}]
+      responses:
+        '200': {$ref: '#/components/responses/PageSucceeded'}
+        '404': {$ref: '#/components/responses/NotFound'}
+  /api/v1/orders/{id}/package/download:
+    get:
+      operationId: downloadOrderPackage
+      parameters: [{$ref: '#/components/parameters/Id'}]
+      responses:
+        '200':
+          description: ZIP64 订单包
+          headers:
+            Content-Disposition: {schema: {type: string}}
+          content:
+            application/zip:
+              schema: {type: string, format: binary}
+        '404': {$ref: '#/components/responses/NotFound'}
+        '409': {$ref: '#/components/responses/Conflict'}
+  /api/v1/orders/{id}/supplements:
+    get:
+      operationId: listSupplements
+      parameters: [{$ref: '#/components/parameters/Id'}]
+      responses:
+        '200': {$ref: '#/components/responses/PageSucceeded'}
+        '404': {$ref: '#/components/responses/NotFound'}
+    post:
+      operationId: uploadSupplement
+      parameters:
+        - {$ref: '#/components/parameters/Id'}
+        - {$ref: '#/components/parameters/IdempotencyKey'}
+      requestBody:
+        required: true
+        content:
+          multipart/form-data:
+            schema:
+              type: object
+              required: [file]
+              properties:
+                file: {type: string, format: binary}
+                remark: {type: string, maxLength: 512}
+      responses:
+        '200': {$ref: '#/components/responses/CommandSucceeded'}
+        '404': {$ref: '#/components/responses/NotFound'}
+        '409': {$ref: '#/components/responses/Conflict'}
+  /api/v1/orders/{id}/supplements/{fileId}/download:
+    get:
+      operationId: downloadSupplement
+      parameters:
+        - {$ref: '#/components/parameters/Id'}
+        - {$ref: '#/components/parameters/FileId'}
+      responses:
+        '200':
+          description: 补传文件
+          content:
+            application/octet-stream:
+              schema: {type: string, format: binary}
+        '404': {$ref: '#/components/responses/NotFound'}
+  /api/v1/admin/jobs:
+    get:
+      operationId: listJobs
+      parameters:
+        - {$ref: '#/components/parameters/Cursor'}
+        - {$ref: '#/components/parameters/PageSize'}
+        - {$ref: '#/components/parameters/HighWatermark'}
+      responses:
+        '200': {$ref: '#/components/responses/PageSucceeded'}
+        '403': {$ref: '#/components/responses/Forbidden'}
+  /api/v1/admin/jobs/{id}:
+    get:
+      operationId: getJob
+      parameters: [{$ref: '#/components/parameters/Id'}]
+      responses:
+        '200': {$ref: '#/components/responses/ItemSucceeded'}
+        '403': {$ref: '#/components/responses/Forbidden'}
+        '404': {$ref: '#/components/responses/NotFound'}
+  /api/v1/admin/jobs/{id}/retry:
+    post:
+      operationId: retryJob
+      parameters:
+        - {$ref: '#/components/parameters/Id'}
+        - {$ref: '#/components/parameters/IdempotencyKey'}
+      responses:
+        '200': {$ref: '#/components/responses/CommandSucceeded'}
+        '403': {$ref: '#/components/responses/Forbidden'}
+        '409': {$ref: '#/components/responses/Conflict'}
+  /api/v1/admin/jobs/{id}/cancel:
+    post:
+      operationId: cancelJob
+      parameters:
+        - {$ref: '#/components/parameters/Id'}
+        - {$ref: '#/components/parameters/IdempotencyKey'}
+      requestBody: {$ref: '#/components/requestBodies/ReasonCommand'}
+      responses:
+        '200': {$ref: '#/components/responses/CommandSucceeded'}
+        '403': {$ref: '#/components/responses/Forbidden'}
+        '409': {$ref: '#/components/responses/Conflict'}
+  /api/v1/admin/storage/pools:
+    get:
+      operationId: listStoragePools
+      responses:
+        '200': {$ref: '#/components/responses/PageSucceeded'}
+        '403': {$ref: '#/components/responses/Forbidden'}
+  /api/v1/admin/storage/history:
+    get:
+      operationId: listStorageProbeHistory
+      parameters:
+        - {$ref: '#/components/parameters/Cursor'}
+        - {$ref: '#/components/parameters/PageSize'}
+        - {$ref: '#/components/parameters/HighWatermark'}
+      responses:
+        '200': {$ref: '#/components/responses/PageSucceeded'}
+        '403': {$ref: '#/components/responses/Forbidden'}
+  /api/v1/admin/storage/probe:
+    post:
+      operationId: probeStorage
+      parameters: [{$ref: '#/components/parameters/IdempotencyKey'}]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [poolId]
+              properties: {poolId: {$ref: '#/components/schemas/DecimalId'}}
+      responses:
+        '200': {$ref: '#/components/responses/CommandSucceeded'}
+        '403': {$ref: '#/components/responses/Forbidden'}
+        '503': {$ref: '#/components/responses/DependencyUnavailable'}
+  /api/v1/admin/configs:
+    get:
+      operationId: listConfigs
+      responses:
+        '200': {$ref: '#/components/responses/PageSucceeded'}
+        '403': {$ref: '#/components/responses/Forbidden'}
+    put:
+      operationId: updateConfig
+      parameters: [{$ref: '#/components/parameters/IdempotencyKey'}]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: '#/components/schemas/ConfigUpdateRequest'}
+      responses:
+        '200': {$ref: '#/components/responses/CommandSucceeded'}
+        '403': {$ref: '#/components/responses/Forbidden'}
+        '409': {$ref: '#/components/responses/Conflict'}
+  /api/v1/admin/cold-batches/preview:
+    post:
+      operationId: previewColdBatch
+      parameters: [{$ref: '#/components/parameters/IdempotencyKey'}]
+      requestBody: {$ref: '#/components/requestBodies/ColdBatchSelection'}
+      responses:
+        '200': {$ref: '#/components/responses/ItemSucceeded'}
+        '403': {$ref: '#/components/responses/Forbidden'}
+        '409': {$ref: '#/components/responses/Conflict'}
+  /api/v1/admin/cold-batches:
+    get:
+      operationId: listColdBatches
+      parameters:
+        - {$ref: '#/components/parameters/Cursor'}
+        - {$ref: '#/components/parameters/PageSize'}
+        - {$ref: '#/components/parameters/HighWatermark'}
+      responses:
+        '200': {$ref: '#/components/responses/PageSucceeded'}
+        '403': {$ref: '#/components/responses/Forbidden'}
+    post:
+      operationId: createColdBatch
+      parameters: [{$ref: '#/components/parameters/IdempotencyKey'}]
+      requestBody: {$ref: '#/components/requestBodies/ColdBatchSelection'}
+      responses:
+        '200': {$ref: '#/components/responses/CommandSucceeded'}
+        '403': {$ref: '#/components/responses/Forbidden'}
+        '409': {$ref: '#/components/responses/Conflict'}
+  /api/v1/admin/cold-batches/{id}:
+    get:
+      operationId: getColdBatch
+      parameters: [{$ref: '#/components/parameters/Id'}]
+      responses:
+        '200': {$ref: '#/components/responses/ItemSucceeded'}
+        '404': {$ref: '#/components/responses/NotFound'}
+  /api/v1/admin/cold-batches/{id}/verify:
+    post:
+      operationId: verifyColdBatch
+      parameters:
+        - {$ref: '#/components/parameters/Id'}
+        - {$ref: '#/components/parameters/IdempotencyKey'}
+      responses:
+        '200': {$ref: '#/components/responses/CommandSucceeded'}
+        '409': {$ref: '#/components/responses/Conflict'}
+  /api/v1/admin/cold-batches/{id}/confirm-reinsert-verification:
+    post:
+      operationId: confirmColdDiskReinsert
+      parameters:
+        - {$ref: '#/components/parameters/Id'}
+        - {$ref: '#/components/parameters/IdempotencyKey'}
+      responses:
+        '200': {$ref: '#/components/responses/CommandSucceeded'}
+        '409': {$ref: '#/components/responses/Conflict'}
+  /api/v1/admin/cold-batches/{id}/hot-cleanup:
+    post:
+      operationId: cleanupHotCopy
+      parameters:
+        - {$ref: '#/components/parameters/Id'}
+        - {$ref: '#/components/parameters/IdempotencyKey'}
+      responses:
+        '200': {$ref: '#/components/responses/CommandSucceeded'}
+        '409': {$ref: '#/components/responses/Conflict'}
+        '412': {$ref: '#/components/responses/PreconditionFailed'}
+  /api/v1/admin/cold-imports/scan:
+    post:
+      operationId: scanColdImport
+      parameters: [{$ref: '#/components/parameters/IdempotencyKey'}]
+      responses:
+        '200': {$ref: '#/components/responses/CommandSucceeded'}
+        '409': {$ref: '#/components/responses/Conflict'}
+  /api/v1/admin/cold-imports/{batchId}/restore:
+    post:
+      operationId: restoreColdBatch
+      parameters:
+        - {$ref: '#/components/parameters/BatchId'}
+        - {$ref: '#/components/parameters/IdempotencyKey'}
+      responses:
+        '200': {$ref: '#/components/responses/CommandSucceeded'}
+        '409': {$ref: '#/components/responses/Conflict'}
+  /api/v1/admin/restores/preview:
+    post:
+      operationId: previewRestore
+      parameters: [{$ref: '#/components/parameters/IdempotencyKey'}]
+      requestBody: {$ref: '#/components/requestBodies/RestoreSelection'}
+      responses:
+        '200': {$ref: '#/components/responses/ItemSucceeded'}
+        '409': {$ref: '#/components/responses/Conflict'}
+  /api/v1/admin/restores:
+    post:
+      operationId: createRestore
+      parameters: [{$ref: '#/components/parameters/IdempotencyKey'}]
+      requestBody: {$ref: '#/components/requestBodies/RestoreSelection'}
+      responses:
+        '200': {$ref: '#/components/responses/CommandSucceeded'}
+        '409': {$ref: '#/components/responses/Conflict'}
+  /api/v1/admin/restores/{id}:
+    get:
+      operationId: getRestore
+      parameters: [{$ref: '#/components/parameters/Id'}]
+      responses:
+        '200': {$ref: '#/components/responses/ItemSucceeded'}
+        '404': {$ref: '#/components/responses/NotFound'}
+  /api/v1/admin/cleanup/tasks:
+    get:
+      operationId: listCleanupTasks
+      parameters:
+        - {$ref: '#/components/parameters/Cursor'}
+        - {$ref: '#/components/parameters/PageSize'}
+        - {$ref: '#/components/parameters/HighWatermark'}
+      responses:
+        '200': {$ref: '#/components/responses/PageSucceeded'}
+        '403': {$ref: '#/components/responses/Forbidden'}
+  /api/v1/admin/cleanup/tasks/{id}:
+    get:
+      operationId: getCleanupTask
+      parameters: [{$ref: '#/components/parameters/Id'}]
+      responses:
+        '200': {$ref: '#/components/responses/ItemSucceeded'}
+        '404': {$ref: '#/components/responses/NotFound'}
+  /api/v1/admin/cleanup/dry-runs:
+    post:
+      operationId: createCleanupDryRun
+      parameters: [{$ref: '#/components/parameters/IdempotencyKey'}]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [policyVersion]
+              properties: {policyVersion: {type: integer, minimum: 1}}
+      responses:
+        '200': {$ref: '#/components/responses/CommandSucceeded'}
+        '409': {$ref: '#/components/responses/Conflict'}
+  /api/v1/admin/cleanup/permit-poll:
+    post:
+      operationId: pollCleanupPermitRequests
+      parameters: [{$ref: '#/components/parameters/IdempotencyKey'}]
+      responses:
+        '200': {$ref: '#/components/responses/CommandSucceeded'}
+        '409': {$ref: '#/components/responses/Conflict'}
+        '503': {$ref: '#/components/responses/DependencyUnavailable'}
+components:
+  securitySchemes:
+    BearerAuth: {type: http, scheme: bearer, bearerFormat: JWT}
+  parameters:
+    Id:
+      name: id
+      in: path
+      required: true
+      schema: {$ref: '#/components/schemas/DecimalId'}
+    FileId:
+      name: fileId
+      in: path
+      required: true
+      schema: {$ref: '#/components/schemas/DecimalId'}
+    BatchId:
+      name: batchId
+      in: path
+      required: true
+      schema: {$ref: '#/components/schemas/DecimalId'}
+    IdempotencyKey:
+      name: Idempotency-Key
+      in: header
+      required: true
+      schema: {type: string, minLength: 16, maxLength: 128}
+    Cursor:
+      name: cursor
+      in: query
+      required: true
+      schema: {$ref: '#/components/schemas/Cursor'}
+    PageSize:
+      name: pageSize
+      in: query
+      required: true
+      schema: {type: integer, minimum: 1, maximum: 200}
+    HighWatermark:
+      name: highWatermark
+      in: query
+      required: false
+      schema: {$ref: '#/components/schemas/Cursor'}
+  requestBodies:
+    PasswordChange:
+      required: true
+      content:
+        application/json:
+          schema:
+            type: object
+            required: [newPassword]
+            properties:
+              oldPassword: {type: string, format: password}
+              newPassword: {type: string, format: password, minLength: 12, maxLength: 128}
+    StatusChange:
+      required: true
+      content:
+        application/json:
+          schema:
+            type: object
+            required: [status, rowVersion]
+            properties:
+              status: {type: string, enum: [ENABLED, DISABLED, ARCHIVED]}
+              rowVersion: {type: integer, minimum: 0}
+    ReasonCommand:
+      required: true
+      content:
+        application/json:
+          schema:
+            type: object
+            required: [reason]
+            properties: {reason: {type: string, minLength: 1, maxLength: 512}}
+    ColdBatchSelection:
+      required: true
+      content:
+        application/json:
+          schema:
+            type: object
+            required: [diskId, artifactIds, format]
+            properties:
+              diskId: {$ref: '#/components/schemas/DecimalId'}
+              artifactIds: {type: array, minItems: 1, items: {$ref: '#/components/schemas/DecimalId'}}
+              format: {type: string, enum: [DIRECTORY_V1, ZIP64_V1, SPLIT_ARCHIVE_V1]}
+    RestoreSelection:
+      required: true
+      content:
+        application/json:
+          schema:
+            type: object
+            required: [snapshotId, conflictPolicy]
+            properties:
+              snapshotId: {$ref: '#/components/schemas/DecimalId'}
+              conflictPolicy: {type: string, enum: [REJECT, CONFIRM_OVERWRITE, FORCE_OVERWRITE]}
+  responses:
+    LoginSucceeded:
+      description: 登录成功
+      content:
+        application/json:
+          schema: {$ref: '#/components/schemas/LoginEnvelope'}
+    ProfileSucceeded:
+      description: 当前用户
+      content:
+        application/json:
+          schema: {$ref: '#/components/schemas/ProfileEnvelope'}
+    CommandSucceeded:
+      description: 幂等命令成功
+      content:
+        application/json:
+          schema: {$ref: '#/components/schemas/CommandEnvelope'}
+    ItemSucceeded:
+      description: 单项结果
+      content:
+        application/json:
+          schema: {$ref: '#/components/schemas/ItemEnvelope'}
+    PageSucceeded:
+      description: 游标分页结果
+      content:
+        application/json:
+          schema: {$ref: '#/components/schemas/PageEnvelope'}
+    BadRequest: {$ref: '#/components/responses/ErrorResponse'}
+    Unauthorized: {$ref: '#/components/responses/ErrorResponse'}
+    Forbidden: {$ref: '#/components/responses/ErrorResponse'}
+    NotFound: {$ref: '#/components/responses/ErrorResponse'}
+    Conflict: {$ref: '#/components/responses/ErrorResponse'}
+    PreconditionFailed: {$ref: '#/components/responses/ErrorResponse'}
+    RateLimited: {$ref: '#/components/responses/ErrorResponse'}
+    DependencyUnavailable: {$ref: '#/components/responses/ErrorResponse'}
+    ErrorResponse:
+      description: 稳定错误码；客户端不得解析 message 决策
+      content:
+        application/json:
+          schema: {$ref: '#/components/schemas/ErrorEnvelope'}
+  schemas:
+    DecimalId: {type: string, pattern: '^[0-9]+$'}
+    ByteCount: {type: string, pattern: '^[0-9]+$'}
+    Rfc3339Time: {type: string, format: date-time}
+    Sha256: {type: string, pattern: '^[0-9a-f]{64}$'}
+    Cursor: {type: string, pattern: '^[A-Za-z0-9_-]*$'}
+    SuccessBase:
+      type: object
+      required: [code, message, requestId, data]
+      properties:
+        code: {const: OK}
+        message: {type: string}
+        requestId: {type: string}
+    ErrorEnvelope:
+      type: object
+      required: [code, message, requestId, data, retryable, retryAfterSeconds, details]
+      properties:
+        code:
+          type: string
+          enum: [VALIDATION_FAILED, AUTHENTICATION_FAILED, ACCOUNT_LOCKED, FORBIDDEN, NOT_FOUND, STATE_CONFLICT, IDEMPOTENCY_KEY_REUSED, STORAGE_TEMPORARY_UNAVAILABLE, COLD_DISK_MISMATCH, ARCHIVE_UNSAFE, LEASE_LOST, REMOTE_TIMEOUT, REMOTE_COMMIT_UNKNOWN, MANIFEST_CHANGED]
+        message: {type: string}
+        requestId: {type: string}
+        data: {type: 'null'}
+        retryable: {type: boolean}
+        retryAfterSeconds: {type: [integer, 'null'], minimum: 1}
+        details:
+          type: array
+          items:
+            type: object
+            required: [field, reason]
+            properties: {field: {type: string}, reason: {type: string}}
+    LoginRequest:
+      type: object
+      additionalProperties: false
+      required: [username, password]
+      properties:
+        username: {type: string, minLength: 1, maxLength: 64}
+        password: {type: string, format: password, minLength: 1, maxLength: 128}
+    LoginEnvelope:
+      allOf:
+        - {$ref: '#/components/schemas/SuccessBase'}
+        - type: object
+          properties:
+            data:
+              type: object
+              required: [accessToken, expiresAt, profile]
+              properties:
+                accessToken: {type: string}
+                expiresAt: {$ref: '#/components/schemas/Rfc3339Time'}
+                profile: {$ref: '#/components/schemas/Profile'}
+    Profile:
+      type: object
+      required: [id, username, roleCode, enabledStatus]
+      properties:
+        id: {$ref: '#/components/schemas/DecimalId'}
+        username: {type: string}
+        realName: {type: [string, 'null']}
+        roleCode: {type: string, enum: [USER, ADMIN]}
+        enabledStatus: {type: string, enum: [ENABLED, DISABLED, ARCHIVED]}
+    ProfileEnvelope:
+      allOf:
+        - {$ref: '#/components/schemas/SuccessBase'}
+        - type: object
+          properties: {data: {$ref: '#/components/schemas/Profile'}}
+    CommandEnvelope:
+      allOf:
+        - {$ref: '#/components/schemas/SuccessBase'}
+        - type: object
+          properties:
+            data:
+              type: object
+              required: [id, status]
+              properties:
+                id: {$ref: '#/components/schemas/DecimalId'}
+                status: {type: string}
+    ItemEnvelope:
+      allOf:
+        - {$ref: '#/components/schemas/SuccessBase'}
+        - type: object
+          properties: {data: {type: object, additionalProperties: true}}
+    PageData:
+      type: object
+      required: [items, nextCursor, hasMore, highWatermark]
+      properties:
+        items: {type: array, items: {type: object, additionalProperties: true}}
+        nextCursor: {$ref: '#/components/schemas/Cursor'}
+        hasMore: {type: boolean}
+        highWatermark: {$ref: '#/components/schemas/Cursor'}
+    PageEnvelope:
+      allOf:
+        - {$ref: '#/components/schemas/SuccessBase'}
+        - type: object
+          properties: {data: {$ref: '#/components/schemas/PageData'}}
+    OrderSummary:
+      type: object
+      required: [id, sourceOrderId, orderCode, orderCreatedAt, backupCompletedAt, snapshotStatus, cloudRollup, hotRollup, coldRollup]
+      properties:
+        id: {$ref: '#/components/schemas/DecimalId'}
+        sourceOrderId: {$ref: '#/components/schemas/DecimalId'}
+        orderCode: {type: string}
+        orderCreatedAt: {$ref: '#/components/schemas/Rfc3339Time'}
+        backupCompletedAt: {$ref: '#/components/schemas/Rfc3339Time'}
+        snapshotStatus: {type: string, enum: [AVAILABLE, RECEIPT_SUSPENDED, CORRUPT]}
+        cloudRollup: {type: string}
+        hotRollup: {type: string}
+        coldRollup: {type: string}
+    OrderPageEnvelope:
+      allOf:
+        - {$ref: '#/components/schemas/SuccessBase'}
+        - type: object
+          properties:
+            data:
+              allOf:
+                - {$ref: '#/components/schemas/PageData'}
+                - type: object
+                  properties: {items: {type: array, items: {$ref: '#/components/schemas/OrderSummary'}}}
+    OrderEnvelope:
+      allOf:
+        - {$ref: '#/components/schemas/SuccessBase'}
+        - type: object
+          properties:
+            data:
+              type: object
+              required: [summary, raw, display, relatedBusiness]
+              properties:
+                summary: {$ref: '#/components/schemas/OrderSummary'}
+                raw: {type: object, additionalProperties: true}
+                display: {type: object, additionalProperties: true}
+                relatedBusiness: {type: object, additionalProperties: true}
+    FieldOwnershipRequest:
+      type: object
+      additionalProperties: false
+      required: [fieldName, ownership, rowVersion]
+      properties:
+        fieldName: {type: string, enum: [username, realName, phone, email, roleCode, enabledStatus]}
+        ownership: {type: string, enum: [REMOTE, LOCAL]}
+        rowVersion: {type: integer, minimum: 0}
+    ConfigUpdateRequest:
+      type: object
+      additionalProperties: false
+      required: [configKey, value, version]
+      properties:
+        configKey: {type: string}
+        value: {}
+        version: {type: integer, minimum: 0}

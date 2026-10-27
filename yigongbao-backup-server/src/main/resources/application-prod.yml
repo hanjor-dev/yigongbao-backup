@@ -1,0 +1,35 @@
+server:
+  port: ${BACKUP_SERVER_PORT:18080}
+  shutdown: graceful
+spring:
+  application:
+    name: yigongbao-backup-server
+  datasource:
+    url: ${BACKUP_DB_URL}
+    username: ${BACKUP_DB_USERNAME}
+    password: ${BACKUP_DB_PASSWORD}
+  servlet:
+    multipart:
+      max-file-size: ${BACKUP_MAX_UPLOAD_SIZE:2GB}
+      max-request-size: ${BACKUP_MAX_UPLOAD_SIZE:2GB}
+backup:
+  storage:
+    root: ${BACKUP_HOT_ROOT}
+    managed-roots: ${BACKUP_MANAGED_STORAGE_ROOTS:${BACKUP_HOT_ROOT}}
+  cold:
+    import-root: ${BACKUP_COLD_IMPORT_ROOT}
+  online:
+    enabled: ${BACKUP_ONLINE_ENABLED:false}
+    auth-mode: ${BACKUP_ONLINE_AUTH_MODE:HMAC}
+    base-url: ${YIGONGBAO_ONLINE_BASE_URL:}
+    connect-timeout: ${BACKUP_ONLINE_CONNECT_TIMEOUT:PT10S}
+    request-timeout: ${BACKUP_ONLINE_REQUEST_TIMEOUT:PT60S}
+    key-id: ${BACKUP_HMAC_KEY_ID:}
+    key-secret: ${BACKUP_HMAC_KEY_SECRET:}
+    key-secret-ref: ${BACKUP_HMAC_KEY_SECRET_REF:}
+    bearer-token: ${BACKUP_ONLINE_BEARER_TOKEN:}
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health,info

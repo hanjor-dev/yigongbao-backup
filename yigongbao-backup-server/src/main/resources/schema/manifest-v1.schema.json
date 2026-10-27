@@ -1,0 +1,288 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://backup.yigongbao.local/schema/manifest-v1.schema.json",
+  "title": "医工宝订单备份清单 v1",
+  "description": "ORDER_ZIP64_V1 中 manifest.json 的不可变格式；规范哈希使用 RFC 8785 JCS UTF-8 字节计算 SHA-256。",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schemaVersion", "snapshotId", "orderSnapshot", "source", "assets", "summary"],
+  "properties": {
+    "schemaVersion": {"const": "1.0"},
+    "snapshotId": {"$ref": "#/$defs/decimalId"},
+    "orderSnapshot": {"$ref": "#/$defs/orderSnapshot"},
+    "source": {"$ref": "#/$defs/source"},
+    "assets": {
+      "type": "array",
+      "items": {"$ref": "#/$defs/asset"}
+    },
+    "summary": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["fileCount", "totalSize"],
+      "properties": {
+        "fileCount": {"type": "integer", "minimum": 0},
+        "totalSize": {"$ref": "#/$defs/byteCount"}
+      }
+    }
+  },
+  "$defs": {
+    "decimalId": {"type": "string", "pattern": "^[0-9]+$"},
+    "nullableDecimalId": {"type": ["string", "null"], "pattern": "^[0-9]+$"},
+    "byteCount": {"type": "string", "pattern": "^[0-9]+$"},
+    "sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+    "nullableString": {"type": ["string", "null"]},
+    "nullableInteger": {"type": ["integer", "null"]},
+    "nullableTime": {"type": ["string", "null"], "format": "date-time"},
+    "orderSnapshot": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["sourceOrderId", "schemaVersion", "raw", "display", "dictionarySnapshot", "relatedBusiness"],
+      "properties": {
+        "sourceOrderId": {"$ref": "#/$defs/decimalId"},
+        "schemaVersion": {"const": "order-main-v1"},
+        "raw": {"$ref": "#/$defs/orderMainRaw"},
+        "display": {"$ref": "#/$defs/orderDisplay"},
+        "dictionarySnapshot": {"$ref": "#/$defs/dictionarySnapshot"},
+        "relatedBusiness": {"$ref": "#/$defs/relatedBusiness"}
+      }
+    },
+    "orderMainRaw": {
+      "type": "object",
+      "description": "当前 order_main 的全部业务列与公共列；新增列时必须提升 schema 并更新黄金样例。",
+      "additionalProperties": false,
+      "required": [
+        "id", "orderCode", "publicOrderCode", "orderType", "needsPhysicalDelivery", "businessType",
+        "orgId", "orgName", "operatorId", "operatorName", "operatorPhone", "hospitalId", "hospitalName",
+        "hospitalDeptId", "hospitalDeptName", "areaId", "areaName", "fullAreaName", "operatorDeptId",
+        "operatorDeptName", "doctorId", "doctorName", "doctorPhone", "patientName", "patientAge",
+        "patientGender", "isUrgent", "isPostal", "postalAddress", "expectedDeliveryDate", "designStartTime",
+        "designSubmitTime", "userConfirmTime", "productionStartTime", "productionEndTime", "actualCompleteTime",
+        "phase", "status", "hasPendingCancelApply", "currentHandlerId", "currentHandlerName", "designerId",
+        "designerName", "producerId", "centerId", "centerName", "auditRemark", "designReviewRemark",
+        "estimatedCost", "dataEvaluationOpinion", "designerRemark", "regionalAuditStatus", "regionalAuditRemark",
+        "regionalAuditTime", "regionalAuditBy", "designAuditStatus", "designAuditRemark", "designAuditTime",
+        "designAuditBy", "isClassicCase", "classicCaseTime", "classicCaseBy", "classicCaseRemark", "version",
+        "createTime", "updateTime", "createBy", "updateBy", "isDeleted"
+      ],
+      "properties": {
+        "id": {"$ref": "#/$defs/decimalId"},
+        "orderCode": {"$ref": "#/$defs/nullableString"},
+        "publicOrderCode": {"$ref": "#/$defs/nullableString"},
+        "orderType": {"$ref": "#/$defs/nullableInteger"},
+        "needsPhysicalDelivery": {"type": "integer"},
+        "businessType": {"$ref": "#/$defs/nullableString"},
+        "orgId": {"$ref": "#/$defs/nullableDecimalId"},
+        "orgName": {"$ref": "#/$defs/nullableString"},
+        "operatorId": {"$ref": "#/$defs/nullableDecimalId"},
+        "operatorName": {"$ref": "#/$defs/nullableString"},
+        "operatorPhone": {"$ref": "#/$defs/nullableString"},
+        "hospitalId": {"$ref": "#/$defs/nullableDecimalId"},
+        "hospitalName": {"$ref": "#/$defs/nullableString"},
+        "hospitalDeptId": {"$ref": "#/$defs/nullableDecimalId"},
+        "hospitalDeptName": {"$ref": "#/$defs/nullableString"},
+        "areaId": {"$ref": "#/$defs/nullableDecimalId"},
+        "areaName": {"$ref": "#/$defs/nullableString"},
+        "fullAreaName": {"$ref": "#/$defs/nullableString"},
+        "operatorDeptId": {"$ref": "#/$defs/nullableDecimalId"},
+        "operatorDeptName": {"$ref": "#/$defs/nullableString"},
+        "doctorId": {"$ref": "#/$defs/nullableDecimalId"},
+        "doctorName": {"$ref": "#/$defs/nullableString"},
+        "doctorPhone": {"$ref": "#/$defs/nullableString"},
+        "patientName": {"$ref": "#/$defs/nullableString"},
+        "patientAge": {"$ref": "#/$defs/nullableInteger"},
+        "patientGender": {"$ref": "#/$defs/nullableString"},
+        "isUrgent": {"type": "integer"},
+        "isPostal": {"type": "integer"},
+        "postalAddress": {"$ref": "#/$defs/nullableString"},
+        "expectedDeliveryDate": {"$ref": "#/$defs/nullableTime"},
+        "designStartTime": {"$ref": "#/$defs/nullableTime"},
+        "designSubmitTime": {"$ref": "#/$defs/nullableTime"},
+        "userConfirmTime": {"$ref": "#/$defs/nullableTime"},
+        "productionStartTime": {"$ref": "#/$defs/nullableTime"},
+        "productionEndTime": {"$ref": "#/$defs/nullableTime"},
+        "actualCompleteTime": {"$ref": "#/$defs/nullableTime"},
+        "phase": {"type": "integer"},
+        "status": {"type": "integer"},
+        "hasPendingCancelApply": {"type": "integer"},
+        "currentHandlerId": {"$ref": "#/$defs/nullableDecimalId"},
+        "currentHandlerName": {"$ref": "#/$defs/nullableString"},
+        "designerId": {"$ref": "#/$defs/nullableDecimalId"},
+        "designerName": {"$ref": "#/$defs/nullableString"},
+        "producerId": {"$ref": "#/$defs/nullableDecimalId"},
+        "centerId": {"$ref": "#/$defs/nullableDecimalId"},
+        "centerName": {"$ref": "#/$defs/nullableString"},
+        "auditRemark": {"$ref": "#/$defs/nullableString"},
+        "designReviewRemark": {"$ref": "#/$defs/nullableString"},
+        "estimatedCost": {"type": ["string", "null"], "pattern": "^-?[0-9]+(?:\\.[0-9]+)?$"},
+        "dataEvaluationOpinion": {"$ref": "#/$defs/nullableString"},
+        "designerRemark": {"$ref": "#/$defs/nullableString"},
+        "regionalAuditStatus": {"$ref": "#/$defs/nullableInteger"},
+        "regionalAuditRemark": {"$ref": "#/$defs/nullableString"},
+        "regionalAuditTime": {"$ref": "#/$defs/nullableTime"},
+        "regionalAuditBy": {"$ref": "#/$defs/nullableDecimalId"},
+        "designAuditStatus": {"$ref": "#/$defs/nullableInteger"},
+        "designAuditRemark": {"$ref": "#/$defs/nullableString"},
+        "designAuditTime": {"$ref": "#/$defs/nullableTime"},
+        "designAuditBy": {"$ref": "#/$defs/nullableDecimalId"},
+        "isClassicCase": {"type": "integer"},
+        "classicCaseTime": {"$ref": "#/$defs/nullableTime"},
+        "classicCaseBy": {"$ref": "#/$defs/nullableDecimalId"},
+        "classicCaseRemark": {"$ref": "#/$defs/nullableString"},
+        "version": {"type": "integer", "minimum": 0},
+        "createTime": {"$ref": "#/$defs/nullableTime"},
+        "updateTime": {"$ref": "#/$defs/nullableTime"},
+        "createBy": {"$ref": "#/$defs/nullableDecimalId"},
+        "updateBy": {"$ref": "#/$defs/nullableDecimalId"},
+        "isDeleted": {"type": "integer", "enum": [0, 1]}
+      }
+    },
+    "orderDisplay": {
+      "type": "object",
+      "additionalProperties": true,
+      "required": [
+        "orderCode", "publicOrderCode", "phaseName", "statusName", "statusColor", "isUrgent",
+        "businessTypeName", "orderTypeName", "needsPhysicalDeliveryName", "orgName", "operatorName",
+        "operatorPhone", "operatorDeptName", "hospitalName", "areaName", "fullAreaName", "hospitalDeptName",
+        "doctorName", "doctorPhone", "patientName", "patientAge", "patientGenderName", "isPostal",
+        "postalAddress", "designerName", "expectedDeliveryDate", "estimatedCost", "dataEvaluationOpinion",
+        "rebuildProjectList", "rebuildProjectSummary", "designStartTime", "designSubmitTime",
+        "productionStartTime", "productionEndTime", "actualCompleteTime", "createTime", "designerRemark",
+        "regionalAudit", "designAudit"
+      ],
+      "properties": {
+        "orderCode": {"$ref": "#/$defs/nullableString"},
+        "publicOrderCode": {"$ref": "#/$defs/nullableString"},
+        "phaseName": {"$ref": "#/$defs/nullableString"},
+        "statusName": {"$ref": "#/$defs/nullableString"},
+        "statusColor": {"type": ["object", "null"]},
+        "isUrgent": {"type": "integer"},
+        "businessTypeName": {"$ref": "#/$defs/nullableString"},
+        "orderTypeName": {"$ref": "#/$defs/nullableString"},
+        "needsPhysicalDeliveryName": {"$ref": "#/$defs/nullableString"},
+        "orgName": {"$ref": "#/$defs/nullableString"},
+        "operatorName": {"$ref": "#/$defs/nullableString"},
+        "operatorPhone": {"$ref": "#/$defs/nullableString"},
+        "operatorDeptName": {"$ref": "#/$defs/nullableString"},
+        "hospitalName": {"$ref": "#/$defs/nullableString"},
+        "areaName": {"$ref": "#/$defs/nullableString"},
+        "fullAreaName": {"$ref": "#/$defs/nullableString"},
+        "hospitalDeptName": {"$ref": "#/$defs/nullableString"},
+        "doctorName": {"$ref": "#/$defs/nullableString"},
+        "doctorPhone": {"$ref": "#/$defs/nullableString"},
+        "patientName": {"$ref": "#/$defs/nullableString"},
+        "patientAge": {"$ref": "#/$defs/nullableInteger"},
+        "patientGenderName": {"$ref": "#/$defs/nullableString"},
+        "isPostal": {"type": "integer"},
+        "postalAddress": {"$ref": "#/$defs/nullableString"},
+        "designerName": {"$ref": "#/$defs/nullableString"},
+        "expectedDeliveryDate": {"$ref": "#/$defs/nullableTime"},
+        "estimatedCost": {"type": ["string", "null"]},
+        "dataEvaluationOpinion": {"$ref": "#/$defs/nullableString"},
+        "rebuildProjectList": {"type": "array", "items": {"$ref": "#/$defs/rebuildProject"}},
+        "rebuildProjectSummary": {"type": "string"},
+        "designStartTime": {"$ref": "#/$defs/nullableTime"},
+        "designSubmitTime": {"$ref": "#/$defs/nullableTime"},
+        "productionStartTime": {"$ref": "#/$defs/nullableTime"},
+        "productionEndTime": {"$ref": "#/$defs/nullableTime"},
+        "actualCompleteTime": {"$ref": "#/$defs/nullableTime"},
+        "createTime": {"$ref": "#/$defs/nullableTime"},
+        "designerRemark": {"$ref": "#/$defs/nullableString"},
+        "regionalAudit": {"type": "object"},
+        "designAudit": {"type": "object"}
+      }
+    },
+    "dictionarySnapshot": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["status", "businessType", "orderType", "patientGender"],
+      "properties": {
+        "status": {"$ref": "#/$defs/dictionaryValue"},
+        "businessType": {"$ref": "#/$defs/dictionaryValue"},
+        "orderType": {"$ref": "#/$defs/dictionaryValue"},
+        "patientGender": {"$ref": "#/$defs/dictionaryValue"}
+      }
+    },
+    "dictionaryValue": {
+      "type": "object",
+      "required": ["value", "label"],
+      "properties": {"value": {}, "label": {"type": ["string", "null"]}}
+    },
+    "relatedBusiness": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["rebuildProjects"],
+      "properties": {
+        "rebuildProjects": {"type": "array", "items": {"$ref": "#/$defs/rebuildProject"}}
+      }
+    },
+    "rebuildProject": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["recordId", "bodyPartName", "projectName", "categoryCode", "categoryName", "count", "projectDesc", "formingRequirement", "otherRequirement", "raw"],
+      "properties": {
+        "recordId": {"$ref": "#/$defs/decimalId"},
+        "bodyPartName": {"$ref": "#/$defs/nullableString"},
+        "projectName": {"$ref": "#/$defs/nullableString"},
+        "categoryCode": {"$ref": "#/$defs/nullableString"},
+        "categoryName": {"$ref": "#/$defs/nullableString"},
+        "count": {"type": "integer", "minimum": 0},
+        "projectDesc": {"$ref": "#/$defs/nullableString"},
+        "formingRequirement": {"$ref": "#/$defs/nullableString"},
+        "otherRequirement": {"$ref": "#/$defs/nullableString"},
+        "raw": {"type": "object", "additionalProperties": true}
+      }
+    },
+    "source": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["manifestRevision", "generatedAt"],
+      "properties": {
+        "manifestRevision": {"type": "string", "minLength": 1},
+        "generatedAt": {"type": "string", "format": "date-time"}
+      }
+    },
+    "asset": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["assetIdentity", "sourceFileId", "assetType", "entryName", "originalFilename", "size", "sha256", "sourceObject", "relations"],
+      "properties": {
+        "assetIdentity": {"type": "string", "minLength": 1, "maxLength": 255},
+        "sourceFileId": {"$ref": "#/$defs/nullableDecimalId"},
+        "assetType": {"type": "string", "minLength": 1, "maxLength": 64},
+        "entryName": {"type": "string", "pattern": "^files/[^/]+/[^/]+$"},
+        "originalFilename": {"type": "string"},
+        "size": {"$ref": "#/$defs/byteCount"},
+        "sha256": {"$ref": "#/$defs/sha256"},
+        "sourceObject": {"$ref": "#/$defs/sourceObject"},
+        "relations": {"type": "array", "minItems": 1, "items": {"$ref": "#/$defs/relation"}}
+      }
+    },
+    "sourceObject": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["platform", "bucket", "objectKey", "url", "etag", "versionId", "lastModified"],
+      "properties": {
+        "platform": {"type": "string"},
+        "bucket": {"type": "string"},
+        "objectKey": {"type": "string", "minLength": 1, "maxLength": 1024},
+        "url": {"type": "string", "format": "uri"},
+        "etag": {"$ref": "#/$defs/nullableString"},
+        "versionId": {"$ref": "#/$defs/nullableString"},
+        "lastModified": {"$ref": "#/$defs/nullableTime"}
+      }
+    },
+    "relation": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["relationKind", "sourceRecordId", "relationVersion", "relationHash", "originalFileId", "originalUrl"],
+      "properties": {
+        "relationKind": {"type": "string", "enum": ["ORDER_FILE", "DESIGN_PACKAGE", "DESIGN_DRAWING_TEMPLATE", "PRODUCTION_FLOW_CARD", "THUMBNAIL"]},
+        "sourceRecordId": {"$ref": "#/$defs/decimalId"},
+        "relationVersion": {"type": "string"},
+        "relationHash": {"$ref": "#/$defs/sha256"},
+        "originalFileId": {"$ref": "#/$defs/nullableDecimalId"},
+        "originalUrl": {"$ref": "#/$defs/nullableString"}
+      }
+    }
+  }
+}
