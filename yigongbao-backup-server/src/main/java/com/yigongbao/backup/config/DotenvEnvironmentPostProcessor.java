@@ -7,6 +7,8 @@ import org.springframework.core.env.ConfigurableEnvironment;
 import org.springframework.core.env.MapPropertySource;
 
 import java.io.IOException;
+import java.net.URI;
+import java.net.URISyntaxException;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
@@ -46,9 +48,24 @@ public final class DotenvEnvironmentPostProcessor implements EnvironmentPostProc
         if (configured == null || configured.isBlank()) {
             configured = System.getProperty(ENV_FILE_PROPERTY);
         }
-        return configured == null || configured.isBlank()
-                ? Path.of(".env").toAbsolutePath().normalize()
-                : Path.of(configured).toAbsolutePath().normalize();
+        if (configured != null && !configured.isBlank()) {
+            return Path.of(configured).toAbsolutePath().normalize();
+        }
+        Path workingDirectoryFile = Path.of(".env").toAbsolutePath().normalize();
+        if (Files.isRegularFile(workingDirectoryFile)) {
+            return workingDirectoryFile;
+        }
+        try {
+            URI location = DotenvEnvironmentPostProcessor.class.getProtectionDomain()
+                    .getCodeSource().getLocation().toURI();
+            Path codeLocation = Path.of(location);
+            Path applicationDirectory = Files.isDirectory(codeLocation)
+                    ? codeLocation.getParent().getParent()
+                    : codeLocation.getParent();
+            return applicationDirectory.resolve(".env").toAbsolutePath().normalize();
+        } catch (URISyntaxException | NullPointerException exception) {
+            return workingDirectoryFile;
+        }
     }
 
     static Map<String, Object> parse(Iterable<String> lines) {
