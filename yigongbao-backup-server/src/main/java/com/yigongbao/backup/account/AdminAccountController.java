@@ -32,7 +32,7 @@ public class AdminAccountController {
 
     /** 仅修改本地启用状态，保留线上同步值作为来源信息。 */
     @PutMapping("/{id}/status")
-    public ApiResponse<AccountView> status(@PathVariable long id, @RequestBody StatusCommand command) {
+    public ApiResponse<AccountView> status(@PathVariable("id") long id, @RequestBody StatusCommand command) {
         admin();
         BkUserEntity user = required(id);
         if (command == null || !command.enabledStatus().matches("ENABLED|DISABLED")) throw new IllegalArgumentException("账号状态非法");
@@ -42,7 +42,7 @@ public class AdminAccountController {
 
     /** 仅修改本地密码，不同步线上。 */
     @PutMapping("/{id}/password")
-    public ApiResponse<Void> password(@PathVariable long id, @RequestBody PasswordCommand command) {
+    public ApiResponse<Void> password(@PathVariable("id") long id, @RequestBody PasswordCommand command) {
         admin();
         if (command == null || command.password() == null || command.password().length() < 8) throw new IllegalArgumentException("密码至少八位");
         long actor = StpUtil.getLoginIdAsLong(); BkUserEntity user = required(id); user.setPasswordHash(encoder.encode(command.password())); user.setUpdateBy(actor); mapper.updateById(user); fieldControl.markLocal(user.getId(), BkUserFieldControlService.PASSWORD_FIELD, actor); audit.append(new AuditLogService.Event("ADMIN_PASSWORD_RESET", "USER", String.valueOf(id), "OK"));

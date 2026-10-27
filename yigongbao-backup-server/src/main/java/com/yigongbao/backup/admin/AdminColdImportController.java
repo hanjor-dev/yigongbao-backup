@@ -42,7 +42,7 @@ public class AdminColdImportController {
 
     /** batchId 在第一期对应导入区压缩文件名；orderIds 为空时恢复该包内全部订单。 */
     @PostMapping("/{batchId}/restore")
-    public ApiResponse<RestoreTask> restore(@PathVariable String batchId,
+    public ApiResponse<RestoreTask> restore(@PathVariable("batchId") String batchId,
                                               @RequestBody(required = false) RestoreCommand command)
             throws Exception {
         admin();
