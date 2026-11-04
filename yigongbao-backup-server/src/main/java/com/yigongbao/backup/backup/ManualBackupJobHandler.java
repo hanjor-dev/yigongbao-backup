@@ -153,7 +153,10 @@ public class ManualBackupJobHandler implements JobHandler {
                 BusinessLogFormatter.bytes(expectedBytes.get()), BusinessLogFormatter.bytes(packageBytes.get()),
                 BusinessLogFormatter.duration(elapsedMillis(taskStartedAt)));
         if (!failures.isEmpty()) {
-            throw new PartialJobFailureException("部分订单备份失败: " + String.join("; ", failures));
+            boolean allFailed = failures.size() == payload.sourceOrderIds().size();
+            throw new PartialJobFailureException(allFailed
+                    ? "全部订单备份失败: " + String.join("; ", failures)
+                    : "部分订单备份失败: " + String.join("; ", failures), allFailed);
         }
     }
 

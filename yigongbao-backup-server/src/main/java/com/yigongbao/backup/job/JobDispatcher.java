@@ -80,9 +80,15 @@ public final class JobDispatcher {
                     job.getId(), job.getJobNo(), job.getCurrentStep(), elapsedMillis(startedAt), safe(cancelled));
             return true;
         } catch (PartialJobFailureException partial) {
-            coordinator.partial(job.getId(), owner, token, partial.getMessage());
-            log.warn("任务部分失败: jobId={}, jobNo={}, jobType={}, durationMs={}, error={}",
-                    job.getId(), job.getJobNo(), job.getJobType(), elapsedMillis(startedAt), safe(partial));
+            if (partial.allItemsFailed()) {
+                coordinator.failOrRetry(job.getId(), owner, token, 0, partial);
+                log.error("任务全部订单失败: jobId={}, jobNo={}, jobType={}, durationMs={}, error={}",
+                        job.getId(), job.getJobNo(), job.getJobType(), elapsedMillis(startedAt), safe(partial));
+            } else {
+                coordinator.partial(job.getId(), owner, token, partial.getMessage());
+                log.warn("任务部分失败: jobId={}, jobNo={}, jobType={}, durationMs={}, error={}",
+                        job.getId(), job.getJobNo(), job.getJobType(), elapsedMillis(startedAt), safe(partial));
+            }
         } catch (Throwable failure) {
             context.failure(failure);
             coordinator.failOrRetry(job.getId(), owner, token, retries, failure);

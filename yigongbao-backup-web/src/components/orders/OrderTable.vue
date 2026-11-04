@@ -2,6 +2,7 @@
 import { useBackupContext } from '../../composables/useBackupContext.js';
 import OrderBusinessFields from './OrderBusinessFields.vue';
 const { orders, selectedOrder, selectedIds, selectOrder, toggleSelected } = useBackupContext();
+const bytes = (value) => { const n = Number(value || 0); if (n < 1024) return `${n} B`; if (n < 1048576) return `${(n / 1024).toFixed(2)} KB`; if (n < 1073741824) return `${(n / 1048576).toFixed(2)} MB`; return `${(n / 1073741824).toFixed(2)} GB`; };
 </script>
 <template>
   <el-table :data="orders" class="data-table" row-key="id" highlight-current-row @row-click="selectOrder">
@@ -13,7 +14,7 @@ const { orders, selectedOrder, selectedIds, selectOrder, toggleSelected } = useB
     <el-table-column label="患者 / 医生" min-width="170" show-overflow-tooltip><template #default="{ row }"><div>{{ row.patientName || '-' }}</div><small class="muted">医生：{{ row.doctorName || '-' }}</small></template></el-table-column>
     <el-table-column label="业务类型" min-width="120"><template #default="{ row }">{{ row.businessTypeName || row.businessType || '-' }}</template></el-table-column>
     <el-table-column label="业务状态" min-width="150"><template #default="{ row }"><status-badge :value="row.statusName || row.sourceStatus" /><small v-if="row.phaseName" class="muted"> · {{ row.phaseName }}</small></template></el-table-column>
-    <el-table-column label="文件规模" width="130"><template #default="{ row }"><strong>{{ row.assetCount ?? row.fileCount ?? '-' }}</strong><span class="muted"> 个 · {{ row.totalBytes ?? row.fileBytes ?? '-' }}</span></template></el-table-column>
+    <el-table-column label="文件规模" width="160"><template #default="{ row }"><strong>{{ row.assetCount ?? row.fileCount ?? 0 }}</strong><span class="muted"> 个 · {{ bytes(row.totalBytes ?? row.fileBytes) }}</span></template></el-table-column>
     <el-table-column label="云端" width="100"><template #default="{ row }"><status-badge :value="row.cloudRollup" /></template></el-table-column>
     <el-table-column label="热备" width="100"><template #default="{ row }"><status-badge :value="row.hotRollup" /></template></el-table-column>
     <el-table-column label="冷备 / 批次" min-width="150"><template #default="{ row }"><status-badge :value="row.coldRollup" /><span v-if="row.coldBatchNo" class="muted"> · {{ row.coldBatchNo }}</span></template></el-table-column>

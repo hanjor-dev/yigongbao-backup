@@ -3,6 +3,7 @@ import { computed } from 'vue';
 import { useBackupContext } from '../../composables/useBackupContext.js';
 import { orderBusinessFields } from '../../taskCenter.js';
 import OrderBusinessFields from '../orders/OrderBusinessFields.vue';
+import { statusLabel } from '../StatusBadge.js';
 
 const { selectedJob, jobOrders, jobOrderPage, jobOrderSize, jobOrderTotal, jobFiles, jobLoading, jobProgress, changeJobOrderPage, changeJobOrderSize, cancelJob, retryJob } = useBackupContext();
 const terminalStates = ['SUCCEEDED', 'FAILED', 'PARTIAL_FAILED', 'CANCELLED', 'CANCELED'];
@@ -12,7 +13,7 @@ const business = (row) => orderBusinessFields(row.orderBusinessJson);
 const simulation = computed(() => selectedJob.value?.executionMode === 'METADATA_SIMULATION');
 const orderBackup = computed(() => ['ORDER_BACKUP', 'MANUAL_BACKUP'].includes(selectedJob.value?.jobType));
 const stateLabel = computed(() => jobState(selectedJob.value) === 'RETRYING_FAILED_ORDERS' ? '失败订单重试中'
-  : simulation.value && jobState(selectedJob.value) === 'SUCCEEDED' ? '模拟完成' : jobState(selectedJob.value));
+  : simulation.value && jobState(selectedJob.value) === 'SUCCEEDED' ? '模拟完成' : statusLabel(jobState(selectedJob.value)));
 const bytes = (value) => { const n = Number(value || 0); if (n < 1024) return `${n} B`; if (n < 1048576) return `${(n / 1024).toFixed(2)} KB`; if (n < 1073741824) return `${(n / 1048576).toFixed(2)} MB`; return `${(n / 1073741824).toFixed(2)} GB`; };
 </script>
 

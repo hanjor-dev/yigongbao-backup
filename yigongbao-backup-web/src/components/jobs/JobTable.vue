@@ -8,8 +8,7 @@ const fileSummary = (job) => Number(job.fileTotal || 0) > 0
   ? `成功 ${job.fileCompleted || 0} / 失败 ${job.fileFailed || 0} / 共 ${job.fileTotal}` : '未获取文件清单';
 const orderPending = (job) => Math.max(0, Number(job.orderTotal || 0) - Number(job.orderCompleted || 0) - Number(job.orderFailed || 0));
 const simulation = (job) => job.executionMode === 'METADATA_SIMULATION';
-const statusText = (job) => jobState(job) === 'RETRYING_FAILED_ORDERS' ? '失败订单重试中'
-  : simulation(job) && jobState(job) === 'SUCCEEDED' ? '模拟完成' : jobState(job);
+const statusText = (job) => simulation(job) && jobState(job) === 'SUCCEEDED' ? '模拟完成' : undefined;
 const expectedSummary = (job) => `Manifest 成功 ${job.manifestSucceeded || 0} / 失败 ${job.manifestFailed || 0}；预计文件 ${job.expectedFileTotal || 0}`;
 const bytes = (value) => { const n = Number(value || 0); if (n < 1024) return `${n} B`; if (n < 1048576) return `${(n / 1024).toFixed(2)} KB`; if (n < 1073741824) return `${(n / 1048576).toFixed(2)} MB`; return `${(n / 1073741824).toFixed(2)} GB`; };
 const capacitySummary = (job) => `源文件 ${bytes(job.expectedBytes)} / ZIP ${bytes(job.packageBytes)}`;

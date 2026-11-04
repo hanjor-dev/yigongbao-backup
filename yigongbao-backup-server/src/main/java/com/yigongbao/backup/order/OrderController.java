@@ -25,6 +25,8 @@ import java.nio.charset.StandardCharsets;
 import java.time.LocalDateTime;
 import java.time.OffsetDateTime;
 import java.util.List;
+import java.util.Map;
+import java.util.HashMap;
 import java.util.UUID;
 
 /** 普通用户订单查询、资产查看和订单包下载接口。 */
@@ -125,7 +127,9 @@ public class OrderController {
         }
         query.orderByDesc(OrderSnapshotEntity::getOrderCreatedAt)
                 .orderByDesc(OrderSnapshotEntity::getId);
-        return ApiResponse.ok(snapshots.selectPage(new Page<>(current, Math.min(size, 100)), query), rid());
+        Page<OrderSnapshotEntity> page = snapshots.selectPage(new Page<>(current, Math.min(size, 100)), query);
+        enrichAssetScale(page.getRecords());
+        return ApiResponse.ok(page, rid());
     }
 
     /** 查询单个订单快照；不存在时按契约返回 404。 */
@@ -202,6 +206,26 @@ public class OrderController {
                 throw new IllegalArgumentException(field + " 时间格式非法", exception);
             }
         }
+    }
+
+    /** 订单列表展示文件规模；资产数量和源文件总大小来自当前快照资产表。 */
+    private void enrichAssetScale(List<OrderSnapshotEntity> rows) {
+        if (rows == null || rows.isEmpty()) return;
+        List<Long> snapshotIds = rows.stream().map(OrderSnapshotEntity::getId)
+                .filter(java.util.Objects::nonNull).toList();
+        if (snapshotIds.isEmpty()) return;
+        Map<Long, Long> counts = new HashMap<>();
+        Map<Long, Long> bytes = new HashMap<>();
+        assets.selectList(com.baomidou.mybatisplus.core.toolkit.Wrappers.<AssetEntity>lambdaQuery()
+                        .in(AssetEntity::getSnapshotId, snapshotIds))
+                .forEach(asset -> {
+                    counts.merge(asset.getSnapshotId(), 1L, Long::sum);
+                    bytes.merge(asset.getSnapshotId(), asset.getSourceSize() == null ? 0L : asset.getSourceSize(), Long::sum);
+                });
+        rows.forEach(row -> {
+            row.setAssetCount(counts.getOrDefault(row.getId(), 0L));
+            row.setTotalBytes(bytes.getOrDefault(row.getId(), 0L));
+        });
     }
 
     /** 将订单号限制为安全的下载文件名，避免响应头注入和非法路径字符。 */

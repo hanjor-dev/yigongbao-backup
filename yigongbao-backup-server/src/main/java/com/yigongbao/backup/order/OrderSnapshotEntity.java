@@ -1,6 +1,7 @@
 package com.yigongbao.backup.order;
 
 import com.baomidou.mybatisplus.annotation.TableName;
+import com.baomidou.mybatisplus.annotation.TableField;
 import com.yigongbao.backup.common.BaseEntity;
 import lombok.Data;
 import lombok.EqualsAndHashCode;
@@ -81,4 +82,10 @@ public class OrderSnapshotEntity extends BaseEntity {
     private String cloudRollup;
     private String hotRollup;
     private String coldRollup;
+    /** 当前快照关联资产数量，列表查询时由 bk_asset 聚合回填。 */
+    @TableField(exist = false)
+    private Long assetCount;
+    /** 当前快照源文件总大小，列表查询时由 bk_asset.source_size 聚合回填。 */
+    @TableField(exist = false)
+    private Long totalBytes;
 }
