@@ -35,7 +35,8 @@ class MetadataSimulationArtifactWriterTest {
 
         assertThat(result.expectedFileCount()).isEqualTo(5);
         assertThat(result.expectedBytes()).isEqualTo(60L);
-        assertThat(result.directory()).startsWith(root.resolve("simulation").toAbsolutePath().normalize());
+        assertThat(result.directory().toString()).startsWith(root.resolve("simulation").toAbsolutePath().normalize().toString());
+        assertThat(Files.exists(result.directory())).isFalse();
         assertThat(result.storageKey()).isEqualTo("orders/20261104/20260702000002-6.zip");
         assertThat(Files.isRegularFile(hotRoot.resolve(result.storageKey()))).isTrue();
         try (ZipFile zip = new ZipFile(hotRoot.resolve(result.storageKey()).toFile())) {
@@ -44,19 +45,16 @@ class MetadataSimulationArtifactWriterTest {
             assertThat(zip.stream().filter(entry -> entry.getName().startsWith("files/")).count()).isEqualTo(5);
             assertThat(zip.stream().filter(entry -> entry.getName().startsWith("files/"))
                     .allMatch(entry -> entry.getSize() == 0L)).isTrue();
-        }
-        assertThat(Files.readString(result.directory().resolve("manifest.json")))
-                .contains("20260702000002", "[PRESIGNED_URL_REDACTED]")
-                .doesNotContain("signature=secret");
-        var summary = new ObjectMapper().readTree(result.directory().resolve("_simulation.json").toFile());
-        assertThat(summary.path("simulated").asBoolean()).isTrue();
-        assertThat(summary.path("jobId").asLong()).isEqualTo(99L);
-        try (var files = Files.walk(result.directory())) {
-            assertThat(files.filter(Files::isRegularFile).toList()).hasSize(7);
-        }
-        try (var files = Files.walk(result.directory().resolve("files"))) {
-            assertThat(files.filter(Files::isRegularFile)
-                    .allMatch(path -> uncheckedSize(path) == 0L)).isTrue();
+            String manifestText;
+            try (var input = zip.getInputStream(zip.getEntry("manifest.json"))) {
+                manifestText = new String(input.readAllBytes(), java.nio.charset.StandardCharsets.UTF_8);
+            }
+            assertThat(manifestText).contains("[PRESIGNED_URL_REDACTED]").doesNotContain("signature=secret");
+            String summaryText;
+            try (var input = zip.getInputStream(zip.getEntry("_simulation.json"))) {
+                summaryText = new String(input.readAllBytes(), java.nio.charset.StandardCharsets.UTF_8);
+            }
+            assertThat(summaryText).contains("\"simulated\" : true", "\"jobId\" : 99");
         }
     }
 
@@ -67,16 +65,10 @@ class MetadataSimulationArtifactWriterTest {
         MetadataSimulationArtifactWriter writer = new MetadataSimulationArtifactWriter(root,
                 new LocalDirectoryArtifactStore(root.resolve("hot")), new ObjectMapper());
         SimulationArtifactResult first = writer.write(99L, "job-99", "20261104", 6L, "O-6", manifest);
-        Files.writeString(first.directory().resolve("completed.marker"), "keep");
-
         SimulationArtifactResult second = writer.write(99L, "job-99", "20261104", 6L, "O-6", manifest);
 
         assertThat(second.directory()).isEqualTo(first.directory());
-        assertThat(Files.readString(second.directory().resolve("completed.marker"))).isEqualTo("keep");
-    }
-
-    private static long uncheckedSize(Path path) {
-        try { return Files.size(path); }
-        catch (Exception error) { throw new IllegalStateException(error); }
+        assertThat(Files.exists(second.directory())).isFalse();
+        assertThat(Files.isRegularFile(root.resolve("hot").resolve(second.storageKey()))).isTrue();
     }
 }

@@ -56,7 +56,9 @@ class MetadataSimulationOrderExecutionTest {
         verifyNoInteractions(cos, reservations);
         verify(evidence).saveSimulation(eq(6L), eq(manifest), any(OrderBackupPipeline.Result.class));
         verify(evidence).markSimulationAvailable(6L);
+        verify(context).orderSimulationMetadata(eq(1), eq(12L), eq("orders/20261104/20260702000002-6.zip"));
         verify(context).orderCompleted("SIMULATED");
+        org.assertj.core.api.Assertions.assertThat(root.resolve("hot-1/orders/20261104/20260702000002-6.zip")).isRegularFile();
     }
 
     @Test

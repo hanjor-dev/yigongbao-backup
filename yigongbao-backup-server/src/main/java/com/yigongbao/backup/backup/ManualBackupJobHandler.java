@@ -172,14 +172,15 @@ public class ManualBackupJobHandler implements JobHandler {
             com.yigongbao.backup.order.OrderSnapshotEntity snapshot = backupEvidence.saveSimulation(
                     orderId, manifest, result.packageResult());
             backupEvidence.markSimulationAvailable(orderId);
-            context.orderSimulationMetadata(result.expectedFileCount(), result.expectedBytes(), result.directory().toString());
+            // simulationPath 字段保存最终热备 ZIP 的 storageKey，不保存已清理的临时解压目录。
+            context.orderSimulationMetadata(result.expectedFileCount(), result.expectedBytes(), result.storageKey());
             context.orderMetadata(orderId, snapshot.getId(), snapshot.getOrderCode(),
                     snapshot.getOrderCreatedAt() == null ? null : snapshot.getOrderCreatedAt().toString(),
                     snapshot.getSourceStatus(), json(manifest.order()));
             context.orderCompleted("SIMULATED");
-            log.info("订单元数据模拟完成｜任务ID={}｜订单ID={}｜快照ID={}｜预计文件数={}｜预计容量={}｜模拟目录={}｜模拟压缩包={}",
+            log.info("订单元数据模拟完成｜任务ID={}｜订单ID={}｜快照ID={}｜预计文件数={}｜预计容量={}｜热备压缩包={}",
                     job.getId(), orderId, snapshot.getId(), result.expectedFileCount(),
-                    BusinessLogFormatter.bytes(result.expectedBytes()), result.directory(), result.storageKey());
+                    BusinessLogFormatter.bytes(result.expectedBytes()), result.storageKey());
             return result;
         }
         int reservationPercent = configs.getInt("storage.backup-reservation-percent", 300, 100);

@@ -60,7 +60,7 @@ const bytes = (value) => { const n = Number(value || 0); if (n < 1024) return `$
       <el-table-column label="状态" width="140"><template #default="{ row }"><status-badge :value="row.status" /></template></el-table-column>
       <el-table-column v-if="simulation" prop="expectedFileCount" label="预计文件" width="100" />
       <el-table-column v-if="simulation" label="预计容量" width="130"><template #default="{ row }">{{ bytes(row.expectedBytes) }}</template></el-table-column>
-      <el-table-column v-if="simulation" prop="simulationPath" label="模拟目录" min-width="260" show-overflow-tooltip />
+      <el-table-column v-if="simulation" prop="simulationPath" label="模拟压缩包" min-width="260" show-overflow-tooltip />
       <el-table-column label="失败原因" min-width="260"><template #default="{ row }"><span class="error-text">{{ row.failureCode || '' }} {{ row.failureMessage || '' }}</span></template></el-table-column>
     </el-table>
 

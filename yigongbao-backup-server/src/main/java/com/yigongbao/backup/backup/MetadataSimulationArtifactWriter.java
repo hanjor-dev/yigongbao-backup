@@ -36,7 +36,7 @@ public class MetadataSimulationArtifactWriter {
         this.mapper = mapper;
     }
 
-    /** 原子生成单个订单的模拟制品目录。 */
+    /** 生成单个订单的模拟制品，并在压缩包写入热备后清理临时目录。 */
     public SimulationArtifactResult write(long jobId, String jobNo, String taskDate, long orderId,
                                           String orderNo, BackupManifest manifest) {
         String safeDate = segment(taskDate, "date");
@@ -50,7 +50,9 @@ public class MetadataSimulationArtifactWriter {
         recoverInterruptedReplacement(previous, target);
         // 任务在数据库落终态前可能因进程退出而被重新领取；完整制品直接幂等复用，避免破坏已完成结果。
         if (isComplete(target)) {
-            return publishPackage(target, safeDate, safeOrder, manifest.assets());
+            SimulationArtifactResult result = publishPackage(target, safeDate, safeOrder, manifest.assets());
+            deleteQuietly(target);
+            return result;
         }
         try {
             Files.createDirectories(temporary);
@@ -76,7 +78,10 @@ public class MetadataSimulationArtifactWriter {
             if (Files.exists(target)) move(target, previous);
             move(temporary, target);
             deleteQuietly(previous);
-            return publishPackage(target, safeDate, safeOrder, manifest.assets());
+            SimulationArtifactResult result = publishPackage(target, safeDate, safeOrder, manifest.assets());
+            // 模拟文件、manifest 和占位文件均已进入 ZIP；热备目录不再保留解压目录，避免重复占用空间。
+            deleteQuietly(target);
+            return result;
         } catch (IOException | RuntimeException error) {
             deleteQuietly(temporary);
             restorePrevious(previous, target);

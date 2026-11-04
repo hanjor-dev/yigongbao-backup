@@ -122,7 +122,7 @@ Run: `mvn -pl yigongbao-backup-server -Dtest=MetadataSimulationArtifactWriterTes
 
 - [ ] **Step 3: 实现模拟执行器**
 
-只调用 Manifest 查询与模拟制品写入器；返回预计文件数/容量、模拟目录和完整订单业务快照。
+只调用 Manifest 查询与模拟制品写入器；返回预计文件数/容量、模拟 ZIP storageKey 和完整订单业务快照。
 
 - [ ] **Step 4: Handler 按任务快照分派执行器**
 
@@ -175,7 +175,7 @@ Run: `mvn -pl yigongbao-backup-server -Dtest=PersistentJobServiceTest test`
 
 - [ ] **Step 1: 写模拟任务渲染测试**
 
-验证“元数据模拟”“模拟完成”、Manifest 成功/失败、预计文件数/容量、模拟目录和订单核心字段。
+验证“元数据模拟”“模拟完成”、Manifest 成功/失败、预计文件数/容量、模拟 ZIP storageKey 和订单核心字段。
 
 - [ ] **Step 2: 调整列表语义**
 
@@ -212,7 +212,7 @@ Mock 线上服务至少提供跨多页候选和不同文件数量的 Manifest，
 
 - [ ] **Step 3: 验证任务终态、统计和目录**
 
-断言真实候选数=任务订单数、预计文件/容量聚合正确、模拟目录完整、任务终态正确且订单文件正式列表为空。
+断言真实候选数=任务订单数、预计文件/容量聚合正确、模拟 ZIP 包含 manifest 与占位文件且临时目录已清理、任务终态正确。
 
 - [ ] **Step 4: 验证关闭模拟后仍可正式入选**
 
