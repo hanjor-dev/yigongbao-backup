@@ -170,14 +170,41 @@ public class PersistentJobService {
 
     public List<JobOrderEntity> listOrders(long jobId) {
         if (orderMapper == null) throw new IllegalStateException("任务订单明细持久化未配置");
-        return orderMapper.selectList(Wrappers.<JobOrderEntity>lambdaQuery().eq(JobOrderEntity::getJobId, jobId)
+        List<JobOrderEntity> rows = orderMapper.selectList(Wrappers.<JobOrderEntity>lambdaQuery().eq(JobOrderEntity::getJobId, jobId)
                 .orderByAsc(JobOrderEntity::getId));
+        return enrichPackageBytes(rows);
     }
+
+    /** 分页读取任务订单明细，并回填已生成订单 ZIP 的实际容量。 */
+    public JobOrderPage listOrders(long jobId, long current, long size) {
+        if (orderMapper == null) throw new IllegalStateException("任务订单明细持久化未配置");
+        if (current < 1 || size < 1 || size > 100) throw new IllegalArgumentException("订单明细分页参数非法");
+        Page<JobOrderEntity> page = orderMapper.selectPage(Page.of(current, size),
+                Wrappers.<JobOrderEntity>lambdaQuery().eq(JobOrderEntity::getJobId, jobId)
+                        .orderByAsc(JobOrderEntity::getId));
+        return new JobOrderPage(enrichPackageBytes(page.getRecords()), page.getTotal(), page.getCurrent(),
+                page.getSize(), page.getPages());
+    }
+
+    public record JobOrderPage(List<JobOrderEntity> records, long total, long current, long size, long pages) { }
 
     public List<JobFileEntity> listFiles(long jobId) {
         if (fileMapper == null) throw new IllegalStateException("任务文件明细持久化未配置");
         return fileMapper.selectList(Wrappers.<JobFileEntity>lambdaQuery().eq(JobFileEntity::getJobId, jobId)
                 .orderByAsc(JobFileEntity::getId));
+    }
+
+    private List<JobOrderEntity> enrichPackageBytes(List<JobOrderEntity> rows) {
+        if (packageMapper == null || rows == null || rows.isEmpty()) return rows;
+        List<Long> snapshotIds = rows.stream().map(JobOrderEntity::getSnapshotId)
+                .filter(java.util.Objects::nonNull).distinct().toList();
+        if (snapshotIds.isEmpty()) return rows;
+        Map<Long, Long> sizes = new HashMap<>();
+        packageMapper.selectList(Wrappers.<OrderPackageEntity>lambdaQuery()
+                        .in(OrderPackageEntity::getSnapshotId, snapshotIds))
+                .forEach(pkg -> sizes.merge(pkg.getSnapshotId(), pkg.getPackageSize() == null ? 0L : pkg.getPackageSize(), Math::max));
+        rows.forEach(row -> row.setPackageBytes(row.getSnapshotId() == null ? null : sizes.get(row.getSnapshotId())));
+        return rows;
     }
 
     public record OrderInput(Long sourceOrderId, Long snapshotId) {

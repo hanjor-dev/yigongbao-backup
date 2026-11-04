@@ -58,6 +58,9 @@ export function useBackupConsole() {
     const selectedJobId = ref(null);
     const selectedJob = ref(null);
     const jobOrders = ref([]);
+    const jobOrderPage = ref(1);
+    const jobOrderSize = ref(20);
+    const jobOrderTotal = ref(0);
     const jobFiles = ref([]);
     const jobLoading = ref(false);
     const coldBatches = ref([]);
@@ -380,7 +383,7 @@ export function useBackupConsole() {
       try {
         const [jobResult, orderResult, fileResult] = await Promise.all([
           api('/admin/jobs/' + encodeURIComponent(jobId)),
-          api('/admin/jobs/' + encodeURIComponent(jobId) + '/orders'),
+          api('/admin/jobs/' + encodeURIComponent(jobId) + `/orders?current=${encodeURIComponent(jobOrderPage.value)}&size=${encodeURIComponent(jobOrderSize.value)}`),
           api('/admin/jobs/' + encodeURIComponent(jobId) + '/files')
         ]);
         selectedJob.value = jobResult.data || null;
@@ -388,7 +391,11 @@ export function useBackupConsole() {
           try { cleanupResult.value = JSON.parse(selectedJob.value.resultJson); }
           catch (_) { notice.value = 'COS 清理试运行结果格式异常'; }
         }
-        jobOrders.value = orderResult.data || [];
+        const orderPageData = normalizePage(orderResult.data);
+        jobOrders.value = orderPageData.records;
+        jobOrderPage.value = orderPageData.current;
+        jobOrderSize.value = orderPageData.size;
+        jobOrderTotal.value = orderPageData.total;
         jobFiles.value = fileResult.data || [];
         if (selectedJob.value && isTerminalJob(selectedJob.value)) stopJobPolling();
       } catch (error) {
@@ -407,8 +414,20 @@ export function useBackupConsole() {
       }
     }
 
+    function changeJobOrderPage(pageNumber) {
+      jobOrderPage.value = pageNumber;
+      loadJobDetails(selectedJobId.value);
+    }
+
+    function changeJobOrderSize(size) {
+      jobOrderSize.value = size;
+      jobOrderPage.value = 1;
+      loadJobDetails(selectedJobId.value);
+    }
+
     function selectJob(job) {
       selectedJobId.value = String(job.id);
+      jobOrderPage.value = 1;
       loadJobDetails(job.id);
       startJobPolling();
     }
@@ -746,12 +765,12 @@ export function useBackupConsole() {
       orderCode, createdFrom, createdTo, snapshotStatus, sourceStatus, orgName, hospitalName, patientName,
       doctorName, businessType, phase, status, cloudRollup, hotRollup, coldRollup,
       orderPage, orderSize, orderTotal, orderPages, storagePath, storage, days, cleanupResult, jobs, jobPage, jobSize, jobTotal,
-      selectedJobId, selectedJob, jobOrders, jobFiles, jobLoading, jobProgress, overview, auditRows,
+      selectedJobId, selectedJob, jobOrders, jobOrderPage, jobOrderSize, jobOrderTotal, jobFiles, jobLoading, jobProgress, overview, auditRows,
       coldBatches, coldDisks, coldDiskId, coldFrom, coldTo, diskCode, diskLabel, coldArchives, coldArchive, coldOrderIds, coldRoot, writePackages, hotCleanupPackages, selectedBatchId, selectedColdBatch, coldBusy, coldDiagnostics, configs, configCategories, selectedConfigCategory, configKey, configValue, configVersion, accounts, accountPage, accountSize, accountTotal, accountPages, accountPassword, accountSyncStatus, accountSyncRunning,
       createColdBatch, registerColdDisk,
       loadAccounts, changeAccountPage, changeAccountSize, syncAccountsNow, toggleAccount, resetAccountPassword, selfPassword, changeSelfPassword,
       login, loadOrders, changeOrderPage, changeOrderSize, selectOrder, toggleSelected, downloadOrder, uploadSupplement, downloadSupplement, restoreSelectedOrder, restoreBatch,
-      probeStorage, loadOverview, loadAudit, dryCleanup, executeCleanup, loadJobs, changeJobPage, changeJobSize, loadJobDetails, selectJob, cancelJob, retryJob, loadCold, selectColdBatch, verifyColdBatch, cleanupColdBatch, writeCold, scanColdImports, restoreColdImport, loadConfigs, editConfig,
+      probeStorage, loadOverview, loadAudit, dryCleanup, executeCleanup, loadJobs, changeJobPage, changeJobSize, loadJobDetails, changeJobOrderPage, changeJobOrderSize, selectJob, cancelJob, retryJob, loadCold, selectColdBatch, verifyColdBatch, cleanupColdBatch, writeCold, scanColdImports, restoreColdImport, loadConfigs, editConfig,
       saveConfig, logout, navigate, storageState, taskFailureSummary
     };
 

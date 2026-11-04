@@ -4,7 +4,7 @@ import { useBackupContext } from '../../composables/useBackupContext.js';
 import { orderBusinessFields } from '../../taskCenter.js';
 import OrderBusinessFields from '../orders/OrderBusinessFields.vue';
 
-const { selectedJob, jobOrders, jobFiles, jobLoading, jobProgress, cancelJob, retryJob } = useBackupContext();
+const { selectedJob, jobOrders, jobOrderPage, jobOrderSize, jobOrderTotal, jobFiles, jobLoading, jobProgress, changeJobOrderPage, changeJobOrderSize, cancelJob, retryJob } = useBackupContext();
 const terminalStates = ['SUCCEEDED', 'FAILED', 'PARTIAL_FAILED', 'CANCELLED', 'CANCELED'];
 const jobState = (job) => job?.state || job?.status || '';
 const progress = computed(() => selectedJob.value ? jobProgress(selectedJob.value) : 0);
@@ -68,6 +68,9 @@ const bytes = (value) => { const n = Number(value || 0); if (n < 1024) return `$
       <el-table-column v-if="simulation" prop="simulationPath" label="模拟压缩包" min-width="260" show-overflow-tooltip />
       <el-table-column label="失败原因" min-width="260"><template #default="{ row }"><span class="error-text">{{ row.failureCode || '' }} {{ row.failureMessage || '' }}</span></template></el-table-column>
     </el-table>
+    <el-pagination v-if="jobOrderTotal > 0" class="table-pagination" background layout="total, sizes, prev, pager, next"
+      :current-page="jobOrderPage" :page-size="jobOrderSize" :total="jobOrderTotal" :page-sizes="[10, 20, 50, 100]"
+      @current-change="changeJobOrderPage" @size-change="changeJobOrderSize" />
 
     <h4 v-if="!simulation">文件明细</h4>
     <el-table v-if="!simulation" :data="jobFiles" stripe border empty-text="暂无文件明细">
