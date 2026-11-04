@@ -47,6 +47,7 @@ public class ManualBackupJobHandler implements JobHandler {
         long done = 0;
         java.util.concurrent.atomic.AtomicLong expectedFiles = new java.util.concurrent.atomic.AtomicLong();
         java.util.concurrent.atomic.AtomicLong expectedBytes = new java.util.concurrent.atomic.AtomicLong();
+        java.util.concurrent.atomic.AtomicLong packageBytes = new java.util.concurrent.atomic.AtomicLong();
         java.util.Map<Long, Throwable> retryQueue = new java.util.LinkedHashMap<>();
         java.util.Map<Long, Throwable> terminalFailures = new java.util.LinkedHashMap<>();
         java.util.Map<Long, Integer> attempts = new java.util.HashMap<>();
@@ -66,7 +67,7 @@ public class ManualBackupJobHandler implements JobHandler {
             try {
                 SimulationArtifactResult simulated = executeAttempt(context, job, orderId, payload, executionMode,
                         manifestsClient, cos, attempts, maxRetries, done);
-                accumulate(simulated, expectedFiles, expectedBytes);
+                accumulate(simulated, expectedFiles, expectedBytes, packageBytes);
                 log.info("订单备份成功｜任务ID={}｜订单ID={}｜实际尝试次数={}｜执行耗时={}",
                         job.getId(), orderId, attempts.get(orderId),
                         BusinessLogFormatter.duration(elapsedMillis(orderStartedAt)));
@@ -109,7 +110,7 @@ public class ManualBackupJobHandler implements JobHandler {
                     try {
                         SimulationArtifactResult simulated = executeAttempt(context, job, orderId, payload, executionMode,
                                 manifestsClient, cos, attempts, maxRetries, payload.sourceOrderIds().size());
-                        accumulate(simulated, expectedFiles, expectedBytes);
+                        accumulate(simulated, expectedFiles, expectedBytes, packageBytes);
                         log.info("失败订单重试成功｜任务ID={}｜订单ID={}｜重试轮次={}/{}｜累计尝试次数={}",
                                 job.getId(), orderId, retryRound, retryPolicy.maxRetries(), attempts.get(orderId));
                     } catch (Exception failure) {
@@ -133,16 +134,23 @@ public class ManualBackupJobHandler implements JobHandler {
                     job.getId(), orderId, attempts.getOrDefault(orderId, 1),
                     failure.getClass().getSimpleName(), safe(failure), safeThrowable(failure));
         });
-        context.result(mapper.writeValueAsString(java.util.Map.of(
-                "executionMode", executionMode.name(),
-                "orderTotal", payload.sourceOrderIds().size(),
-                "orderSucceeded", payload.sourceOrderIds().size() - failures.size(),
-                "orderFailed", failures.size(), "manifestSucceeded", payload.sourceOrderIds().size() - failures.size(),
-                "manifestFailed", failures.size(), "expectedFileTotal", expectedFiles.get(),
-                "expectedBytes", expectedBytes.get(), "failures", failures)));
-        log.info("订单备份任务汇总｜任务ID={}｜任务编号={}｜处理进度={}/{}｜成功订单数={}｜失败订单数={}｜总执行耗时={}",
+        java.util.Map<String, Object> resultSummary = new java.util.LinkedHashMap<>();
+        resultSummary.put("executionMode", executionMode.name());
+        resultSummary.put("orderTotal", payload.sourceOrderIds().size());
+        resultSummary.put("orderSucceeded", payload.sourceOrderIds().size() - failures.size());
+        resultSummary.put("orderFailed", failures.size());
+        resultSummary.put("manifestSucceeded", payload.sourceOrderIds().size() - failures.size());
+        resultSummary.put("manifestFailed", failures.size());
+        resultSummary.put("expectedFileTotal", expectedFiles.get());
+        resultSummary.put("expectedBytes", expectedBytes.get());
+        resultSummary.put("sourceBytes", expectedBytes.get());
+        resultSummary.put("packageBytes", packageBytes.get());
+        resultSummary.put("failures", failures);
+        context.result(mapper.writeValueAsString(resultSummary));
+        log.info("订单备份任务汇总｜任务ID={}｜任务编号={}｜处理进度={}/{}｜成功订单数={}｜失败订单数={}｜源文件总容量（压缩前）={}｜ZIP实际容量={}｜总执行耗时={}",
                 job.getId(), job.getJobNo(), done, payload.sourceOrderIds().size(),
                 payload.sourceOrderIds().size() - failures.size(), failures.size(),
+                BusinessLogFormatter.bytes(expectedBytes.get()), BusinessLogFormatter.bytes(packageBytes.get()),
                 BusinessLogFormatter.duration(elapsedMillis(taskStartedAt)));
         if (!failures.isEmpty()) {
             throw new PartialJobFailureException("部分订单备份失败: " + String.join("; ", failures));
@@ -155,10 +163,12 @@ public class ManualBackupJobHandler implements JobHandler {
         log.info("读取线上订单清单开始｜任务ID={}｜订单ID={}", job.getId(), orderId);
         BackupManifest manifest = manifestsClient.fetch(String.valueOf(orderId));
         long sourceBytes = manifest.assets().stream().mapToLong(BackupManifest.Asset::size).sum();
-        log.info("读取线上订单清单完成｜任务ID={}｜订单ID={}｜订单号={}｜医院={}｜文件数量={}｜文件总容量={}｜清单版本={}",
+        log.info("读取线上订单清单完成｜任务ID={}｜订单ID={}｜订单号={}｜医院={}｜文件数量={}｜源文件总容量（压缩前）={}｜清单版本={}",
                 job.getId(), orderId, businessValue(manifest, "orderCode", "publicOrderCode"),
                 businessValue(manifest, "hospitalName"), manifest.assets().size(),
                 BusinessLogFormatter.bytes(sourceBytes), BusinessLogFormatter.shortHash(manifest.manifestRevision()));
+        // 真实模式也固化 Manifest 的源文件规模，任务统计中的“压缩前”容量才不会显示为 0。
+        context.orderSimulationMetadata(manifest.assets().size(), sourceBytes, null);
         if (executionMode == BackupExecutionMode.METADATA_SIMULATION) {
             MetadataSimulationArtifactWriter writer = new MetadataSimulationArtifactWriter(
                     resolveSimulationRoot(simulationRoot), store, mapper);
@@ -166,7 +176,6 @@ public class ManualBackupJobHandler implements JobHandler {
             // Manifest 已成功获取后立即固化业务快照与预计规模；即使本地制品生成失败，详情页仍可定位具体订单。
             context.orderMetadata(orderId, null, orderNo, manifest.orderCreatedAt(),
                     businessValue(manifest, "status", "statusCode"), json(manifest.order()));
-            context.orderSimulationMetadata(manifest.assets().size(), sourceBytes, null);
             SimulationArtifactResult result = writer.write(job.getId(), job.getJobNo(), backupDate,
                     orderId, orderNo, manifest);
             com.yigongbao.backup.order.OrderSnapshotEntity snapshot = backupEvidence.saveSimulation(
@@ -178,9 +187,9 @@ public class ManualBackupJobHandler implements JobHandler {
                     snapshot.getOrderCreatedAt() == null ? null : snapshot.getOrderCreatedAt().toString(),
                     snapshot.getSourceStatus(), json(manifest.order()));
             context.orderCompleted("SIMULATED");
-            log.info("订单元数据模拟完成｜任务ID={}｜订单ID={}｜快照ID={}｜预计文件数={}｜预计容量={}｜热备压缩包={}",
+            log.info("订单元数据模拟完成｜任务ID={}｜订单ID={}｜快照ID={}｜预计文件数={}｜源文件预计容量（压缩前）={}｜ZIP实际容量={}｜热备压缩包={}",
                     job.getId(), orderId, snapshot.getId(), result.expectedFileCount(),
-                    BusinessLogFormatter.bytes(result.expectedBytes()), result.storageKey());
+                    BusinessLogFormatter.bytes(result.expectedBytes()), BusinessLogFormatter.bytes(result.packageSize()), result.storageKey());
             return result;
         }
         int reservationPercent = configs.getInt("storage.backup-reservation-percent", 300, 100);
@@ -281,10 +290,12 @@ public class ManualBackupJobHandler implements JobHandler {
 
     private static void accumulate(SimulationArtifactResult result,
                                    java.util.concurrent.atomic.AtomicLong files,
-                                   java.util.concurrent.atomic.AtomicLong bytes) {
+                                   java.util.concurrent.atomic.AtomicLong bytes,
+                                   java.util.concurrent.atomic.AtomicLong packageBytes) {
         if (result == null) return;
         files.addAndGet(result.expectedFileCount());
         bytes.addAndGet(result.expectedBytes());
+        packageBytes.addAndGet(result.packageSize());
     }
 
     private static boolean retryable(Throwable failure) {

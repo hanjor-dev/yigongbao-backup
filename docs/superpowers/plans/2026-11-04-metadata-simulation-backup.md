@@ -145,7 +145,7 @@ Run: `mvn -pl yigongbao-backup-server -Dtest=MetadataSimulationOrderExecutorTest
 
 - [ ] **Step 1: 先核对当前初始化脚本的实际表定义**
 
-以现有字段为准做最小迁移：任务增加 `execution_mode`；订单明细增加预计文件数、预计容量和模拟制品路径。聚合统计优先由任务订单明细计算，避免同时维护重复计数列。
+以现有字段为准做最小迁移：任务增加 `execution_mode`；订单明细增加预计文件数、源文件预计容量和模拟制品路径。订单 ZIP 实际容量直接读取既有 `bk_order_package.package_size`，任务聚合统计按订单压缩包实时汇总，避免重复维护容量列。
 
 - [ ] **Step 2: 写持久化与重启恢复测试**
 
@@ -153,7 +153,7 @@ Run: `mvn -pl yigongbao-backup-server -Dtest=MetadataSimulationOrderExecutorTest
 
 - [ ] **Step 3: 更新实体、查询 DTO 和聚合逻辑**
 
-接口返回 `executionMode`、`manifestSucceeded`、`manifestFailed`、`expectedFileTotal`、`expectedBytes`；真实任务的既有字段保持兼容。
+接口返回 `executionMode`、`manifestSucceeded`、`manifestFailed`、`expectedFileTotal`、`expectedBytes`（源文件总容量，压缩前）和 `packageBytes`（ZIP 实际占用容量）；真实任务的既有字段保持兼容。
 
 - [ ] **Step 4: 编写幂等迁移和新环境初始化 SQL**
 

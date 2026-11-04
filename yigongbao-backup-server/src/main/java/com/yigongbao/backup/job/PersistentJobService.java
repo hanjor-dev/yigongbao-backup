@@ -5,6 +5,8 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import com.baomidou.mybatisplus.core.toolkit.Wrappers;
 import com.baomidou.mybatisplus.core.conditions.update.UpdateWrapper;
 import com.baomidou.mybatisplus.extension.plugins.pagination.Page;
+import com.yigongbao.backup.order.OrderPackageEntity;
+import com.yigongbao.backup.order.OrderPackageMapper;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
@@ -14,6 +16,8 @@ import java.time.Instant;
 import java.time.LocalDateTime;
 import java.time.ZoneOffset;
 import java.util.List;
+import java.util.HashMap;
+import java.util.Map;
 import java.util.UUID;
 
 /** 任务中心数据库实现；领取使用版本、租约和 fencing token 条件更新。 */
@@ -23,15 +27,21 @@ public class PersistentJobService {
     private final JobMapper mapper;
     private final JobOrderMapper orderMapper;
     private final JobFileMapper fileMapper;
+    private final OrderPackageMapper packageMapper;
 
     /** 调度批次统计值，避免将远端订单明细在创建任务前重复拉取。 */
     public record JobInputBatch(int orderTotal, int fileTotal) {}
 
-    public PersistentJobService(JobMapper mapper) { this(mapper, null, null); }
+    public PersistentJobService(JobMapper mapper) { this(mapper, null, null, null); }
+
+    public PersistentJobService(JobMapper mapper, JobOrderMapper orderMapper, JobFileMapper fileMapper) {
+        this(mapper, orderMapper, fileMapper, null);
+    }
 
     @Autowired
-    public PersistentJobService(JobMapper mapper, JobOrderMapper orderMapper, JobFileMapper fileMapper) {
-        this.mapper = mapper; this.orderMapper = orderMapper; this.fileMapper = fileMapper;
+    public PersistentJobService(JobMapper mapper, JobOrderMapper orderMapper, JobFileMapper fileMapper,
+                                OrderPackageMapper packageMapper) {
+        this.mapper = mapper; this.orderMapper = orderMapper; this.fileMapper = fileMapper; this.packageMapper = packageMapper;
     }
 
     public Job create(int orderTotal, int fileTotal, long actor) {
@@ -204,6 +214,16 @@ public class PersistentJobService {
                 && row.getExpectedFileCount() == null).count());
         job.setExpectedFileTotal(orderRows.stream().mapToInt(row -> row.getExpectedFileCount() == null ? 0 : row.getExpectedFileCount()).sum());
         job.setExpectedBytes(orderRows.stream().mapToLong(row -> row.getExpectedBytes() == null ? 0L : row.getExpectedBytes()).sum());
+        Map<Long, Long> packageBytes = new HashMap<>();
+        java.util.List<Long> snapshotIds = orderRows.stream().map(JobOrderEntity::getSnapshotId)
+                .filter(java.util.Objects::nonNull).distinct().toList();
+        if (packageMapper != null && !snapshotIds.isEmpty()) {
+            packageMapper.selectList(Wrappers.<OrderPackageEntity>lambdaQuery()
+                            .in(OrderPackageEntity::getSnapshotId, snapshotIds))
+                    .forEach(pkg -> packageBytes.merge(pkg.getSnapshotId(), pkg.getPackageSize() == null ? 0L : pkg.getPackageSize(), Math::max));
+        }
+        orderRows.forEach(row -> row.setPackageBytes(row.getSnapshotId() == null ? null : packageBytes.get(row.getSnapshotId())));
+        job.setPackageBytes(orderRows.stream().mapToLong(row -> row.getPackageBytes() == null ? 0L : row.getPackageBytes()).sum());
         return job;
     }
 

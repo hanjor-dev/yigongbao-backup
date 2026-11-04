@@ -33,6 +33,9 @@ public class Job {
     private int manifestSucceeded;
     private int manifestFailed;
     private int expectedFileTotal;
+    /** 清单中的源文件总容量，表示压缩前读取量。 */
     private long expectedBytes;
+    /** 已生成订单 ZIP 压缩包的实际累计容量。 */
+    private long packageBytes;
     private boolean cancelRequested;
 }

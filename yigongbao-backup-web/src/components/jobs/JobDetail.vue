@@ -10,6 +10,7 @@ const jobState = (job) => job?.state || job?.status || '';
 const progress = computed(() => selectedJob.value ? jobProgress(selectedJob.value) : 0);
 const business = (row) => orderBusinessFields(row.orderBusinessJson);
 const simulation = computed(() => selectedJob.value?.executionMode === 'METADATA_SIMULATION');
+const orderBackup = computed(() => ['ORDER_BACKUP', 'MANUAL_BACKUP'].includes(selectedJob.value?.jobType));
 const stateLabel = computed(() => jobState(selectedJob.value) === 'RETRYING_FAILED_ORDERS' ? '失败订单重试中'
   : simulation.value && jobState(selectedJob.value) === 'SUCCEEDED' ? '模拟完成' : jobState(selectedJob.value));
 const bytes = (value) => { const n = Number(value || 0); if (n < 1024) return `${n} B`; if (n < 1048576) return `${(n / 1024).toFixed(2)} KB`; if (n < 1073741824) return `${(n / 1048576).toFixed(2)} MB`; return `${(n / 1073741824).toFixed(2)} GB`; };
@@ -39,11 +40,14 @@ const bytes = (value) => { const n = Number(value || 0); if (n < 1024) return `$
       <div class="progress-meta"><span>整体进度</span><strong>{{ progress }}%</strong><span v-if="jobLoading" class="muted">正在刷新…</span></div>
       <el-progress :percentage="progress" :status="jobState(selectedJob) === 'FAILED' ? 'exception' : jobState(selectedJob) === 'SUCCEEDED' ? 'success' : undefined" :stroke-width="10" />
     </div>
-    <el-descriptions v-if="simulation" :column="4" border class="mb-16">
-      <el-descriptions-item label="执行结果">{{ jobState(selectedJob) === 'SUCCEEDED' ? '模拟完成' : jobState(selectedJob) }}</el-descriptions-item>
-      <el-descriptions-item label="Manifest">成功 {{ selectedJob.manifestSucceeded || 0 }} / 失败 {{ selectedJob.manifestFailed || 0 }}</el-descriptions-item>
-      <el-descriptions-item label="预计文件">{{ selectedJob.expectedFileTotal || 0 }}</el-descriptions-item>
-      <el-descriptions-item label="预计容量">{{ bytes(selectedJob.expectedBytes) }}</el-descriptions-item>
+    <el-descriptions v-if="orderBackup" :column="4" border class="mb-16">
+      <el-descriptions-item label="执行结果">{{ simulation && jobState(selectedJob) === 'SUCCEEDED' ? '模拟完成' : jobState(selectedJob) }}</el-descriptions-item>
+      <el-descriptions-item label="源文件总容量（压缩前）">{{ bytes(selectedJob.expectedBytes) }}</el-descriptions-item>
+      <el-descriptions-item label="ZIP实际占用容量">{{ bytes(selectedJob.packageBytes) }}</el-descriptions-item>
+      <template v-if="simulation">
+        <el-descriptions-item label="Manifest">成功 {{ selectedJob.manifestSucceeded || 0 }} / 失败 {{ selectedJob.manifestFailed || 0 }}</el-descriptions-item>
+        <el-descriptions-item label="预计文件">{{ selectedJob.expectedFileTotal || 0 }}</el-descriptions-item>
+      </template>
     </el-descriptions>
     <el-alert v-if="selectedJob.failureCode" type="error" :closable="false" show-icon class="mb-16">
       失败原因：{{ selectedJob.failureCode }} {{ selectedJob.failureEvidence || '' }}
@@ -59,7 +63,8 @@ const bytes = (value) => { const n = Number(value || 0); if (n < 1024) return `$
       <el-table-column label="业务状态" width="120"><template #default="{ row }"><status-badge :value="row.sourceStatus" /></template></el-table-column>
       <el-table-column label="状态" width="140"><template #default="{ row }"><status-badge :value="row.status" /></template></el-table-column>
       <el-table-column v-if="simulation" prop="expectedFileCount" label="预计文件" width="100" />
-      <el-table-column v-if="simulation" label="预计容量" width="130"><template #default="{ row }">{{ bytes(row.expectedBytes) }}</template></el-table-column>
+      <el-table-column v-if="simulation" label="源文件容量（压缩前）" width="160"><template #default="{ row }">{{ bytes(row.expectedBytes) }}</template></el-table-column>
+      <el-table-column v-if="simulation" label="ZIP实际容量" width="130"><template #default="{ row }">{{ bytes(row.packageBytes) }}</template></el-table-column>
       <el-table-column v-if="simulation" prop="simulationPath" label="模拟压缩包" min-width="260" show-overflow-tooltip />
       <el-table-column label="失败原因" min-width="260"><template #default="{ row }"><span class="error-text">{{ row.failureCode || '' }} {{ row.failureMessage || '' }}</span></template></el-table-column>
     </el-table>
