@@ -31,9 +31,11 @@ class OrderControllerFilterTest {
         StpUtil.login(1L);
         OrderSnapshotMapper snapshots = mock(OrderSnapshotMapper.class);
         when(snapshots.selectPage(any(), any())).thenAnswer(invocation -> invocation.getArgument(0));
-        OrderController controller = new OrderController(snapshots, mock(AssetMapper.class), mock(ArtifactStore.class));
+        OrderController controller = new OrderController(snapshots, mock(AssetMapper.class),
+                mock(OrderPackageMapper.class), mock(ArtifactStore.class));
 
-        controller.list(1, 20, null, null, null, "AVAILABLE", "FORMAL", "PRESENT", "ABSENT", "PARTIAL");
+        controller.list(1, 20, null, null, null, "AVAILABLE", "FORMAL", "PRESENT", "ABSENT", "PARTIAL",
+                null, null, null, null, null, null, null);
 
         verify(snapshots).selectPage(any(Page.class), argThat(query -> query != null));
     }
@@ -44,12 +46,37 @@ class OrderControllerFilterTest {
         SaTokenContextForThreadLocalStorage.setBox(mock(SaRequest.class), mock(SaResponse.class), storage());
         StpUtil.login(1L);
         OrderController controller = new OrderController(mock(OrderSnapshotMapper.class),
-                mock(AssetMapper.class), mock(ArtifactStore.class));
+                mock(AssetMapper.class), mock(OrderPackageMapper.class), mock(ArtifactStore.class));
 
         assertThatThrownBy(() -> controller.list(1, 20, null, null, null, null,
-                null, "NOT_A_STATE", null, null))
+                null, "NOT_A_STATE", null, null, null, null, null, null, null, null, null))
                 .isInstanceOf(IllegalArgumentException.class)
                 .hasMessageContaining("云端存储状态");
+    }
+
+    @Test
+    void appliesStructuredBusinessFiltersWithoutReadingJson() {
+        com.baomidou.mybatisplus.core.metadata.TableInfoHelper.initTableInfo(
+                new org.apache.ibatis.builder.MapperBuilderAssistant(
+                        new com.baomidou.mybatisplus.core.MybatisConfiguration(), "orderSnapshotTest"),
+                OrderSnapshotEntity.class);
+        SaManager.setSaTokenContext(new SaTokenContextForThreadLocal());
+        SaTokenContextForThreadLocalStorage.setBox(mock(SaRequest.class), mock(SaResponse.class), storage());
+        StpUtil.login(1L);
+        OrderSnapshotMapper snapshots = mock(OrderSnapshotMapper.class);
+        when(snapshots.selectPage(any(), any())).thenAnswer(invocation -> invocation.getArgument(0));
+        OrderController controller = new OrderController(snapshots, mock(AssetMapper.class),
+                mock(OrderPackageMapper.class), mock(ArtifactStore.class));
+
+        controller.list(1, 20, "O-1", null, null, null, null, null, null, null,
+                "机构", "医院", "患者", "医生", "11.1", 20, 2030);
+
+        verify(snapshots).selectPage(any(Page.class), argThat(query -> {
+            String sql = query.getSqlSegment();
+            return sql.contains("org_name") && sql.contains("hospital_name")
+                    && sql.contains("patient_name") && sql.contains("doctor_name")
+                    && sql.contains("business_type") && sql.contains("phase") && sql.contains("status");
+        }));
     }
 
     private static SaStorage storage() {

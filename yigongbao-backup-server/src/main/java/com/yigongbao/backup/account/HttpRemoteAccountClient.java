@@ -6,6 +6,7 @@ import lombok.RequiredArgsConstructor;
 
 import java.time.LocalDateTime;
 import java.time.OffsetDateTime;
+import java.time.ZoneId;
 import java.util.ArrayList;
 import java.util.List;
 
@@ -39,7 +40,12 @@ public final class HttpRemoteAccountClient implements RemoteAccountClient {
             nextId = text(next, "id", "afterId");
         }
         boolean more = data.path("hasMore").asBoolean(false);
-        return new Page(accounts, more ? nextUpdated + "|" + nextId : null, more);
+        if (more && (nextUpdated == null || nextUpdated.isBlank() || nextId == null || nextId.isBlank())) {
+            throw new IllegalStateException("线上账号接口声明存在下一页，但未返回完整游标");
+        }
+        String nextCursor = nextUpdated == null || nextUpdated.isBlank() || nextId == null || nextId.isBlank()
+                ? null : nextUpdated + "|" + nextId;
+        return new Page(accounts, nextCursor, more);
     }
 
     private static String text(JsonNode node, String... fields) {
@@ -52,7 +58,7 @@ public final class HttpRemoteAccountClient implements RemoteAccountClient {
 
     private static LocalDateTime parseTime(String value) {
         if (value == null || value.isBlank()) return null;
-        try { return OffsetDateTime.parse(value).toLocalDateTime(); }
+        try { return OffsetDateTime.parse(value).atZoneSameInstant(ZoneId.systemDefault()).toLocalDateTime(); }
         catch (RuntimeException ignored) { return LocalDateTime.parse(value); }
     }
 

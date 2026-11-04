@@ -46,6 +46,35 @@ export async function api(path, options = {}) {
   return body;
 }
 
+/** 使用 XMLHttpRequest 暴露 multipart 上传进度；普通 JSON 请求仍使用 fetch。 */
+export function uploadWithProgress(path, formData, onProgress) {
+  return new Promise((resolve, reject) => {
+    const request = new XMLHttpRequest();
+    request.open('POST', API_PREFIX + path);
+    const token = getAuthToken();
+    if (token) request.setRequestHeader('backup-token', token);
+    request.upload.onprogress = (event) => {
+      if (event.lengthComputable && typeof onProgress === 'function') {
+        onProgress(Math.min(100, Math.round(event.loaded * 100 / event.total)));
+      }
+    };
+    request.onerror = () => reject(new Error('文件上传网络异常'));
+    request.onabort = () => reject(new Error('文件上传已取消'));
+    request.onload = () => {
+      let body = {};
+      try { body = request.responseText ? JSON.parse(request.responseText) : {}; } catch (_) { }
+      if (request.status === 401) { unauthorizedError(); return; }
+      if (request.status < 200 || request.status >= 300 || (body.code && body.code !== 'OK')) {
+        reject(responseError(body, request.status === 413 ? '补传文件超过系统上传上限' : '文件上传失败'));
+        return;
+      }
+      if (typeof onProgress === 'function') onProgress(100);
+      resolve(body);
+    };
+    request.send(formData);
+  });
+}
+
 /** 调用文件下载 API，调用者负责读取响应流并触发浏览器保存。 */
 export async function binary(path) {
   const token = getAuthToken();

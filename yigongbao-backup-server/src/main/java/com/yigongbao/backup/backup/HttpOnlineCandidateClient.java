@@ -17,13 +17,15 @@ public final class HttpOnlineCandidateClient implements OnlineCandidateClient {
     private final ObjectMapper mapper;
 
     @Override
-    public Page search(String cursor, int pageSize) {
+    public Page search(String cursor, int pageSize, String highWatermark, OffsetDateTime orderCreatedBefore) {
         if (pageSize < 1 || pageSize > 200) throw new IllegalArgumentException("候选分页大小非法");
+        if (orderCreatedBefore == null) throw new IllegalArgumentException("订单创建时间上界不能为空");
         try {
             String body = mapper.writeValueAsString(Map.of(
                     "cursor", cursor == null ? "" : cursor,
                     "pageSize", pageSize,
-                    "highWatermark", ""));
+                    "highWatermark", highWatermark == null ? "" : highWatermark,
+                    "orderCreatedBefore", orderCreatedBefore.toString()));
             JsonNode data = http.data("POST", "/internal/backup/v1/candidates/search", body);
             List<Candidate> items = new ArrayList<>();
             for (JsonNode item : data.path("items")) {

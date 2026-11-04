@@ -47,6 +47,9 @@
 .supplement-row { display:flex; align-items:center; justify-content:space-between; padding:11px 0; border-bottom:1px solid #edf0f5; }
 .supplement-row strong,.supplement-row small { display:block; }
 .supplement-row small { margin-top:3px; color:var(--muted); }
+.supplement-progress { margin:14px 0 10px; padding:12px; border:1px solid #e7edf5; border-radius:8px; background:#f8fbff; }
+.progress-line { display:flex; align-items:center; justify-content:space-between; gap:12px; margin-bottom:8px; color:#526173; font-size:13px; }
+.supplement-progress small { display:block; margin-top:6px; color:var(--muted); }
 .status-badge { display:inline-flex; align-items:center; min-height:23px; padding:3px 9px; border-radius:999px; font-size:11px; font-weight:700; background:#eef1f6; color:#6f7b8d; }
 .status-success { color:#14784d; background:#e5f8ed; }.status-progress { color:#9a6500; background:#fff3d2; }.status-danger { color:#b42318; background:#ffe8e6; }
 .metric-card { padding:20px; border:1px solid var(--line); border-radius:13px; background:#fff; box-shadow:var(--shadow); }

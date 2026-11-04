@@ -13,9 +13,14 @@ import java.time.LocalDateTime;
 @TableName("bk_config")
 public class BkConfigEntity extends BaseEntity {
     private String configKey;
+    private String configName;
+    private String categoryCode;
+    private String categoryName;
     private String scope;
     private String valueType;
     private String configValue;
+    private String optionsJson;
+    private String description;
     private String secretRef;
     private Integer configVersion;
     private Long changedBy;

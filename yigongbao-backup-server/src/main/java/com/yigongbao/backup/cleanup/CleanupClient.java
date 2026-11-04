@@ -6,7 +6,11 @@ public interface CleanupClient {
     Evaluation evaluate(CleanupRequest request);
     Permit pollPermit(String taskId);
     void delete(Permit permit, String objectKey);
-    record CleanupRequest(int olderThanDays, boolean dryRun) {}
+    record CleanupRequest(int olderThanDays, boolean dryRun, int batchSize) {
+        public CleanupRequest(int olderThanDays, boolean dryRun) {
+            this(olderThanDays, dryRun, 100);
+        }
+    }
     /** YAML permit issue 所需的完整安全证据；旧调用方仍可使用仅传 taskId 的兼容方法。 */
     record PermitRequest(int attemptNo, String snapshotHash, String objectSetHash, String fencingToken,
                          String receiptId, int receiptVersion, String verificationDigest) {}

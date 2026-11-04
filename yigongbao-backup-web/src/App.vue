@@ -12,7 +12,7 @@ import AccountsView from './views/AccountsView.vue';
 import CleanupView from './views/CleanupView.vue';
 import ColdView from './views/ColdView.vue';
 import ConfigsView from './views/ConfigsView.vue';
-import JobsView from './views/JobsView.vue';
+import BackupView from './views/BackupView.vue';
 
 const backup = useBackupConsole();
 provide(BACKUP_CONTEXT, backup);
@@ -27,7 +27,7 @@ const pageViews = {
   cleanup: CleanupView,
   cold: ColdView,
   configs: ConfigsView,
-  jobs: JobsView
+  backup: BackupView
 };
 const currentView = computed(() => pageViews[page.value] || OrdersView);
 </script>

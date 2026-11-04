@@ -13,6 +13,13 @@ public class JobOrderEntity extends BaseEntity {
     private Long jobId;
     private Long sourceOrderId;
     private Long snapshotId;
+    private String orderCode;
+    private String orderCreatedAt;
+    private String sourceStatus;
+    private String orderBusinessJson;
+    private Integer expectedFileCount;
+    private Long expectedBytes;
+    private String simulationPath;
     private String status;
     private String failureCode;
     private String failureMessage;

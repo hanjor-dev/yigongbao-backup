@@ -45,6 +45,17 @@ class PersistentJobCoordinatorSafetyTest {
     }
 
     @Test
+    void cancellationBecomesTerminalDuringHeartbeatWait() {
+        JobMapper mapper = mock(JobMapper.class);
+        JobEntity running = running(5L, "worker", 6L); running.setCancelRequested(true);
+        when(mapper.selectById(5L)).thenReturn(running); when(mapper.update(any(), any())).thenReturn(1);
+        PersistentJobCoordinator coordinator = new PersistentJobCoordinator(mapper);
+
+        assertThatThrownBy(() -> coordinator.heartbeat(5L, "worker", 6L, 60))
+                .isInstanceOf(JobCancelledException.class);
+    }
+
+    @Test
     void expiredLeaseIsRecoveredAndFailureUsesRetryBackoff() {
         JobMapper mapper = mock(JobMapper.class);
         JobEntity expired = running(3L, "dead-worker", 5L); expired.setVersion(0);
@@ -58,6 +69,19 @@ class PersistentJobCoordinatorSafetyTest {
         when(mapper.selectById(4L)).thenReturn(retrying);
         coordinator.failOrRetry(4L, "worker", 8L, 3, new IllegalStateException("temporary"));
         verify(mapper, times(2)).update(isNull(), any());
+    }
+
+    @Test
+    void expiredLeaseStopsAfterConfiguredRecoveryLimit() {
+        JobMapper mapper = mock(JobMapper.class);
+        JobEntity expired = running(6L, "dead-worker", 9L);
+        expired.setVersion(0); expired.setRetryCount(3);
+        expired.setLeaseUntil(LocalDateTime.now().minusSeconds(1));
+        when(mapper.selectList(any())).thenReturn(List.of(expired));
+        when(mapper.update(any(), any())).thenReturn(1);
+
+        assertThat(new PersistentJobCoordinator(mapper).recoverExpired(3)).isEqualTo(1);
+        verify(mapper).update(isNull(), argThat(update -> update.getSqlSet().contains("status=#{")));
     }
 
     private static JobEntity running(long id, String owner, long token) {

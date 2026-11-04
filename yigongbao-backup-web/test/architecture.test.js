@@ -19,7 +19,7 @@ test('application shell exposes refs as top-level template bindings', () => {
 });
 
 test('frontend keeps page views separate from the application shell', () => {
-  for (const view of ['LoginView', 'OverviewView', 'OrdersView', 'JobsView', 'ColdView', 'ConfigsView']) {
+  for (const view of ['LoginView', 'OverviewView', 'OrdersView', 'BackupView', 'ColdView', 'ConfigsView']) {
     assert.ok(fs.existsSync(path.join(root, 'src', 'views', `${view}.vue`)), `${view}.vue should exist`);
   }
 });

@@ -28,6 +28,13 @@ CALL add_backup_index_if_missing('bk_backup_candidate','idx_bk_candidate_cursor'
 CALL add_backup_index_if_missing('bk_order_snapshot','uk_bk_snapshot_order','CREATE UNIQUE INDEX uk_bk_snapshot_order ON bk_order_snapshot(source_order_id)');
 CALL add_backup_index_if_missing('bk_order_snapshot','idx_bk_snapshot_code','CREATE INDEX idx_bk_snapshot_code ON bk_order_snapshot(order_code)');
 CALL add_backup_index_if_missing('bk_order_snapshot','idx_bk_snapshot_completed','CREATE INDEX idx_bk_snapshot_completed ON bk_order_snapshot(backup_completed_at,id)');
+CALL add_backup_index_if_missing('bk_order_snapshot','idx_bk_snapshot_public_code','CREATE INDEX idx_bk_snapshot_public_code ON bk_order_snapshot(public_order_code)');
+CALL add_backup_index_if_missing('bk_order_snapshot','idx_bk_snapshot_created','CREATE INDEX idx_bk_snapshot_created ON bk_order_snapshot(order_created_at,id)');
+CALL add_backup_index_if_missing('bk_order_snapshot','idx_bk_snapshot_org','CREATE INDEX idx_bk_snapshot_org ON bk_order_snapshot(org_id,order_created_at)');
+CALL add_backup_index_if_missing('bk_order_snapshot','idx_bk_snapshot_hospital','CREATE INDEX idx_bk_snapshot_hospital ON bk_order_snapshot(hospital_id,order_created_at)');
+CALL add_backup_index_if_missing('bk_order_snapshot','idx_bk_snapshot_business','CREATE INDEX idx_bk_snapshot_business ON bk_order_snapshot(business_type,phase,status)');
+CALL add_backup_index_if_missing('bk_order_snapshot','idx_bk_snapshot_patient','CREATE INDEX idx_bk_snapshot_patient ON bk_order_snapshot(patient_name)');
+CALL add_backup_index_if_missing('bk_order_snapshot','idx_bk_snapshot_doctor','CREATE INDEX idx_bk_snapshot_doctor ON bk_order_snapshot(doctor_name)');
 
 CALL add_backup_index_if_missing('bk_asset','uk_bk_asset_identity','CREATE UNIQUE INDEX uk_bk_asset_identity ON bk_asset(snapshot_id,asset_identity)');
 CALL add_backup_index_if_missing('bk_asset','idx_bk_asset_file','CREATE INDEX idx_bk_asset_file ON bk_asset(source_file_id)');

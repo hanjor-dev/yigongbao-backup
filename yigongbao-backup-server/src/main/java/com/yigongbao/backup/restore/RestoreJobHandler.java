@@ -8,6 +8,8 @@ import com.yigongbao.backup.job.JobExecutionContext;
 import com.yigongbao.backup.job.JobHandler;
 import com.yigongbao.backup.order.OrderSnapshotEntity;
 import com.yigongbao.backup.order.OrderSnapshotMapper;
+import com.yigongbao.backup.order.OrderPackageEntity;
+import com.yigongbao.backup.order.OrderPackageMapper;
 import com.yigongbao.backup.storage.api.ArtifactStore;
 import com.yigongbao.backup.storage.api.SpacePlanner.SpaceReservation;
 import com.yigongbao.backup.storage.api.SpaceReservationService;
@@ -24,6 +26,7 @@ import java.util.List;
 @RequiredArgsConstructor
 public class RestoreJobHandler implements JobHandler {
     private final OrderSnapshotMapper snapshots;
+    private final OrderPackageMapper packages;
     private final ArtifactStore store;
     private final ObjectProvider<OnlineRestoreClient> clients;
     private final ObjectMapper mapper;
@@ -45,7 +48,7 @@ public class RestoreJobHandler implements JobHandler {
         if (targets.isEmpty()) throw new IllegalArgumentException("没有匹配的订单快照");
         OnlineRestoreClient client = clients.getIfAvailable();
         if (client == null) throw new IllegalStateException("线上恢复客户端未配置");
-        LocalOrderRestoreService service = new LocalOrderRestoreService(client);
+        LocalOrderRestoreService service = new LocalOrderRestoreService(client, payload.conflictPolicy());
         long done = 0;
         for (OrderSnapshotEntity snapshot : targets) {
             context.safePoint("RESTORE_ORDER_" + snapshot.getId(), done);
@@ -70,16 +73,33 @@ public class RestoreJobHandler implements JobHandler {
     }
 
     private Path packagePath(OrderSnapshotEntity snapshot) {
-        if (snapshot == null || snapshot.getSourceOrderId() == null || snapshot.getOrderCode() == null
-                || !snapshot.getOrderCode().matches("[A-Za-z0-9_-]{1,64}")) {
+        if (snapshot == null || snapshot.getSourceOrderId() == null) {
             throw new IllegalArgumentException("恢复订单快照不完整");
         }
-        Path path = store.root().resolve("orders/" + snapshot.getOrderCode() + "/"
-                + snapshot.getOrderCode() + ".zip").normalize();
+        // 元数据模拟包中的文件是零字节占位符，绝不能上传到线上覆盖真实业务文件。
+        if ("METADATA_SIMULATION".equalsIgnoreCase(snapshot.getBackupMode())) {
+            throw new IllegalArgumentException("模拟备份包仅供流程验证和下载查看，禁止用于线上恢复");
+        }
+        OrderPackageEntity pkg = packages.selectOne(Wrappers.<OrderPackageEntity>lambdaQuery()
+                .eq(OrderPackageEntity::getSnapshotId, snapshot.getId()).last("limit 1"));
+        String storageKey = pkg == null ? null : pkg.getStorageKey();
+        // 新目录由数据库 storage_key 唯一决定；仅对历史未迁移记录保留旧路径兼容。
+        Path path = storageKey == null || storageKey.isBlank()
+                ? legacyPackagePath(snapshot) : store.root().resolve(storageKey).normalize();
         if (!path.startsWith(store.root()) || !Files.isRegularFile(path)) {
             throw new IllegalArgumentException("订单热备包不存在，请先从冷备导入");
         }
         return path;
+    }
+
+    private Path legacyPackagePath(OrderSnapshotEntity snapshot) {
+        String orderCode = snapshot.getOrderCode();
+        if (orderCode != null && orderCode.matches("[A-Za-z0-9_-]{1,64}")) {
+            Path byCode = store.root().resolve("orders").resolve(orderCode).resolve(orderCode + ".zip").normalize();
+            if (Files.isRegularFile(byCode)) return byCode;
+        }
+        String id = String.valueOf(snapshot.getSourceOrderId());
+        return store.root().resolve("orders").resolve(id).resolve(id + ".zip").normalize();
     }
 
     private static boolean isDeleted(String status) {

@@ -7,9 +7,9 @@ import com.yigongbao.backup.audit.AuditLogMapper;
 import com.yigongbao.backup.common.ApiResponse;
 import com.yigongbao.backup.config.ConfigService;
 import com.yigongbao.backup.config.PersistentConfigService;
+import com.yigongbao.backup.config.RuntimeConfigService;
 import com.yigongbao.backup.storage.api.StorageProbe;
 import lombok.RequiredArgsConstructor;
-import org.springframework.beans.factory.annotation.Value;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RequestParam;
@@ -29,14 +29,13 @@ public class AdminOverviewController {
     private final StorageProbe probe;
     private final AuditLogMapper auditLogMapper;
     private final PersistentConfigService configs;
-
-    @Value("${backup.storage.managed-roots:}")
-    private String managedRoots;
+    private final RuntimeConfigService runtimeConfig;
 
     @GetMapping("/overview")
     public ApiResponse<Overview> overview() {
         admin();
-        List<StorageMetric> storage = Arrays.stream(managedRoots == null ? new String[0] : managedRoots.split(","))
+        String managedRoots = runtimeConfig.require("storage.managed-roots");
+        List<StorageMetric> storage = Arrays.stream(managedRoots.split(","))
                 .map(String::trim).filter(item -> !item.isBlank()).map(this::metric).toList();
         return ApiResponse.ok(new Overview(LocalDateTime.now(), storage, configs.list()), requestId());
     }

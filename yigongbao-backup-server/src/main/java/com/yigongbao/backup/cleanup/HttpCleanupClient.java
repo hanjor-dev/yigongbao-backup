@@ -29,7 +29,8 @@ public final class HttpCleanupClient implements CleanupClient {
         try {
             Map<String, Object> payload = Map.of(
                     "policyVersion", request.olderThanDays(),
-                    "mode", request.dryRun() ? "DRY_RUN" : "ACTUAL");
+                    "mode", request.dryRun() ? "DRY_RUN" : "ACTUAL",
+                    "batchSize", request.batchSize());
             String body = mapper.writeValueAsString(payload);
             JsonNode data = http.data("POST", "/internal/cleanup/v1/evaluate", body,
                     stableKey("cleanup-evaluate", body));

@@ -14,10 +14,14 @@ public final class LocalDirectoryArtifactStore implements ArtifactStore {
     public Path root() { return root; }
     public Path put(String relativePath, InputStream content) throws IOException {
         Path target = safe(relativePath); Files.createDirectories(target.getParent());
-        Path temp = target.resolveSibling(target.getFileName() + ".part");
-        try (InputStream in = content) { Files.copy(in, temp, StandardCopyOption.REPLACE_EXISTING); }
-        try { return Files.move(temp, target, StandardCopyOption.ATOMIC_MOVE, StandardCopyOption.REPLACE_EXISTING); }
-        catch (AtomicMoveNotSupportedException ex) { return Files.move(temp, target, StandardCopyOption.REPLACE_EXISTING); }
+        Path temp = Files.createTempFile(target.getParent(), "." + target.getFileName() + "-", ".part");
+        try {
+            try (InputStream in = content) { Files.copy(in, temp, StandardCopyOption.REPLACE_EXISTING); }
+            try { return Files.move(temp, target, StandardCopyOption.ATOMIC_MOVE, StandardCopyOption.REPLACE_EXISTING); }
+            catch (AtomicMoveNotSupportedException ex) { return Files.move(temp, target, StandardCopyOption.REPLACE_EXISTING); }
+        } finally {
+            Files.deleteIfExists(temp);
+        }
     }
     public InputStream open(String relativePath) throws IOException { return Files.newInputStream(safe(relativePath)); }
     public Stream<Path> list(String relativeDirectory) throws IOException { return Files.list(safe(relativeDirectory)); }

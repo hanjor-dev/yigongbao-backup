@@ -1,6 +1,6 @@
 import { ref, watch, onMounted, onUnmounted } from 'vue';
-import { coldImportDiagnostic, extractJobId, isTerminalJob, jobProgress, normalizePage, storageState, taskFailureSummary } from '../taskCenter.js';
-import { api, binary, saveBlob } from '../api.js';
+import { coldImportDiagnostic, extractJobId, isTerminalJob, jobProgress, normalizePage, storageState, supplementTaskState, taskFailureSummary } from '../taskCenter.js';
+import { api, binary, saveBlob, uploadWithProgress } from '../api.js';
 import { createAuthStore } from '../stores/authStore.js';
 import { createRouteStore } from '../stores/routeStore.js';
 
@@ -30,12 +30,20 @@ export function useBackupConsole() {
     const selectedIds = ref([]);
     const assets = ref([]);
     const supplements = ref([]);
+    const supplementUpload = ref({ status: 'IDLE', percent: 0, message: '', fileName: '', jobId: null });
     const notice = ref('');
     const orderCode = ref('');
     const createdFrom = ref('');
     const createdTo = ref('');
     const snapshotStatus = ref('');
     const sourceStatus = ref('');
+    const orgName = ref('');
+    const hospitalName = ref('');
+    const patientName = ref('');
+    const doctorName = ref('');
+    const businessType = ref('');
+    const phase = ref('');
+    const status = ref('');
     const cloudRollup = ref('');
     const hotRollup = ref('');
     const coldRollup = ref('');
@@ -44,6 +52,9 @@ export function useBackupConsole() {
     const days = ref(180);
     const cleanupResult = ref(null);
     const jobs = ref([]);
+    const jobPage = ref(1);
+    const jobSize = ref(20);
+    const jobTotal = ref(0);
     const selectedJobId = ref(null);
     const selectedJob = ref(null);
     const jobOrders = ref([]);
@@ -67,14 +78,23 @@ export function useBackupConsole() {
     const coldBusy = ref(false);
     const coldDiagnostics = ref([]);
     const configs = ref([]);
+    const configCategories = ref([]);
+    const selectedConfigCategory = ref('');
     const overview = ref(null);
     const auditRows = ref([]);
     const accounts = ref([]);
+    const accountPage = ref(1);
+    const accountSize = ref(20);
+    const accountTotal = ref(0);
+    const accountPages = ref(0);
     const accountPassword = ref({});
-    const configKey = ref('backup.schedule.interval-minutes');
+    const accountSyncStatus = ref(null);
+    const accountSyncRunning = ref(false);
+    const configKey = ref('backup.schedule.interval-days');
     const configValue = ref('30');
     const configVersion = ref(0);
     let jobPollTimer = null;
+    let supplementPollTimer = null;
 
     function stopJobPolling() {
       if (jobPollTimer) {
@@ -83,25 +103,49 @@ export function useBackupConsole() {
       }
     }
 
+    function stopSupplementPolling() {
+      if (supplementPollTimer) { clearInterval(supplementPollTimer); supplementPollTimer = null; }
+    }
+
+    async function pollSupplementTask(jobId, orderKey) {
+      try {
+        const result = await api('/orders/' + encodeURIComponent(orderKey) + '/supplements/tasks/' + encodeURIComponent(jobId));
+        const job = result.data || null;
+        const state = supplementTaskState(job, 100);
+        supplementUpload.value = { ...supplementUpload.value, ...state, jobId };
+        if (isTerminalJob(job)) {
+          stopSupplementPolling();
+          if (state.status === 'SUCCEEDED') await loadSelectedOrder();
+        }
+      } catch (error) {
+        stopSupplementPolling();
+        supplementUpload.value = { ...supplementUpload.value, status: 'FAILED', message: error.message || '补传任务状态查询失败' };
+      }
+    }
+
+    function startSupplementPolling(jobId, orderKey) {
+      stopSupplementPolling();
+      pollSupplementTask(jobId, orderKey);
+      supplementPollTimer = setInterval(() => pollSupplementTask(jobId, orderKey), 2000);
+    }
+
     function startJobPolling() {
       stopJobPolling();
       jobPollTimer = setInterval(async () => {
-        if (page.value !== 'jobs' || !selectedJobId.value) return;
+        if (page.value !== 'backup' || !selectedJobId.value) return;
         await loadJobDetails(selectedJobId.value, true);
       }, 3000);
     }
 
-    async function openJob(jobId, message = '任务已提交，请在任务中心查看进度') {
+    async function openJob(jobId, message = '任务已提交') {
       if (!jobId) {
-        notice.value = '操作已提交，但服务端未返回任务编号，请刷新任务中心确认';
+        notice.value = '操作已提交，但服务端未返回任务编号';
         return;
       }
-      page.value = 'jobs';
       selectedJobId.value = String(jobId);
       notice.value = message;
-      await loadJobs();
       await loadJobDetails(selectedJobId.value);
-      startJobPolling();
+      if (page.value === 'backup') startJobPolling();
     }
 
     async function login() {
@@ -134,6 +178,13 @@ export function useBackupConsole() {
         if (createdTo.value) params.set('createdTo', createdTo.value);
         if (snapshotStatus.value) params.set('snapshotStatus', snapshotStatus.value);
         if (sourceStatus.value) params.set('sourceStatus', sourceStatus.value);
+        if (orgName.value.trim()) params.set('orgName', orgName.value.trim());
+        if (hospitalName.value.trim()) params.set('hospitalName', hospitalName.value.trim());
+        if (patientName.value.trim()) params.set('patientName', patientName.value.trim());
+        if (doctorName.value.trim()) params.set('doctorName', doctorName.value.trim());
+        if (businessType.value.trim()) params.set('businessType', businessType.value.trim());
+        if (phase.value !== '') params.set('phase', phase.value);
+        if (status.value !== '') params.set('status', status.value);
         if (cloudRollup.value) params.set('cloudRollup', cloudRollup.value);
         if (hotRollup.value) params.set('hotRollup', hotRollup.value);
         if (coldRollup.value) params.set('coldRollup', coldRollup.value);
@@ -217,14 +268,18 @@ export function useBackupConsole() {
       const form = new FormData();
       form.append('file', file);
       try {
-        const result = await api('/orders/' + encodeURIComponent(selectedOrderKey()) + '/supplements', {
-          method: 'POST',
-          body: form
-        });
+        supplementUpload.value = { status: 'UPLOADING', percent: 0, message: '正在上传文件', fileName: file.name || '', jobId: null };
+        const result = await uploadWithProgress('/orders/' + encodeURIComponent(selectedOrderKey()) + '/supplements', form,
+          (percent) => { supplementUpload.value = { ...supplementUpload.value, ...supplementTaskState(null, percent) }; });
         const jobId = extractJobId(result);
-        if (jobId) await openJob(jobId, '补传文件任务已提交');
-        else notice.value = '补传文件成功';
+        if (jobId) {
+          supplementUpload.value = { ...supplementUpload.value, status: 'PROCESSING', percent: 100, message: '文件已上传，后台正在处理', jobId };
+          startSupplementPolling(jobId, selectedOrderKey());
+        } else {
+          supplementUpload.value = { ...supplementUpload.value, status: 'FAILED', message: '服务端未返回补传任务编号' };
+        }
       } catch (error) {
+        supplementUpload.value = { ...supplementUpload.value, status: 'FAILED', message: error.message || '补传文件失败' };
         notice.value = error.message || '补传文件失败';
       }
     }
@@ -242,6 +297,9 @@ export function useBackupConsole() {
 
     async function restoreSelectedOrder() {
       if (!selectedOrder.value || !isAdmin.value) return;
+      if (selectedOrder.value.backupMode === 'METADATA_SIMULATION') {
+        notice.value = '模拟备份包仅供流程验证和下载查看，禁止线上恢复'; return;
+      }
       try {
         const result = await api('/admin/restores', {
           method: 'POST',
@@ -295,25 +353,25 @@ export function useBackupConsole() {
       } catch (error) { notice.value = error.message; }
     }
 
-    async function loadJobs() {
+    async function loadJobs(pageNumber = jobPage.value) {
       try {
-        const result = await api('/admin/jobs');
-        jobs.value = result.data || [];
+        const result = await api(`/admin/backup/jobs?current=${encodeURIComponent(pageNumber)}&size=${encodeURIComponent(jobSize.value)}`);
+        const pageData = normalizePage(result.data);
+        jobs.value = pageData.records;
+        jobPage.value = pageData.current;
+        jobSize.value = pageData.size;
+        jobTotal.value = pageData.total;
         if (selectedJobId.value) {
           const matched = jobs.value.find((job) => String(job.id) === String(selectedJobId.value));
           if (matched) {
             selectedJob.value = matched;
-          } else {
-            // 任务可能已被清理或数据库重建，避免继续轮询一个不存在的任务。
-            stopJobPolling();
-            selectedJobId.value = null;
-            selectedJob.value = null;
-            jobOrders.value = [];
-            jobFiles.value = [];
           }
         }
       } catch (error) { notice.value = error.message; }
     }
+
+    function changeJobPage(pageNumber) { jobPage.value = pageNumber; loadJobs(pageNumber); }
+    function changeJobSize(size) { jobSize.value = size; jobPage.value = 1; loadJobs(1); }
 
     async function loadJobDetails(jobId = selectedJobId.value, silent = false) {
       if (!jobId) return;
@@ -365,9 +423,13 @@ export function useBackupConsole() {
     }
 
     async function retryJob(job = selectedJob.value) {
-      if (!job || !['FAILED', 'CANCELLED', 'CANCELED'].includes(String(job.state || '').toUpperCase())) return;
+      if (!job || !['FAILED', 'PARTIAL_FAILED', 'CANCELLED', 'CANCELED'].includes(String(job.state || '').toUpperCase())) return;
       try {
-        const result = await api('/admin/jobs/' + encodeURIComponent(job.id) + '/retry', {
+        const isBackupJob = ['ORDER_BACKUP', 'MANUAL_BACKUP'].includes(String(job.jobType || '').toUpperCase());
+        const endpoint = isBackupJob
+          ? '/admin/backup/jobs/' + encodeURIComponent(job.id) + '/retry-failed'
+          : '/admin/jobs/' + encodeURIComponent(job.id) + '/retry';
+        const result = await api(endpoint, {
           method: 'POST',
           headers: { 'Idempotency-Key': `job-retry-${job.id}` },
           body: JSON.stringify({ reason: '管理员重试' })
@@ -435,7 +497,7 @@ export function useBackupConsole() {
           method: 'POST', body: JSON.stringify({ packageKeys: packages })
         });
         const jobId = extractJobId(result);
-        if (jobId) await openJob(jobId, '整批热备清理任务已提交，请在任务中心查看逐文件结果');
+        if (jobId) await openJob(jobId, '整批热备清理任务已提交，可在当前页继续操作');
         else notice.value = '整批热备清理任务已提交';
         await loadCold();
       } catch (error) {
@@ -512,8 +574,14 @@ export function useBackupConsole() {
 
     async function loadConfigs() {
       try {
-        const result = await api('/admin/configs');
-        configs.value = result.data || [];
+        const [categoryResult, configResult] = await Promise.all([
+          api('/admin/configs/categories'), api('/admin/configs')
+        ]);
+        configCategories.value = categoryResult.data || [];
+        configs.value = configResult.data || [];
+        if (!selectedConfigCategory.value || !configCategories.value.some((item) => item.code === selectedConfigCategory.value)) {
+          selectedConfigCategory.value = configCategories.value[0]?.code || '';
+        }
       } catch (error) { notice.value = error.message; }
     }
 
@@ -527,9 +595,50 @@ export function useBackupConsole() {
       catch (error) { notice.value = error.message || '审计日志加载失败'; }
     }
 
-    async function loadAccounts() {
-      try { const result = await api('/admin/accounts'); accounts.value = result.data || []; }
+    async function loadAccounts(pageNumber = accountPage.value) {
+      try {
+        const [accountsResult, syncResult] = await Promise.all([
+          api(`/admin/accounts?current=${encodeURIComponent(pageNumber)}&size=${encodeURIComponent(accountSize.value)}`),
+          api('/admin/accounts/sync/status')
+        ]);
+        const pageData = normalizePage(accountsResult.data);
+        accounts.value = pageData.records;
+        accountPage.value = pageData.current;
+        accountSize.value = pageData.size;
+        accountTotal.value = pageData.total;
+        accountPages.value = pageData.pages;
+        accountSyncStatus.value = syncResult.data || null;
+      }
       catch (error) { notice.value = error.message || '账号列表加载失败'; }
+    }
+
+    function changeAccountPage(pageNumber) {
+      if (pageNumber < 1 || (accountPages.value > 0 && pageNumber > accountPages.value)) return;
+      loadAccounts(pageNumber);
+    }
+
+    function changeAccountSize(size) {
+      accountSize.value = size;
+      accountPage.value = 1;
+      loadAccounts(1);
+    }
+
+    async function syncAccountsNow() {
+      if (accountSyncRunning.value) return;
+      accountSyncRunning.value = true;
+      try {
+        const result = await api('/admin/accounts/sync', { method: 'POST' });
+        const status = result.data?.status;
+        notice.value = status === 'SUCCEEDED'
+          ? `账号同步完成，共处理 ${result.data?.itemCount || 0} 条`
+          : (result.data?.message || `账号同步状态：${status || '未知'}`);
+        await loadAccounts();
+      } catch (error) {
+        notice.value = error.message || '账号同步失败';
+        await loadAccounts();
+      } finally {
+        accountSyncRunning.value = false;
+      }
     }
 
     async function toggleAccount(account) {
@@ -556,6 +665,7 @@ export function useBackupConsole() {
       configKey.value = entry.key;
       configValue.value = entry.value || '';
       configVersion.value = entry.version;
+      selectedConfigCategory.value = entry.categoryCode || selectedConfigCategory.value;
     }
 
     async function saveConfig() {
@@ -587,17 +697,11 @@ export function useBackupConsole() {
       window.addEventListener('backup-auth-expired', handleAuthExpired);
       window.addEventListener('hashchange', handleHashChange);
       if (!isAdmin.value && page.value !== 'orders') route.navigate('orders');
-      if (token.value) {
-        if (page.value === 'jobs') {
-          await loadJobs();
-          if (selectedJobId.value && selectedJob.value && !isTerminalJob(selectedJob.value)) startJobPolling();
-        } else {
-          await loadOrders();
-        }
-      }
+      if (token.value) await loadCurrentPage();
     });
     onUnmounted(() => {
       stopJobPolling();
+      stopSupplementPolling();
       window.removeEventListener('backup-auth-expired', handleAuthExpired);
       window.removeEventListener('hashchange', handleHashChange);
     });
@@ -613,11 +717,7 @@ export function useBackupConsole() {
         return;
       }
       route.navigate(target);
-      if (target === 'jobs') {
-        loadJobs().then(() => {
-          if (selectedJobId.value && selectedJob.value && !isTerminalJob(selectedJob.value)) startJobPolling();
-        });
-      }
+      if (target === 'backup') loadJobs();
       if (target === 'overview') { loadOverview(); loadAudit(); }
       if (target === 'audit') loadAudit();
       if (target === 'accounts') loadAccounts();
@@ -625,16 +725,33 @@ export function useBackupConsole() {
       if (target === 'configs') loadConfigs();
     }
 
+    /** 浏览器刷新或直接访问 hash 路由时，加载当前页面而不是固定加载订单。 */
+    async function loadCurrentPage() {
+      switch (page.value) {
+        case 'accounts': await loadAccounts(); break;
+        case 'backup':
+          await loadJobs();
+          if (selectedJobId.value && selectedJob.value && !isTerminalJob(selectedJob.value)) startJobPolling();
+          break;
+        case 'overview': await Promise.all([loadOverview(), loadAudit()]); break;
+        case 'audit': await loadAudit(); break;
+        case 'cold': await Promise.all([loadCold(), scanColdImports()]); break;
+        case 'configs': await loadConfigs(); break;
+        default: await loadOrders();
+      }
+    }
+
     return {
-      token, role, isAdmin, page, username, password, orders, selectedOrder, selectedIds, assets, supplements, notice,
-      orderCode, createdFrom, createdTo, snapshotStatus, sourceStatus, cloudRollup, hotRollup, coldRollup,
-      orderPage, orderSize, orderTotal, orderPages, storagePath, storage, days, cleanupResult, jobs,
+      token, role, isAdmin, page, username, password, orders, selectedOrder, selectedIds, assets, supplements, supplementUpload, notice,
+      orderCode, createdFrom, createdTo, snapshotStatus, sourceStatus, orgName, hospitalName, patientName,
+      doctorName, businessType, phase, status, cloudRollup, hotRollup, coldRollup,
+      orderPage, orderSize, orderTotal, orderPages, storagePath, storage, days, cleanupResult, jobs, jobPage, jobSize, jobTotal,
       selectedJobId, selectedJob, jobOrders, jobFiles, jobLoading, jobProgress, overview, auditRows,
-      coldBatches, coldDisks, coldDiskId, coldFrom, coldTo, diskCode, diskLabel, coldArchives, coldArchive, coldOrderIds, coldRoot, writePackages, hotCleanupPackages, selectedBatchId, selectedColdBatch, coldBusy, coldDiagnostics, configs, configKey, configValue, configVersion, accounts, accountPassword,
+      coldBatches, coldDisks, coldDiskId, coldFrom, coldTo, diskCode, diskLabel, coldArchives, coldArchive, coldOrderIds, coldRoot, writePackages, hotCleanupPackages, selectedBatchId, selectedColdBatch, coldBusy, coldDiagnostics, configs, configCategories, selectedConfigCategory, configKey, configValue, configVersion, accounts, accountPage, accountSize, accountTotal, accountPages, accountPassword, accountSyncStatus, accountSyncRunning,
       createColdBatch, registerColdDisk,
-      loadAccounts, toggleAccount, resetAccountPassword, selfPassword, changeSelfPassword,
+      loadAccounts, changeAccountPage, changeAccountSize, syncAccountsNow, toggleAccount, resetAccountPassword, selfPassword, changeSelfPassword,
       login, loadOrders, changeOrderPage, changeOrderSize, selectOrder, toggleSelected, downloadOrder, uploadSupplement, downloadSupplement, restoreSelectedOrder, restoreBatch,
-      probeStorage, loadOverview, loadAudit, dryCleanup, executeCleanup, loadJobs, loadJobDetails, selectJob, cancelJob, retryJob, loadCold, selectColdBatch, verifyColdBatch, cleanupColdBatch, writeCold, scanColdImports, restoreColdImport, loadConfigs, editConfig,
+      probeStorage, loadOverview, loadAudit, dryCleanup, executeCleanup, loadJobs, changeJobPage, changeJobSize, loadJobDetails, selectJob, cancelJob, retryJob, loadCold, selectColdBatch, verifyColdBatch, cleanupColdBatch, writeCold, scanColdImports, restoreColdImport, loadConfigs, editConfig,
       saveConfig, logout, navigate, storageState, taskFailureSummary
     };
 

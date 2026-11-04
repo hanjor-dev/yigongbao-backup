@@ -23,7 +23,7 @@ class HttpOnlineRestoreClientTest {
         });
         RemoteHttpSupport support = new RemoteHttpSupport(transport, new ObjectMapper(),
                 URI.create("http://online.example"), Duration.ofSeconds(5),
-                "HMAC", "test-key", "do-not-log", "");
+                "shared-production-secret-32-bytes!");
         HttpOnlineRestoreClient client = new HttpOnlineRestoreClient(support, new ObjectMapper());
 
         OnlineRestoreClient.Session session = client.prepare("order-1");
@@ -57,7 +57,7 @@ class HttpOnlineRestoreClientTest {
             return RecordingHttpClient.response(request, 200, "{\"data\":{}}");
         });
         RemoteHttpSupport support = new RemoteHttpSupport(transport, new ObjectMapper(),
-                URI.create("http://online.example"), Duration.ofSeconds(5), "NONE", "", "", "");
+                URI.create("http://online.example"), Duration.ofSeconds(5), "shared-production-secret-32-bytes!");
         HttpOnlineRestoreClient client = new HttpOnlineRestoreClient(support, new ObjectMapper());
         OnlineRestoreClient.Session session = client.prepare("order-unknown");
 
@@ -85,7 +85,7 @@ class HttpOnlineRestoreClientTest {
             return RecordingHttpClient.response(request, 200, "{\"data\":{}}");
         });
         RemoteHttpSupport support = new RemoteHttpSupport(transport, new ObjectMapper(),
-                URI.create("http://online.example"), Duration.ofSeconds(5), "NONE", "", "", "");
+                URI.create("http://online.example"), Duration.ofSeconds(5), "shared-production-secret-32-bytes!");
         HttpOnlineRestoreClient client = new HttpOnlineRestoreClient(support, new ObjectMapper(), store);
         OnlineRestoreClient.Session session = client.prepare("order-abort");
         client.upload(session, "a", new java.io.ByteArrayInputStream(new byte[]{1}));

@@ -14,6 +14,7 @@ import java.util.UUID;
 import java.util.zip.ZipEntry;
 import java.util.zip.ZipInputStream;
 import java.util.zip.ZipFile;
+import com.yigongbao.backup.config.RuntimeConfigService;
 
 /** 扫描管理员复制到导入区的冷备压缩包，按订单选择性恢复到热备目录。 */
 public final class ColdImportService {
@@ -23,18 +24,29 @@ public final class ColdImportService {
     private final Path importRoot;
     private final ArtifactStore hot;
     private final long maxImportBytes;
+    private final RuntimeConfigService runtimeConfig;
 
     public ColdImportService(Path importRoot, ArtifactStore hot) {
-        this(importRoot, hot, DEFAULT_MAX_IMPORT_BYTES);
+        this(importRoot, hot, DEFAULT_MAX_IMPORT_BYTES, null);
     }
 
     public ColdImportService(Path importRoot, ArtifactStore hot, long maxImportBytes) {
+        this(importRoot, hot, maxImportBytes, null);
+    }
+
+    /** 使用数据库中的冷备导入上限；导入目录本身仍属于基础设施路径。 */
+    public ColdImportService(Path importRoot, ArtifactStore hot, RuntimeConfigService runtimeConfig) {
+        this(importRoot, hot, DEFAULT_MAX_IMPORT_BYTES, runtimeConfig);
+    }
+
+    private ColdImportService(Path importRoot, ArtifactStore hot, long maxImportBytes, RuntimeConfigService runtimeConfig) {
         if (importRoot == null || hot == null || maxImportBytes <= 0) {
             throw new IllegalArgumentException("冷备导入参数非法");
         }
         this.importRoot = importRoot.toAbsolutePath().normalize();
         this.hot = hot;
         this.maxImportBytes = maxImportBytes;
+        this.runtimeConfig = runtimeConfig;
     }
 
     /** 扫描管理员放入冷备导入区的压缩包。 */
@@ -98,13 +110,13 @@ public final class ColdImportService {
                         continue;
                     }
                     Path staged = staging.resolve(Integer.toString(pending.size()) + ".part");
-                    long written = copyBounded(in, staged, maxImportBytes - totalBytes);
+                    long written = copyBounded(in, staged, maxImportBytes() - totalBytes);
                     totalBytes += written;
-                    if (totalBytes > maxImportBytes) {
+                    if (totalBytes > maxImportBytes()) {
                         throw new IOException("冷备导入解压总量超过配置限制");
                     }
                     String fileName = Path.of(name).getFileName().toString();
-                    Path target = hot.root().resolve("orders").resolve(order).resolve(fileName).normalize();
+                    Path target = hot.root().resolve(targetPath(name, order, fileName)).normalize();
                     if (!target.startsWith(hot.root())) {
                         throw new IOException("目标路径非法");
                     }
@@ -144,7 +156,7 @@ public final class ColdImportService {
                 long size = entry.getSize();
                 if (size < 0 || Long.MAX_VALUE - total < size) throw new IOException("冷备导入空间估算失败");
                 total += size;
-                if (total > maxImportBytes) throw new IOException("冷备导入解压总量超过配置限制");
+                if (total > maxImportBytes()) throw new IOException("冷备导入解压总量超过配置限制");
             }
         }
         return Math.max(1L, total);
@@ -190,13 +202,30 @@ public final class ColdImportService {
         return written;
     }
 
+    private long maxImportBytes() {
+        return runtimeConfig == null ? maxImportBytes : runtimeConfig.getLong("cold.max-import-bytes", maxImportBytes, 1L);
+    }
+
     /** 从标准化压缩路径提取订单号。 */
     private static String orderOf(String name) {
         if (!name.startsWith("orders/")) {
             return null;
         }
         String[] parts = name.split("/");
-        return parts.length >= 3 && parts[1].matches("[A-Za-z0-9_-]{1,64}") ? parts[1] : null;
+        if (parts.length >= 3 && parts[1].matches("[A-Za-z0-9_-]{1,64}") && !"original".equals(parts[1])) {
+            if ("original".equals(parts[2])) return parts[1];
+        }
+        return null;
+    }
+
+    /** 新归档条目携带原始日期目录，导入后恢复到数据库 storage_key 对应位置。 */
+    private static Path targetPath(String name, String order, String fileName) {
+        String[] parts = name.split("/");
+        if (parts.length >= 5 && "orders".equals(parts[0]) && order.equals(parts[1])
+                && "original".equals(parts[2]) && parts[3].matches("\\d{8}")) {
+            return Path.of(parts[0], parts[3], fileName).normalize();
+        }
+        return Path.of("orders", order, fileName).normalize();
     }
 
     private static void deleteTree(Path root) {

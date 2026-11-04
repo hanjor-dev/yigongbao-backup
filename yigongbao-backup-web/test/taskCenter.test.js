@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { coldBatchCapabilities, coldImportDiagnostic, extractJobId, isTerminalJob, jobProgress, normalizePage, storageState, taskFailureSummary } from '../src/taskCenter.js';
+import { coldBatchCapabilities, coldImportDiagnostic, extractJobId, isTerminalJob, jobProgress, normalizePage, storageState, supplementTaskState, taskFailureSummary } from '../src/taskCenter.js';
 import { statusTone } from '../src/components/StatusBadge.js';
 
 test('extractJobId handles command response envelope', () => {
@@ -15,13 +15,23 @@ test('jobProgress derives bounded file or order progress', () => {
   assert.equal(jobProgress({ orderCompleted: 1, orderTotal: 2 }), 50);
   assert.equal(jobProgress({ fileCompleted: 3, fileTotal: 0, orderCompleted: 0, orderTotal: 0 }), 0);
   assert.equal(jobProgress({ fileCompleted: 120, fileTotal: 100 }), 100);
+  assert.equal(jobProgress({ state: 'RUNNING', fileCompleted: 12, fileTotal: 12,
+    orderCompleted: 2, orderFailed: 0, orderTotal: 5 }), 40);
 });
 
 test('isTerminalJob recognizes terminal states', () => {
   assert.equal(isTerminalJob({ state: 'SUCCEEDED' }), true);
   assert.equal(isTerminalJob({ status: 'SUCCEEDED' }), true);
   assert.equal(isTerminalJob({ state: 'CANCELLED' }), true);
+  assert.equal(isTerminalJob({ state: 'PARTIAL_FAILED' }), true);
   assert.equal(isTerminalJob({ state: 'RUNNING' }), false);
+});
+
+test('supplementTaskState separates browser upload and background processing states', () => {
+  assert.deepEqual(supplementTaskState(null, 42), { status: 'UPLOADING', percent: 42, message: '正在上传文件' });
+  assert.deepEqual(supplementTaskState({ state: 'RUNNING', fileCompleted: 0, fileTotal: 1 }, 100), { status: 'PROCESSING', percent: 0, message: '文件已上传，后台正在处理' });
+  assert.deepEqual(supplementTaskState({ state: 'SUCCEEDED' }, 100), { status: 'SUCCEEDED', percent: 100, message: '补传完成' });
+  assert.deepEqual(supplementTaskState({ state: 'FAILED', failureEvidence: '格式不允许' }, 100), { status: 'FAILED', percent: 100, message: '格式不允许' });
 });
 
 test('normalizePage preserves server pagination metadata and safe defaults', () => {
@@ -60,5 +70,7 @@ test('statusTone maps common operational states to stable visual tones', () => {
   assert.equal(statusTone('COMPLETED'), 'success');
   assert.equal(statusTone('RUNNING'), 'progress');
   assert.equal(statusTone('FAILED'), 'danger');
+  assert.equal(statusTone('PARTIAL_FAILED'), 'danger');
+  assert.equal(statusTone('RETRYING'), 'progress');
   assert.equal(statusTone('UNKNOWN'), 'neutral');
 });

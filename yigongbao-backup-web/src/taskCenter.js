@@ -5,17 +5,40 @@ export function extractJobId(result) {
 
 export function jobProgress(job) {
   if (!job) return 0;
+  const orderCompleted = Number(job.orderCompleted ?? 0);
+  const orderFailed = Number(job.orderFailed ?? 0);
+  const orderTotal = Number(job.orderTotal ?? 0);
+  if (orderTotal > 0) return Math.min(100, Math.max(0, Math.round(((orderCompleted + orderFailed) / orderTotal) * 100)));
   const completed = Number(job.fileCompleted ?? job.completed ?? 0);
   const total = Number(job.fileTotal ?? job.total ?? 0);
   if (total > 0) return Math.min(100, Math.max(0, Math.round((completed / total) * 100)));
-  const orderCompleted = Number(job.orderCompleted ?? 0);
-  const orderTotal = Number(job.orderTotal ?? 0);
-  return orderTotal > 0 ? Math.min(100, Math.max(0, Math.round((orderCompleted / orderTotal) * 100))) : 0;
+  return 0;
+}
+
+/** 将数据库中的完整订单业务 JSON 转成可安全迭代的键值对象。 */
+export function orderBusinessFields(value) {
+  if (!value) return {};
+  if (typeof value === 'object' && !Array.isArray(value)) return value;
+  try { const parsed = JSON.parse(value); return parsed && typeof parsed === 'object' && !Array.isArray(parsed) ? parsed : {}; }
+  catch (_) { return {}; }
 }
 
 export function isTerminalJob(job) {
-  return ['SUCCEEDED', 'FAILED', 'CANCELLED', 'CANCELED'].includes(String(job?.state || job?.status || '').toUpperCase());
+  return ['SUCCEEDED', 'FAILED', 'PARTIAL_FAILED', 'CANCELLED', 'CANCELED'].includes(String(job?.state || job?.status || '').toUpperCase());
 }
+
+/** 将浏览器上传阶段和服务器后台任务阶段统一为可展示状态。 */
+export function supplementTaskState(job, uploadPercent = 100) {
+  const percent = Math.min(100, Math.max(0, Number(uploadPercent) || 0));
+  if (!job || percent < 100) return { status: 'UPLOADING', percent, message: '正在上传文件' };
+  const state = String(job.state || job.status || '').toUpperCase();
+  if (state === 'SUCCEEDED') return { status: 'SUCCEEDED', percent: 100, message: '补传完成' };
+  if (['FAILED', 'PARTIAL_FAILED', 'CANCELLED', 'CANCELED'].includes(state)) {
+    return { status: state, percent: 100, message: taskFailureSummary(job) || '补传任务失败' };
+  }
+  return { status: 'PROCESSING', percent: jobProgress(job), message: '文件已上传，后台正在处理' };
+}
+
 
 /** 将后端分页响应归一化，避免前端因空响应或字段缺失而丢失分页状态。 */
 export function normalizePage(value) {

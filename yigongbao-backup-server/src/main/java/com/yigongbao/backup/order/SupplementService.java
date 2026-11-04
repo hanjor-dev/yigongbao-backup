@@ -13,17 +13,20 @@ import java.util.Comparator;
 import java.security.DigestInputStream;
 import java.security.MessageDigest;
 import java.time.LocalDateTime;
+import com.yigongbao.backup.config.RuntimeConfigService;
 
 /** 订单补传只允许配置的工程文件类型和大小，第一期不提供删除。 */
 public final class SupplementService {
-    private final ArtifactStore store; private final Set<String> extensions; private final long maxBytes; private final BkSupplementFileMapper mapper;
+    private final ArtifactStore store; private final Set<String> extensions; private final long maxBytes; private final BkSupplementFileMapper mapper; private final RuntimeConfigService runtimeConfig;
     public SupplementService(ArtifactStore store, Set<String> extensions, long maxBytes) { this(store, extensions, maxBytes, null); }
-    public SupplementService(ArtifactStore store, Set<String> extensions, long maxBytes, BkSupplementFileMapper mapper) { this.store=store; this.extensions=extensions; this.maxBytes=maxBytes; this.mapper=mapper; }
+    public SupplementService(ArtifactStore store, Set<String> extensions, long maxBytes, BkSupplementFileMapper mapper) { this(store, extensions, maxBytes, mapper, null); }
+    public SupplementService(ArtifactStore store, BkSupplementFileMapper mapper, RuntimeConfigService runtimeConfig) { this(store, Set.of("zip", "step", "stl", "dcm"), 1073741824L, mapper, runtimeConfig); }
+    public SupplementService(ArtifactStore store, Set<String> extensions, long maxBytes, BkSupplementFileMapper mapper, RuntimeConfigService runtimeConfig) { this.store=store; this.extensions=extensions; this.maxBytes=maxBytes; this.mapper=mapper; this.runtimeConfig=runtimeConfig; }
     public String upload(String orderId, String fileName, InputStream content, long size) throws IOException {
         if (orderId == null || !orderId.matches("[A-Za-z0-9_-]{1,64}")) throw new IllegalArgumentException("订单号非法");
-        if (size < 0 || size > maxBytes) throw new IllegalArgumentException("补传文件超过大小上限");
+        if (size < 0 || size > maxBytes()) throw new IllegalArgumentException("补传文件超过大小上限");
         String safe = safeFileName(fileName); int dot=safe.lastIndexOf('.'); String ext=dot<0?"":safe.substring(dot+1).toLowerCase();
-        if (!extensions.contains(ext)) throw new IllegalArgumentException("补传文件格式不允许");
+        if (!allowedExtensions().contains(ext)) throw new IllegalArgumentException("补传文件格式不允许");
         String id=UUID.randomUUID().toString();
         String key="orders/"+orderId+"/supplements/"+id+"-"+safe;
         store.put(key, bounded(content));
@@ -38,8 +41,8 @@ public final class SupplementService {
         String safe = safeFileName(fileName);
         int dot = safe.lastIndexOf('.');
         String ext = dot < 0 ? "" : safe.substring(dot + 1).toLowerCase();
-        if (!extensions.contains(ext)) throw new IllegalArgumentException("补传文件格式不允许");
-        if (size < 0 || size > maxBytes) throw new IllegalArgumentException("补传文件超过大小上限");
+        if (!allowedExtensions().contains(ext)) throw new IllegalArgumentException("补传文件格式不允许");
+        if (size < 0 || size > maxBytes()) throw new IllegalArgumentException("补传文件超过大小上限");
         String id = UUID.randomUUID().toString();
         String key = "orders/" + safeOrder(orderId) + "/supplements/" + id + "-" + safe;
         String digest;
@@ -131,14 +134,23 @@ public final class SupplementService {
         return store.open(entity.getStorageKey());
     }
 
+    private Set<String> allowedExtensions() {
+        return runtimeConfig == null ? extensions : runtimeConfig.getCsvSet("supplement.allowed-extensions", String.join(",", extensions));
+    }
+
+    private long maxBytes() {
+        return runtimeConfig == null ? maxBytes : runtimeConfig.getLong("supplement.max-file-size-bytes", maxBytes, 1L);
+    }
+
     private InputStream bounded(InputStream source) {
+        long limit = maxBytes();
         return new FilterInputStream(source) {
             private long count;
 
             @Override
             public int read() throws IOException {
                 int value = super.read();
-                if (value >= 0 && ++count > maxBytes) {
+                if (value >= 0 && ++count > limit) {
                     throw new IOException("补传文件实际大小超过上限");
                 }
                 return value;
@@ -147,7 +159,7 @@ public final class SupplementService {
             @Override
             public int read(byte[] buffer, int offset, int length) throws IOException {
                 int read = super.read(buffer, offset, length);
-                if (read > 0 && (count += read) > maxBytes) {
+                if (read > 0 && (count += read) > limit) {
                     throw new IOException("补传文件实际大小超过上限");
                 }
                 return read;

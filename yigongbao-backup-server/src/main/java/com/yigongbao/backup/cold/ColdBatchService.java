@@ -17,7 +17,7 @@ public final class ColdBatchService {
                 if(!source.startsWith(hot.root())||!Files.isRegularFile(source)) throw new IOException("热备订单包不存在");
                 String order = orderOf(relative);
                 if(order == null) throw new IOException("订单包路径必须位于 orders/{orderId} 下");
-                String entryName = "orders/" + order + "/original/" + source.getFileName();
+                String entryName = entryName(relative, order, source.getFileName().toString());
                 out.putNextEntry(new ZipEntry(entryName)); Files.copy(source,out); out.closeEntry();
                 manifestEntries.add(entryName);
             }
@@ -52,7 +52,27 @@ public final class ColdBatchService {
     private static String orderOf(String relative) {
         String n = relative.replace('\\','/');
         String[] p = n.split("/");
-        return p.length >= 3 && "orders".equals(p[0]) && p[1].matches("[A-Za-z0-9_-]{1,64}") ? p[1] : null;
+        if (p.length >= 3 && "orders".equals(p[0]) && p[1].matches("[A-Za-z0-9_-]{1,64}")
+                && !p[1].matches("\\d{8}")) return orderIdFromFile(p[p.length - 1]);
+        if (p.length >= 3 && "orders".equals(p[0]) && p[1].matches("\\d{8}")) return orderIdFromFile(p[p.length - 1]);
+        return null;
+    }
+
+    private static String orderIdFromFile(String fileName) {
+        if (fileName == null || !fileName.endsWith(".zip")) return null;
+        String stem = fileName.substring(0, fileName.length() - 4);
+        int separator = stem.lastIndexOf('-');
+        String id = separator < 0 ? stem : stem.substring(separator + 1);
+        return id.matches("[A-Za-z0-9_-]{1,64}") ? id : null;
+    }
+
+    private static String entryName(String relative, String order, String fileName) {
+        String n = relative.replace('\\', '/');
+        String[] parts = n.split("/");
+        if (parts.length >= 3 && parts[1].matches("\\d{8}")) {
+            return "orders/" + order + "/original/" + parts[1] + "/" + fileName;
+        }
+        return "orders/" + order + "/original/" + fileName;
     }
 
     private static String escape(String value) { return value.replace("\\", "\\\\").replace("\"", "\\\""); }

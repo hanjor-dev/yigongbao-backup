@@ -28,17 +28,27 @@ public final class LocalOrderRestoreService {
     private final long maxUncompressedBytes;
     private final int maxEntries;
     private final ObjectMapper mapper;
+    private final String conflictPolicy;
 
     public LocalOrderRestoreService(OnlineRestoreClient client) {
-        this(client, DEFAULT_MAX_UNCOMPRESSED_BYTES, DEFAULT_MAX_ENTRIES, new ObjectMapper());
+        this(client, DEFAULT_MAX_UNCOMPRESSED_BYTES, DEFAULT_MAX_ENTRIES, new ObjectMapper(), "KEEP_ONLINE");
+    }
+
+    public LocalOrderRestoreService(OnlineRestoreClient client, String conflictPolicy) {
+        this(client, DEFAULT_MAX_UNCOMPRESSED_BYTES, DEFAULT_MAX_ENTRIES, new ObjectMapper(), conflictPolicy);
     }
 
     public LocalOrderRestoreService(OnlineRestoreClient client, long maxUncompressedBytes, int maxEntries) {
-        this(client, maxUncompressedBytes, maxEntries, new ObjectMapper());
+        this(client, maxUncompressedBytes, maxEntries, new ObjectMapper(), "KEEP_ONLINE");
     }
 
     public LocalOrderRestoreService(OnlineRestoreClient client, long maxUncompressedBytes, int maxEntries,
                                     ObjectMapper mapper) {
+        this(client, maxUncompressedBytes, maxEntries, mapper, "KEEP_ONLINE");
+    }
+
+    public LocalOrderRestoreService(OnlineRestoreClient client, long maxUncompressedBytes, int maxEntries,
+                                    ObjectMapper mapper, String conflictPolicy) {
         if (client == null || maxUncompressedBytes <= 0 || maxEntries <= 0 || mapper == null) {
             throw new IllegalArgumentException("恢复服务参数非法");
         }
@@ -46,6 +56,12 @@ public final class LocalOrderRestoreService {
         this.maxUncompressedBytes = maxUncompressedBytes;
         this.maxEntries = maxEntries;
         this.mapper = mapper;
+        this.conflictPolicy = switch (conflictPolicy == null ? "KEEP_ONLINE" : conflictPolicy) {
+            case "KEEP_ONLINE" -> "REJECT";
+            case "OVERWRITE_ONLINE" -> "OVERWRITE";
+            case "KEEP_NEWEST" -> "KEEP_NEWEST";
+            default -> throw new IllegalArgumentException("恢复冲突策略非法");
+        };
     }
 
     /**
@@ -149,7 +165,7 @@ public final class LocalOrderRestoreService {
             }
             String requestDigest = sha256((orderId + "\n" + manifestSha + "\n"
                     + assetSetDigest + "\n" + relationSetHash).getBytes(java.nio.charset.StandardCharsets.UTF_8));
-            return new OnlineRestoreClient.RestoreRequest(revision, manifestSha, "REJECT",
+            return new OnlineRestoreClient.RestoreRequest(revision, manifestSha, conflictPolicy,
                     requestDigest, assetSetDigest, relationSetHash);
         } catch (IOException ex) {
             throw new IOException("读取恢复包 manifest.json 失败", ex);

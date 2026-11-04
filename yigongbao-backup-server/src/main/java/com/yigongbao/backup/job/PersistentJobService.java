@@ -1,12 +1,16 @@
 package com.yigongbao.backup.job;
 
+import com.fasterxml.jackson.databind.JsonNode;
+import com.fasterxml.jackson.databind.ObjectMapper;
 import com.baomidou.mybatisplus.core.toolkit.Wrappers;
 import com.baomidou.mybatisplus.core.conditions.update.UpdateWrapper;
+import com.baomidou.mybatisplus.extension.plugins.pagination.Page;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
 import java.time.Duration;
+import java.time.Instant;
 import java.time.LocalDateTime;
 import java.time.ZoneOffset;
 import java.util.List;
@@ -15,6 +19,7 @@ import java.util.UUID;
 /** 任务中心数据库实现；领取使用版本、租约和 fencing token 条件更新。 */
 @Service
 public class PersistentJobService {
+    private static final ObjectMapper JSON = new ObjectMapper();
     private final JobMapper mapper;
     private final JobOrderMapper orderMapper;
     private final JobFileMapper fileMapper;
@@ -86,10 +91,32 @@ public class PersistentJobService {
                 .stream().map(entity -> view(entity, orderTotal(entity), fileTotal(entity))).toList();
     }
 
+    /** 只返回订单备份任务，供“订单备份”页使用。 */
+    public List<Job> listBackupJobs() {
+        return mapper.selectList(Wrappers.<JobEntity>lambdaQuery()
+                        .in(JobEntity::getJobType, "ORDER_BACKUP", "MANUAL_BACKUP")
+                        .orderByDesc(JobEntity::getId))
+                .stream().map(entity -> viewWithEvidence(entity)).toList();
+    }
+
+    /** 服务端分页读取备份任务，避免任务历史增长后一次加载全部明细。 */
+    public JobPage listBackupJobs(long current, long size) {
+        if (current < 1 || size < 1 || size > 100) throw new IllegalArgumentException("任务分页参数非法");
+        Page<JobEntity> page = mapper.selectPage(Page.of(current, size), Wrappers.<JobEntity>lambdaQuery()
+                .in(JobEntity::getJobType, "ORDER_BACKUP", "MANUAL_BACKUP").orderByDesc(JobEntity::getId));
+        return new JobPage(page.getRecords().stream().map(this::viewWithEvidence).toList(),
+                page.getTotal(), page.getCurrent(), page.getSize(), page.getPages());
+    }
+
+    public record JobPage(List<Job> records, long total, long current, long size, long pages) { }
+
     public Job get(long id) {
         JobEntity entity = required(id);
-        return view(entity, orderTotal(entity), fileTotal(entity));
+        return viewWithEvidence(entity);
     }
+
+    /** 受控内部查询任务参数，仅供需要校验任务归属的业务接口使用。 */
+    public String configJson(long id) { return required(id).getConfigSnapshotJson(); }
 
     public Job claim(long id, String owner, Duration lease) {
         if (owner == null || owner.isBlank() || lease == null || lease.isNegative() || lease.isZero()) {
@@ -98,13 +125,13 @@ public class PersistentJobService {
         JobEntity entity = required(id);
         LocalDateTime now = LocalDateTime.now();
         boolean available = JobState.CREATED.name().equals(entity.getStatus())
-                || (JobState.RUNNING.name().equals(entity.getStatus()) && entity.getLeaseUntil() != null
+                || ((JobState.RUNNING.name().equals(entity.getStatus()) || JobState.RETRYING_FAILED_ORDERS.name().equals(entity.getStatus())) && entity.getLeaseUntil() != null
                 && !entity.getLeaseUntil().isAfter(now));
         if (!available) throw new IllegalStateException("任务不可领取");
         UpdateWrapper<JobEntity> update = new UpdateWrapper<>();
         update.eq("id", id).eq("version", entity.getVersion())
                 .and(w -> w.eq("status", JobState.CREATED.name())
-                        .or().eq("status", JobState.RUNNING.name()).le("lease_until", now))
+                        .or().in("status", JobState.RUNNING.name(), JobState.RETRYING_FAILED_ORDERS.name()).le("lease_until", now))
                 .set("status", JobState.RUNNING.name())
                 .set("lease_owner", owner)
                 .set("lease_until", now.plusSeconds(lease.toSeconds()))
@@ -158,9 +185,36 @@ public class PersistentJobService {
         return entity;
     }
 
+    private Job viewWithEvidence(JobEntity entity) {
+        List<JobOrderEntity> orderRows = orderMapper == null ? List.of() : listOrders(entity.getId());
+        List<JobFileEntity> fileRows = fileMapper == null ? List.of() : listFiles(entity.getId());
+        Job job = view(entity,
+                Math.max(orderTotal(entity), orderRows.size()),
+                Math.max(fileTotal(entity), fileRows.size()));
+        job.setOrderCompleted((int) orderRows.stream().filter(row -> "SUCCEEDED".equals(row.getStatus()) || "SIMULATED".equals(row.getStatus())).count());
+        job.setOrderFailed((int) orderRows.stream().filter(row -> "FAILED".equals(row.getStatus()) || "SIMULATION_FAILED".equals(row.getStatus())).count());
+        job.setFileCompleted((int) fileRows.stream().filter(row -> "SUCCEEDED".equals(row.getStatus())).count());
+        job.setFileFailed((int) fileRows.stream().filter(row -> "FAILED".equals(row.getStatus())).count());
+        job.setBytesTotal(fileRows.stream().mapToLong(row -> row.getBytesTotal() == null ? 0L : row.getBytesTotal()).sum());
+        job.setBytesCompleted(fileRows.stream().mapToLong(row -> row.getBytesDone() == null ? 0L : row.getBytesDone()).sum());
+        job.setExecutionMode(configText(entity, "executionMode", "REAL"));
+        // Manifest 成功与本地模拟制品成功是两个阶段：已有预计文件数说明 Manifest 已成功返回。
+        job.setManifestSucceeded((int) orderRows.stream().filter(row -> row.getExpectedFileCount() != null).count());
+        job.setManifestFailed((int) orderRows.stream().filter(row -> "SIMULATION_FAILED".equals(row.getStatus())
+                && row.getExpectedFileCount() == null).count());
+        job.setExpectedFileTotal(orderRows.stream().mapToInt(row -> row.getExpectedFileCount() == null ? 0 : row.getExpectedFileCount()).sum());
+        job.setExpectedBytes(orderRows.stream().mapToLong(row -> row.getExpectedBytes() == null ? 0L : row.getExpectedBytes()).sum());
+        return job;
+    }
+
     private static Job view(JobEntity entity, int orderTotal, int fileTotal) {
         Job job = new Job(entity.getId());
         job.setJobType(entity.getJobType());
+        job.setJobNo(entity.getJobNo());
+        job.setRequestedBy(entity.getRequestedBy());
+        job.setRequestedAt(toInstant(entity.getRequestedAt()));
+        job.setStartedAt(toInstant(entity.getStartedAt()));
+        job.setFinishedAt(toInstant(entity.getFinishedAt()));
         job.setState(JobState.valueOf(entity.getStatus()));
         job.setFencingToken(entity.getFencingToken() == null ? 0 : entity.getFencingToken());
         job.setLeaseOwner(entity.getLeaseOwner());
@@ -171,11 +225,31 @@ public class PersistentJobService {
         job.setFailureCode(entity.getFailureCode());
         job.setFailureEvidence(entity.getFailureMessage());
         job.setResultJson(entity.getResultJson());
+        job.setCancelRequested(Boolean.TRUE.equals(entity.getCancelRequested()));
         return job;
     }
 
-    private static int orderTotal(JobEntity entity) { return parseTotal(entity, "orderTotal"); }
+    private static Instant toInstant(LocalDateTime value) {
+        return value == null ? null : value.atZone(java.time.ZoneId.systemDefault()).toInstant();
+    }
+
+    private static int orderTotal(JobEntity entity) {
+        int explicit = parseTotal(entity, "orderTotal");
+        if (explicit > 0) return explicit;
+        try {
+            JsonNode ids = JSON.readTree(entity.getConfigSnapshotJson()).path("sourceOrderIds");
+            return ids.isArray() ? ids.size() : 0;
+        } catch (Exception ignored) {
+            return 0;
+        }
+    }
     private static int fileTotal(JobEntity entity) { return parseTotal(entity, "fileTotal"); }
+    private static String configText(JobEntity entity, String key, String fallback) {
+        try {
+            JsonNode value = JSON.readTree(entity.getConfigSnapshotJson()).path(key);
+            return value.isTextual() && !value.asText().isBlank() ? value.asText() : fallback;
+        } catch (Exception ignored) { return fallback; }
+    }
     private static int parseTotal(JobEntity entity, String key) {
         String json = entity.getConfigSnapshotJson();
         if (json == null) return 0;

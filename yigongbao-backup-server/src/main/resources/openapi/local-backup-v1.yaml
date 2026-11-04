@@ -6,7 +6,7 @@ info:
     本地备份管理端接口。所有 ID 和字节数均为十进制字符串，时间使用 RFC 3339；
     普通用户仅可访问认证、订单、下载和补传接口，admin 路径要求 ADMIN 角色。
 servers:
-  - url: https://backup.local
+  - url: http://backup.local
 security:
   - BearerAuth: []
 paths:
@@ -50,9 +50,8 @@ paths:
     get:
       operationId: listAccounts
       parameters:
-        - {$ref: '#/components/parameters/Cursor'}
-        - {$ref: '#/components/parameters/PageSize'}
-        - {$ref: '#/components/parameters/HighWatermark'}
+        - {name: current, in: query, schema: {type: integer, minimum: 1, default: 1}}
+        - {name: size, in: query, schema: {type: integer, minimum: 1, maximum: 100, default: 20}}
       responses:
         '200': {$ref: '#/components/responses/PageSucceeded'}
         '403': {$ref: '#/components/responses/Forbidden'}
@@ -92,14 +91,18 @@ paths:
         '200': {$ref: '#/components/responses/CommandSucceeded'}
         '403': {$ref: '#/components/responses/Forbidden'}
         '409': {$ref: '#/components/responses/Conflict'}
-  /api/v1/admin/accounts/sync-jobs:
-    post:
-      operationId: createAccountSyncJob
-      parameters: [{$ref: '#/components/parameters/IdempotencyKey'}]
+  /api/v1/admin/accounts/sync/status:
+    get:
+      operationId: getAccountSyncStatus
       responses:
         '200': {$ref: '#/components/responses/CommandSucceeded'}
         '403': {$ref: '#/components/responses/Forbidden'}
-        '409': {$ref: '#/components/responses/Conflict'}
+  /api/v1/admin/accounts/sync:
+    post:
+      operationId: synchronizeAccountsNow
+      responses:
+        '200': {$ref: '#/components/responses/CommandSucceeded'}
+        '403': {$ref: '#/components/responses/Forbidden'}
   /api/v1/orders:
     get:
       operationId: listOrders
@@ -111,6 +114,14 @@ paths:
         - {name: createdFrom, in: query, schema: {$ref: '#/components/schemas/Rfc3339Time'}}
         - {name: createdTo, in: query, schema: {$ref: '#/components/schemas/Rfc3339Time'}}
         - {name: snapshotStatus, in: query, schema: {type: string}}
+        - {name: sourceStatus, in: query, schema: {type: string}}
+        - {name: orgName, in: query, schema: {type: string, maxLength: 128}}
+        - {name: hospitalName, in: query, schema: {type: string, maxLength: 128}}
+        - {name: patientName, in: query, schema: {type: string, maxLength: 128}}
+        - {name: doctorName, in: query, schema: {type: string, maxLength: 128}}
+        - {name: businessType, in: query, schema: {type: string, maxLength: 32}}
+        - {name: phase, in: query, schema: {type: integer}}
+        - {name: status, in: query, schema: {type: integer}}
       responses:
         '200':
           description: 订单游标页
@@ -189,6 +200,19 @@ paths:
             application/octet-stream:
               schema: {type: string, format: binary}
         '404': {$ref: '#/components/responses/NotFound'}
+  /api/v1/orders/{id}/supplements/tasks/{jobId}:
+    get:
+      operationId: getSupplementUploadTask
+      parameters:
+        - {$ref: '#/components/parameters/Id'}
+        - name: jobId
+          in: path
+          required: true
+          schema: {type: integer, format: int64}
+      responses:
+        '200': {$ref: '#/components/responses/CommandSucceeded'}
+        '404': {$ref: '#/components/responses/NotFound'}
+        '403': {$ref: '#/components/responses/Forbidden'}
   /api/v1/admin/jobs:
     get:
       operationId: listJobs
@@ -199,6 +223,22 @@ paths:
       responses:
         '200': {$ref: '#/components/responses/PageSucceeded'}
         '403': {$ref: '#/components/responses/Forbidden'}
+  /api/v1/admin/backup/jobs:
+    get:
+      operationId: listBackupJobs
+      description: 管理员查询自动订单备份批次及核心进度。
+      responses:
+        '200': {$ref: '#/components/responses/PageSucceeded'}
+        '403': {$ref: '#/components/responses/Forbidden'}
+  /api/v1/admin/backup/jobs/{id}/retry-failed:
+    post:
+      operationId: retryFailedBackupOrders
+      description: 只将指定备份任务中失败的订单创建为新的补偿任务。
+      parameters: [{$ref: '#/components/parameters/Id'}]
+      responses:
+        '200': {$ref: '#/components/responses/CommandSucceeded'}
+        '403': {$ref: '#/components/responses/Forbidden'}
+        '409': {$ref: '#/components/responses/Conflict'}
   /api/v1/admin/jobs/{id}:
     get:
       operationId: getJob
@@ -647,9 +687,21 @@ components:
         id: {$ref: '#/components/schemas/DecimalId'}
         sourceOrderId: {$ref: '#/components/schemas/DecimalId'}
         orderCode: {type: string}
+        publicOrderCode: {type: string, nullable: true}
         orderCreatedAt: {$ref: '#/components/schemas/Rfc3339Time'}
+        orgName: {type: string, nullable: true}
+        hospitalName: {type: string, nullable: true}
+        patientName: {type: string, nullable: true}
+        doctorName: {type: string, nullable: true}
+        businessType: {type: string, nullable: true}
+        businessTypeName: {type: string, nullable: true}
+        phase: {type: integer, nullable: true}
+        phaseName: {type: string, nullable: true}
+        status: {type: integer, nullable: true}
+        statusName: {type: string, nullable: true}
         backupCompletedAt: {$ref: '#/components/schemas/Rfc3339Time'}
-        snapshotStatus: {type: string, enum: [AVAILABLE, RECEIPT_SUSPENDED, CORRUPT]}
+        snapshotStatus: {type: string, enum: [AVAILABLE, SIMULATED, RECEIPT_SUSPENDED, CORRUPT]}
+        backupMode: {type: string, enum: [REAL, METADATA_SIMULATION]}
         cloudRollup: {type: string}
         hotRollup: {type: string}
         coldRollup: {type: string}

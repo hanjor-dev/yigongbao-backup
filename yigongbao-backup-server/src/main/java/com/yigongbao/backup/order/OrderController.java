@@ -5,9 +5,9 @@ import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
 import com.baomidou.mybatisplus.extension.plugins.pagination.Page;
 import com.yigongbao.backup.common.ApiResponse;
 import com.yigongbao.backup.storage.api.ArtifactStore;
-import lombok.RequiredArgsConstructor;
 import org.springframework.core.io.InputStreamResource;
 import org.springframework.http.HttpHeaders;
+import org.springframework.http.ContentDisposition;
 import org.springframework.http.MediaType;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.GetMapping;
@@ -21,6 +21,7 @@ import java.io.IOException;
 import java.nio.file.Files;
 import java.nio.file.NoSuchFileException;
 import java.nio.file.Path;
+import java.nio.charset.StandardCharsets;
 import java.time.LocalDateTime;
 import java.time.OffsetDateTime;
 import java.util.List;
@@ -29,11 +30,20 @@ import java.util.UUID;
 /** 普通用户订单查询、资产查看和订单包下载接口。 */
 @RestController
 @RequestMapping("/api/v1/orders")
-@RequiredArgsConstructor
 public class OrderController {
     private final OrderSnapshotMapper snapshots;
     private final AssetMapper assets;
+    private final OrderPackageMapper packages;
     private final ArtifactStore store;
+
+    /** 显式声明唯一注入构造器，避免多构造器导致 Spring 回退查找无参构造器。 */
+    public OrderController(OrderSnapshotMapper snapshots, AssetMapper assets,
+                           OrderPackageMapper packages, ArtifactStore store) {
+        this.snapshots = snapshots;
+        this.assets = assets;
+        this.packages = packages;
+        this.store = store;
+    }
 
     private static String rid() {
         return UUID.randomUUID().toString();
@@ -51,7 +61,14 @@ public class OrderController {
             @RequestParam(name = "sourceStatus", required = false) String sourceStatus,
             @RequestParam(name = "cloudRollup", required = false) String cloudRollup,
             @RequestParam(name = "hotRollup", required = false) String hotRollup,
-            @RequestParam(name = "coldRollup", required = false) String coldRollup) {
+            @RequestParam(name = "coldRollup", required = false) String coldRollup,
+            @RequestParam(name = "orgName", required = false) String orgName,
+            @RequestParam(name = "hospitalName", required = false) String hospitalName,
+            @RequestParam(name = "patientName", required = false) String patientName,
+            @RequestParam(name = "doctorName", required = false) String doctorName,
+            @RequestParam(name = "businessType", required = false) String businessType,
+            @RequestParam(name = "phase", required = false) Integer phase,
+            @RequestParam(name = "status", required = false) Integer status) {
         StpUtil.checkLogin();
         if (current < 1 || size < 1) {
             throw new IllegalArgumentException("分页参数必须大于零");
@@ -61,8 +78,20 @@ public class OrderController {
         }
         LambdaQueryWrapper<OrderSnapshotEntity> query = new LambdaQueryWrapper<>();
         if (orderCode != null && !orderCode.isBlank()) {
-            query.like(OrderSnapshotEntity::getOrderCode, orderCode.trim());
+            String keyword = orderCode.trim();
+            query.and(value -> value.like(OrderSnapshotEntity::getOrderCode, keyword)
+                    .or().like(OrderSnapshotEntity::getPublicOrderCode, keyword));
         }
+        applyLike(query, orgName, "机构名称", OrderSnapshotEntity::getOrgName);
+        applyLike(query, hospitalName, "医院名称", OrderSnapshotEntity::getHospitalName);
+        applyLike(query, patientName, "患者姓名", OrderSnapshotEntity::getPatientName);
+        applyLike(query, doctorName, "医生姓名", OrderSnapshotEntity::getDoctorName);
+        if (businessType != null && !businessType.isBlank()) {
+            requireBusinessType(businessType);
+            query.eq(OrderSnapshotEntity::getBusinessType, businessType.trim());
+        }
+        query.eq(phase != null, OrderSnapshotEntity::getPhase, phase)
+                .eq(status != null, OrderSnapshotEntity::getStatus, status);
         LocalDateTime from = parseTime(createdFrom, "createdFrom");
         LocalDateTime to = parseTime(createdTo, "createdTo");
         if (from != null && to != null && from.isAfter(to)) {
@@ -132,12 +161,16 @@ public class OrderController {
     public ResponseEntity<?> download(@PathVariable("id") long id) throws IOException {
         StpUtil.checkLogin();
         OrderSnapshotEntity snapshot = snapshots.selectById(id);
-        if (snapshot == null || snapshot.getOrderCode() == null
-                || !snapshot.getOrderCode().matches("[A-Za-z0-9_-]{1,64}")) {
+        if (snapshot == null) {
             return ResponseEntity.notFound().build();
         }
-        String code = snapshot.getOrderCode();
-        String key = "orders/" + code + "/" + code + ".zip";
+        OrderPackageEntity orderPackage = packages.selectOne(
+                com.baomidou.mybatisplus.core.toolkit.Wrappers.<OrderPackageEntity>lambdaQuery()
+                        .eq(OrderPackageEntity::getSnapshotId, id)
+                        .eq(OrderPackageEntity::getStatus, "AVAILABLE").last("limit 1"));
+        if (orderPackage == null || orderPackage.getStorageKey() == null) return ResponseEntity.notFound().build();
+        String code = snapshot.getOrderCode() == null ? String.valueOf(snapshot.getSourceOrderId()) : snapshot.getOrderCode();
+        String key = orderPackage.getStorageKey();
         Path packagePath = store.root().resolve(key).normalize();
         if (!packagePath.startsWith(store.root()) || !Files.isRegularFile(packagePath)) {
             return ResponseEntity.notFound().build();
@@ -149,7 +182,7 @@ public class OrderController {
                     .contentType(MediaType.APPLICATION_OCTET_STREAM)
                     .contentLength(size)
                     .header(HttpHeaders.CONTENT_DISPOSITION,
-                            "attachment; filename=\"" + code + ".zip\"")
+                            ContentDisposition.attachment().filename(downloadFileName(code), StandardCharsets.UTF_8).build().toString())
                     .body(body);
         } catch (NoSuchFileException | FileNotFoundException exception) {
             return ResponseEntity.notFound().build();
@@ -171,8 +204,15 @@ public class OrderController {
         }
     }
 
+    /** 将订单号限制为安全的下载文件名，避免响应头注入和非法路径字符。 */
+    private static String downloadFileName(String code) {
+        String safe = code == null ? "order" : code.replaceAll("[^A-Za-z0-9_.-]", "_");
+        if (safe.isBlank()) safe = "order";
+        return safe.substring(0, Math.min(120, safe.length())) + ".zip";
+    }
+
     private static final java.util.Set<String> SNAPSHOT_STATES = java.util.Set.of(
-            "AVAILABLE", "RECEIPT_SUSPENDED", "CORRUPT");
+            "AVAILABLE", "SIMULATED", "RECEIPT_SUSPENDED", "CORRUPT");
     private static final java.util.Set<String> ROLLUP_STATES = java.util.Set.of(
             "PRESENT", "CLEARED", "RESTORING", "AVAILABLE", "PARTIAL", "ABSENT", "ERROR", "UNKNOWN");
 
@@ -187,5 +227,20 @@ public class OrderController {
         if (!value.trim().matches("[A-Za-z0-9_-]{1,32}")) {
             throw new IllegalArgumentException(field + "非法");
         }
+    }
+
+    /** 业务字典编码允许医工宝现有的层级点号，例如 11.1。 */
+    private static void requireBusinessType(String value) {
+        if (!value.trim().matches("[A-Za-z0-9_.-]{1,32}")) {
+            throw new IllegalArgumentException("业务类型非法");
+        }
+    }
+
+    /** 为结构化文本字段追加安全模糊查询，避免从 JSON 中运行时提取。 */
+    private static void applyLike(LambdaQueryWrapper<OrderSnapshotEntity> query, String value, String field,
+                                  com.baomidou.mybatisplus.core.toolkit.support.SFunction<OrderSnapshotEntity, ?> column) {
+        if (value == null || value.isBlank()) return;
+        if (value.trim().length() > 128) throw new IllegalArgumentException(field + "筛选条件过长");
+        query.like(column, value.trim());
     }
 }

@@ -23,4 +23,17 @@ class ColdBatchServiceTest {
         assertThat(new ColdImportService(cold, new LocalDirectoryArtifactStore(Files.createTempDirectory("hot2")))
                 .restore("B1.zip", java.util.Set.of("O1"))).isEqualTo(1);
     }
+
+    @Test void preservesDateBasedHotKeyWhenWritingAndImportingColdArchive() throws Exception {
+        Path hot = Files.createTempDirectory("hot-new");
+        Path cold = Files.createTempDirectory("cold-new");
+        Files.createDirectories(hot.resolve("orders/20261103"));
+        Files.writeString(hot.resolve("orders/20261103/ORD_001-42.zip"), "payload");
+        Path archive = new ColdBatchService(new LocalDirectoryArtifactStore(hot))
+                .writeBatch("B2", cold, List.of("orders/20261103/ORD_001-42.zip"));
+        Path restored = Files.createTempDirectory("hot-restored");
+        assertThat(new ColdImportService(cold, new LocalDirectoryArtifactStore(restored))
+                .restore("B2.zip", java.util.Set.of("42"))).isEqualTo(1);
+        assertThat(restored.resolve("orders/20261103/ORD_001-42.zip")).exists();
+    }
 }

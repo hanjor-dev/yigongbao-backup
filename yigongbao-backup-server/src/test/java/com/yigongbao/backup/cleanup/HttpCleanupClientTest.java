@@ -24,7 +24,7 @@ class HttpCleanupClientTest {
             return RecordingHttpClient.response(request, 200, response);
         });
         RemoteHttpSupport support = new RemoteHttpSupport(transport, new ObjectMapper(),
-                URI.create("http://online.example"), Duration.ofSeconds(5), "NONE", "", "", "");
+                URI.create("http://online.example"), Duration.ofSeconds(5), "shared-production-secret-32-bytes!");
         HttpCleanupClient client = new HttpCleanupClient(support, new ObjectMapper());
 
         CleanupClient.Evaluation evaluation = client.evaluate(new CleanupClient.CleanupRequest(180, true));

@@ -40,4 +40,40 @@ class PersistentJobServiceTest {
         verify(orders).insert(any(JobOrderEntity.class));
         verify(files).insert(any(JobFileEntity.class));
     }
+
+    @Test
+    void derivesLegacyBackupOrderTotalFromSourceOrderIds() {
+        JobMapper jobs = mock(JobMapper.class); JobOrderMapper orders = mock(JobOrderMapper.class); JobFileMapper files = mock(JobFileMapper.class);
+        JobEntity entity = new JobEntity(); entity.setId(2117177485547773987L); entity.setJobType("ORDER_BACKUP");
+        entity.setStatus("FAILED"); entity.setFencingToken(0L);
+        entity.setConfigSnapshotJson("{\"sourceOrderIds\":[101,102,103]}");
+        when(jobs.selectList(any())).thenReturn(List.of(entity));
+        when(orders.selectList(any())).thenReturn(List.of());
+        when(files.selectList(any())).thenReturn(List.of());
+
+        Job result = new PersistentJobService(jobs, orders, files).listBackupJobs().getFirst();
+
+        assertThat(result.getOrderTotal()).isEqualTo(3);
+    }
+
+    @Test
+    void distinguishesManifestSuccessFromSimulationArtifactFailure() {
+        JobMapper jobs = mock(JobMapper.class); JobOrderMapper orders = mock(JobOrderMapper.class); JobFileMapper files = mock(JobFileMapper.class);
+        JobEntity entity = new JobEntity(); entity.setId(10L); entity.setJobType("ORDER_BACKUP");
+        entity.setStatus("PARTIAL_FAILED"); entity.setFencingToken(0L);
+        entity.setConfigSnapshotJson("{\"executionMode\":\"METADATA_SIMULATION\",\"sourceOrderIds\":[1,2]}");
+        JobOrderEntity artifactFailed = new JobOrderEntity(); artifactFailed.setStatus("SIMULATION_FAILED");
+        artifactFailed.setExpectedFileCount(3); artifactFailed.setExpectedBytes(30L);
+        JobOrderEntity manifestFailed = new JobOrderEntity(); manifestFailed.setStatus("SIMULATION_FAILED");
+        when(jobs.selectList(any())).thenReturn(List.of(entity));
+        when(orders.selectList(any())).thenReturn(List.of(artifactFailed, manifestFailed));
+        when(files.selectList(any())).thenReturn(List.of());
+
+        Job result = new PersistentJobService(jobs, orders, files).listBackupJobs().getFirst();
+
+        assertThat(result.getManifestSucceeded()).isEqualTo(1);
+        assertThat(result.getManifestFailed()).isEqualTo(1);
+        assertThat(result.getExpectedFileTotal()).isEqualTo(3);
+        assertThat(result.getExpectedBytes()).isEqualTo(30L);
+    }
 }

@@ -32,7 +32,7 @@ public class JobService {
     public synchronized Job claim(long id, String owner, Duration lease) {
         Job job = required(id);
         if (job.getState() != JobState.CREATED
-                && !(job.getState() == JobState.RUNNING
+                && !((job.getState() == JobState.RUNNING || job.getState() == JobState.RETRYING_FAILED_ORDERS)
                 && job.getLeaseUntil() != null && !job.getLeaseUntil().isAfter(clock.instant()))) {
             throw new IllegalStateException("任务不可领取");
         }
@@ -85,7 +85,8 @@ public class JobService {
     private boolean allowed(JobState from, JobState to) {
         return switch (from) {
             case CREATED -> EnumSet.of(JobState.RUNNING, JobState.CANCELLED).contains(to);
-            case RUNNING -> EnumSet.of(JobState.PAUSED, JobState.SUCCEEDED, JobState.FAILED, JobState.CANCELLED).contains(to);
+            case RUNNING -> EnumSet.of(JobState.RETRYING_FAILED_ORDERS, JobState.PAUSED, JobState.SUCCEEDED, JobState.FAILED, JobState.CANCELLED).contains(to);
+            case RETRYING_FAILED_ORDERS -> EnumSet.of(JobState.PAUSED, JobState.SUCCEEDED, JobState.PARTIAL_FAILED, JobState.FAILED, JobState.CANCELLED).contains(to);
             case PAUSED -> EnumSet.of(JobState.RUNNING, JobState.CANCELLED).contains(to);
             default -> false;
         };

@@ -9,5 +9,11 @@ import java.time.Instant; import java.util.Map; import java.util.List; import ja
  public Entry get(String key){return values.get(key);}
  public List<Entry> list(){return values.values().stream().sorted(java.util.Comparator.comparing(Entry::key)).toList();}
  public synchronized Entry put(String key,String value,int expectedVersion,long actor){ if(key==null||key.isBlank())throw new IllegalArgumentException("配置键为空"); Entry old=values.get(key); int current=old==null?0:old.version(); if(current!=expectedVersion)throw new IllegalStateException("配置版本冲突"); Entry next=new Entry(key,value,current+1,actor,Instant.now()); values.put(key,next); return next; }
- public record Entry(String key,String value,int version,long changedBy,Instant changedAt){}
+ public record Entry(String key, String name, String categoryCode, String categoryName, String valueType, String value, String optionsJson,
+                     String description, int version, long changedBy, Instant changedAt) {
+     /** 保留内存配置服务的旧构造方式，兼容现有测试和扩展代码。 */
+     public Entry(String key, String value, int version, long changedBy, Instant changedAt) {
+         this(key, key, "OTHER", "其他", "STRING", value, null, null, version, changedBy, changedAt);
+     }
+ }
 }

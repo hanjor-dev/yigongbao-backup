@@ -1,12 +1,18 @@
 server:
-  port: 18080
+  port: ${BACKUP_SERVER_PORT:18080}
 spring:
   application:
     name: yigongbao-backup-server
   datasource:
-    url: ${BACKUP_DB_URL:jdbc:mysql://127.0.0.1:3306/yigongbao_backup?useUnicode=true&characterEncoding=utf8&serverTimezone=UTC}
-    username: ${BACKUP_DB_USERNAME:backup}
-    password: ${BACKUP_DB_PASSWORD:}
+    url: ${BACKUP_DB_URL}
+    username: ${BACKUP_DB_USERNAME}
+    password: ${BACKUP_DB_PASSWORD}
+  servlet:
+    multipart:
+      # 基础配置也必须声明协议层上限；否则未启用 prod profile 时 Spring 默认仅允许 1MB。
+      # 具体业务上限仍由数据库 supplement.max-file-size-bytes 控制。
+      max-file-size: ${BACKUP_MAX_UPLOAD_SIZE:5GB}
+      max-request-size: ${BACKUP_MAX_UPLOAD_SIZE:5GB}
 mybatis-plus:
   # 本项目禁止 Mapper XML，SQL 仅允许注解或 MyBatis-Plus Wrapper。
   mapper-locations: []
@@ -19,21 +25,9 @@ sa-token:
   token-name: backup-token
   is-concurrent: false
 backup:
-  storage:
-    root: ${BACKUP_HOT_ROOT:./data}
-    managed-roots: ${BACKUP_MANAGED_STORAGE_ROOTS:./data,./cold-disks}
-  schedule:
-    interval-ms: ${BACKUP_SCHEDULE_INTERVAL_MS:1800000}
-  job:
-    recovery-interval-ms: ${BACKUP_JOB_RECOVERY_INTERVAL_MS:60000}
-  online:
-    enabled: ${BACKUP_ONLINE_ENABLED:false}
-    auth-mode: ${BACKUP_ONLINE_AUTH_MODE:NONE}
-    base-url: ${YIGONGBAO_ONLINE_BASE_URL:}
-    connect-timeout: ${BACKUP_ONLINE_CONNECT_TIMEOUT:PT10S}
-    request-timeout: ${BACKUP_ONLINE_REQUEST_TIMEOUT:PT60S}
-    key-id: ${BACKUP_HMAC_KEY_ID:}
-    key-secret: ${BACKUP_HMAC_KEY_SECRET:}
-    key-secret-ref: ${BACKUP_HMAC_KEY_SECRET_REF:}
-    bearer-token: ${BACKUP_ONLINE_BEARER_TOKEN:}
-    scope: ${BACKUP_ONLINE_SCOPE:BACKUP}
+  execution:
+    # 仅允许通过环境变量切换；生产环境必须保持 REAL。
+    mode: ${BACKUP_EXECUTION_MODE:REAL}
+  simulation:
+    # 仅元数据模拟模式使用，必须与正式热备目录隔离。
+    root: ${BACKUP_SIMULATION_ROOT:}

@@ -2,6 +2,7 @@ package com.yigongbao.backup.remote;
 
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import lombok.extern.slf4j.Slf4j;
 
 import javax.crypto.Mac;
 import javax.crypto.spec.SecretKeySpec;
@@ -28,45 +29,42 @@ import java.util.UUID;
  * 线上适配器共用的 HttpClient、超时、认证和错误处理。
  * HMAC 仅签名请求元数据，不输出密钥；流式上传/下载不在内存中缓存大文件。
  */
-public final class RemoteHttpSupport {
+@Slf4j
+public class RemoteHttpSupport {
     private static final int MAX_ERROR_BODY = 512;
+    private static final String EMPTY_BODY_HASH = hex(new byte[0]);
     private final HttpClient client;
     private final ObjectMapper mapper;
     private final URI baseUri;
     private final Duration timeout;
-    private final String authMode;
-    private final String keyId;
     private final byte[] secret;
-    private final String bearerToken;
-    private final String scope;
+    private final java.util.function.Supplier<OnlineSettings> dynamicSettings;
+    private volatile OnlineSettings cachedSettings;
+    private volatile RemoteHttpSupport cachedDelegate;
 
+    /** 生产共享 HMAC 构造器；密钥只保存在进程内存中。 */
     public RemoteHttpSupport(HttpClient client, ObjectMapper mapper, URI baseUri, Duration timeout,
-                             String authMode, String keyId, String secret, String bearerToken) {
-        this(client, mapper, baseUri, timeout, authMode, keyId, secret, bearerToken, "BACKUP");
-    }
-
-    /** 与 backup-internal-v1.yaml 机器认证契约一致的构造器。 */
-    public RemoteHttpSupport(HttpClient client, ObjectMapper mapper, URI baseUri, Duration timeout,
-                             String authMode, String keyId, String secret, String bearerToken, String scope) {
+                             String sharedSecret) {
         this.client = Objects.requireNonNull(client, "client");
         this.mapper = Objects.requireNonNull(mapper, "mapper");
         this.baseUri = normalizeBase(baseUri);
         this.timeout = timeout == null || timeout.isNegative() || timeout.isZero()
                 ? Duration.ofSeconds(30) : timeout;
-        this.authMode = authMode == null || authMode.isBlank() ? "NONE" : authMode.trim().toUpperCase(Locale.ROOT);
-        this.keyId = keyId == null ? "" : keyId;
-        this.secret = secret == null ? new byte[0] : secret.getBytes(StandardCharsets.UTF_8);
-        this.bearerToken = bearerToken == null ? "" : bearerToken;
-        this.scope = scope == null || scope.isBlank() ? "BACKUP" : scope.trim();
-        if ("HMAC".equals(this.authMode) && this.secret.length == 0) {
-            throw new IllegalArgumentException("HMAC认证未配置密钥");
-        }
-        if ("BEARER".equals(this.authMode) && this.bearerToken.isBlank()) {
-            throw new IllegalArgumentException("Bearer认证未配置令牌");
-        }
-        if (!this.authMode.equals("NONE") && !this.authMode.equals("HMAC") && !this.authMode.equals("BEARER")) {
-            throw new IllegalArgumentException("不支持的线上认证模式");
-        }
+        this.secret = sharedSecret == null ? new byte[0] : sharedSecret.getBytes(StandardCharsets.UTF_8);
+        this.dynamicSettings = null;
+        if (this.secret.length < 32) throw new IllegalArgumentException("共享HMAC密钥不能小于32位");
+    }
+
+    /** 数据库驱动构造器；每个远程调用使用当时的配置快照。 */
+    public RemoteHttpSupport(ObjectMapper mapper, java.util.function.Supplier<OnlineSettings> dynamicSettings) {
+        // 外层对象仅负责按配置构建并缓存真实客户端。不能在应用启动阶段创建无用的
+        // HttpClient，否则线上能力关闭时仍会初始化网络 Selector，并可能阻断本地服务启动。
+        this.client = null;
+        this.mapper = Objects.requireNonNull(mapper, "mapper");
+        this.baseUri = URI.create("http://127.0.0.1/");
+        this.timeout = Duration.ofSeconds(30);
+        this.secret = new byte[0];
+        this.dynamicSettings = Objects.requireNonNull(dynamicSettings, "dynamicSettings");
     }
 
     public HttpResponse<String> json(String method, String path, String body) {
@@ -78,9 +76,11 @@ public final class RemoteHttpSupport {
      * 不能让每次重试都产生新的远程命令。
      */
     public HttpResponse<String> json(String method, String path, String body, String idempotencyKey) {
+        RemoteHttpSupport dynamic = dynamicDelegate();
+        if (dynamic != null) return dynamic.json(method, path, body, idempotencyKey);
         byte[] payload = body == null ? new byte[0] : body.getBytes(StandardCharsets.UTF_8);
         boolean noBody = "GET".equalsIgnoreCase(method) || "DELETE".equalsIgnoreCase(method);
-        HttpRequest.Builder builder = request(method, path, noBody ? "" : hex(payload),
+        HttpRequest.Builder builder = request(method, path, noBody ? EMPTY_BODY_HASH : hex(payload),
                         noBody ? HttpRequest.BodyPublishers.noBody() : HttpRequest.BodyPublishers.ofByteArray(payload),
                         idempotencyKey)
                 .header("Content-Type", "application/json");
@@ -92,18 +92,24 @@ public final class RemoteHttpSupport {
     }
 
     public HttpResponse<String> stream(String method, String path, String contentType, InputStream input) {
+        RemoteHttpSupport dynamic = dynamicDelegate();
+        if (dynamic != null) return dynamic.stream(method, path, contentType, input);
         HttpRequest.Builder builder = request(method, path, "UNSIGNED-PAYLOAD", HttpRequest.BodyPublishers.ofInputStream(() -> input))
                 .header("Content-Type", contentType == null ? "application/octet-stream" : contentType);
         return send(builder);
     }
 
     public HttpResponse<InputStream> download(String path) {
-        HttpRequest.Builder builder = request("GET", path, "", HttpRequest.BodyPublishers.noBody());
+        RemoteHttpSupport dynamic = dynamicDelegate();
+        if (dynamic != null) return dynamic.download(path);
+        HttpRequest.Builder builder = request("GET", path, EMPTY_BODY_HASH, HttpRequest.BodyPublishers.noBody());
         return sendDownload(builder);
     }
 
     /** 访问清单返回的 COS 预签名 URL，不附加线上机器认证头。 */
     public HttpResponse<InputStream> download(URI uri) {
+        RemoteHttpSupport dynamic = dynamicDelegate();
+        if (dynamic != null) return dynamic.download(uri);
         validateExternalUri(uri, "COS下载地址非法");
         HttpRequest.Builder builder = HttpRequest.newBuilder(uri)
                 .timeout(timeout)
@@ -113,18 +119,26 @@ public final class RemoteHttpSupport {
     }
 
     private HttpResponse<InputStream> sendDownload(HttpRequest.Builder builder) {
+        HttpRequest request = builder.build();
+        long startedAt = System.nanoTime();
         try {
-            return client.send(builder.build(), HttpResponse.BodyHandlers.ofInputStream());
+            HttpResponse<InputStream> response = client.send(request, HttpResponse.BodyHandlers.ofInputStream());
+            logResponse(request, response.statusCode(), startedAt);
+            return response;
         } catch (IOException e) {
+            logFailure(request, startedAt, e);
             throw new RemoteCallException("线上服务通信失败", e);
         } catch (InterruptedException e) {
             Thread.currentThread().interrupt();
+            logFailure(request, startedAt, e);
             throw new RemoteCallException("线上服务调用被中断", e);
         }
     }
 
     /** 直接向 COS 预签名上传目标写入流，不把大文件缓存到内存。 */
     public HttpResponse<String> stream(URI uri, String method, String contentType, InputStream input) {
+        RemoteHttpSupport dynamic = dynamicDelegate();
+        if (dynamic != null) return dynamic.stream(uri, method, contentType, input);
         validateExternalUri(uri, "COS上传地址非法");
         HttpRequest.Builder builder = HttpRequest.newBuilder(uri)
                 .timeout(timeout)
@@ -136,6 +150,8 @@ public final class RemoteHttpSupport {
 
     /** 对 COS 预签名对象地址执行删除；调用方必须在外层校验 permit。 */
     public HttpResponse<String> delete(URI uri) {
+        RemoteHttpSupport dynamic = dynamicDelegate();
+        if (dynamic != null) return dynamic.delete(uri);
         validateExternalUri(uri, "COS删除地址非法");
         HttpRequest.Builder builder = HttpRequest.newBuilder(uri)
                 .timeout(timeout)
@@ -170,13 +186,58 @@ public final class RemoteHttpSupport {
             return;
         }
         Object body = response.body();
+        String diagnostic = "";
+        boolean retryable = response.statusCode() >= 500 || response.statusCode() == 429;
+        if (body instanceof String text) {
+            diagnostic = structuredErrorDiagnostic(text);
+            retryable = structuredRetryable(text, retryable);
+        }
         if (body instanceof InputStream input) {
             try (input) {
                 input.readNBytes(MAX_ERROR_BODY);
             } catch (IOException ignored) { }
         }
-        // 不回显远端响应体，避免远端错误页意外带出 token、签名或其他敏感信息。
-        throw new RemoteCallException("线上服务返回HTTP " + response.statusCode(), response.statusCode());
+        // 只提取约定错误 JSON 的 code/message/requestId，不回显原始响应体，避免泄露凭据。
+        throw new RemoteCallException("线上服务返回HTTP " + response.statusCode() + diagnostic,
+                response.statusCode(), retryable);
+    }
+
+    private boolean structuredRetryable(String body, boolean fallback) {
+        if (body == null || body.isBlank()) return fallback;
+        try {
+            JsonNode root = mapper.readTree(body.length() > MAX_ERROR_BODY ? body.substring(0, MAX_ERROR_BODY) : body);
+            return root != null && root.has("retryable") ? root.path("retryable").asBoolean(fallback) : fallback;
+        } catch (IOException ignored) { return fallback; }
+    }
+
+    private String structuredErrorDiagnostic(String body) {
+        if (body == null || body.isBlank()) return "";
+        try {
+            JsonNode root = mapper.readTree(body.length() > MAX_ERROR_BODY ? body.substring(0, MAX_ERROR_BODY) : body);
+            if (root == null || !root.isObject()) return "";
+            String code = safeDiagnostic(root.path("code").asText(""));
+            String message = safeDiagnostic(root.path("message").asText(""));
+            String requestId = safeDiagnostic(root.path("requestId").asText(""));
+            List<String> values = new ArrayList<>();
+            if (!code.isBlank()) values.add("code=" + code);
+            if (!message.isBlank()) values.add("message=" + message);
+            if (!requestId.isBlank()) values.add("requestId=" + requestId);
+            JsonNode details = root.path("details");
+            if (details.isArray() && !details.isEmpty()) {
+                String reason = safeDiagnostic(details.get(0).path("reason").asText(""));
+                if (!reason.isBlank()) values.add("reason=" + reason);
+            }
+            return values.isEmpty() ? "" : " (" + String.join(", ", values) + ")";
+        } catch (IOException ignored) {
+            return "";
+        }
+    }
+
+    private static String safeDiagnostic(String value) {
+        if (value == null) return "";
+        String sanitized = value.replaceAll("[\\r\\n\\t]", " ")
+                .replaceAll("(?i)(secret|token|credential|authorization)\\s*[=:]\\s*[^,; )]+", "$1=[REDACTED]");
+        return sanitized.substring(0, Math.min(sanitized.length(), 160));
     }
 
     public String encodeSegment(String value) {
@@ -195,7 +256,9 @@ public final class RemoteHttpSupport {
         if (path == null || !path.startsWith("/") || path.contains("..")) {
             throw new IllegalArgumentException("远程请求路径非法");
         }
-        URI uri = baseUri.resolve(path);
+        // path 是各业务适配器定义的相对接口路径。去掉开头的斜杠后再解析，
+        // 可保留线上服务基础地址中的 context-path（例如 /api）。
+        URI uri = baseUri.resolve(path.substring(1));
         HttpRequest.Builder builder = HttpRequest.newBuilder(uri)
                 .timeout(timeout)
                 .method(method, publisher)
@@ -207,31 +270,28 @@ public final class RemoteHttpSupport {
 
     private void authenticate(HttpRequest.Builder builder, String method, URI uri, String payloadHash,
                               String requestedIdempotencyKey) {
-        if ("BEARER".equals(authMode)) {
-            builder.header("Authorization", "Bearer " + bearerToken);
-            return;
+        String timestamp = Long.toString(Instant.now().getEpochSecond());
+        String nonce = UUID.randomUUID().toString();
+        String idempotencyKey = "GET".equalsIgnoreCase(method)
+                ? "" : (requestedIdempotencyKey == null || requestedIdempotencyKey.isBlank()
+                ? UUID.randomUUID().toString() : requestedIdempotencyKey);
+        builder.header("X-Timestamp", timestamp)
+                .header("X-Nonce", nonce)
+                .header("Idempotency-Key", idempotencyKey);
+        // 规范形式必须与线上 CanonicalRequest.createShared 完全一致。
+        String canonical = String.join("\n", method.toUpperCase(Locale.ROOT), canonicalPath(uri),
+                canonicalQuery(uri.getRawQuery()), payloadHash, timestamp, nonce, idempotencyKey);
+        builder.header("X-Signature", hmac(canonical));
+    }
+
+    /** 签名路径相对于配置的服务 context-path，与线上 Servlet 验签规则保持一致。 */
+    private String canonicalPath(URI uri) {
+        String basePath = baseUri.getRawPath();
+        String requestPath = uri.getRawPath();
+        if (basePath == null || !basePath.endsWith("/") || !requestPath.startsWith(basePath)) {
+            throw new IllegalArgumentException("远程请求路径不属于线上服务基础地址");
         }
-        if ("HMAC".equals(authMode)) {
-            String timestamp = Long.toString(Instant.now().getEpochSecond());
-            String nonce = UUID.randomUUID().toString();
-            String idempotencyKey = "GET".equalsIgnoreCase(method)
-                    ? "" : (requestedIdempotencyKey == null || requestedIdempotencyKey.isBlank()
-                    ? UUID.randomUUID().toString() : requestedIdempotencyKey);
-            builder.header("X-Key-Id", keyId)
-                    .header("X-Timestamp", timestamp)
-                    .header("X-Nonce", nonce)
-                    .header("X-Scope", scope)
-                    .header("Idempotency-Key", idempotencyKey);
-            // 规范形式必须与线上 CanonicalRequest 完全一致，包含 query 和幂等键。
-            String canonical = String.join("\n", method.toUpperCase(Locale.ROOT), uri.getRawPath(),
-                    canonicalQuery(uri.getRawQuery()), payloadHash, keyId,
-                    timestamp, nonce, scope, idempotencyKey);
-            builder.header("X-Signature", hmac(canonical));
-        } else if (!"GET".equalsIgnoreCase(method) && !"HEAD".equalsIgnoreCase(method)) {
-            // 非 HMAC 模式也生成幂等键，避免网络超时重试造成重复命令。
-            builder.header("Idempotency-Key", requestedIdempotencyKey == null || requestedIdempotencyKey.isBlank()
-                    ? UUID.randomUUID().toString() : requestedIdempotencyKey);
-        }
+        return "/" + requestPath.substring(basePath.length());
     }
 
     private String hmac(String canonical) {
@@ -245,14 +305,70 @@ public final class RemoteHttpSupport {
     }
 
     private HttpResponse<String> send(HttpRequest.Builder builder) {
+        HttpRequest request = builder.build();
+        long startedAt = System.nanoTime();
         try {
-            return client.send(builder.build(), HttpResponse.BodyHandlers.ofString(StandardCharsets.UTF_8));
+            HttpResponse<String> response = client.send(request,
+                    HttpResponse.BodyHandlers.ofString(StandardCharsets.UTF_8));
+            logResponse(request, response.statusCode(), startedAt);
+            return response;
         } catch (IOException e) {
+            logFailure(request, startedAt, e);
             throw new RemoteCallException("线上服务通信失败", e);
         } catch (InterruptedException e) {
             Thread.currentThread().interrupt();
+            logFailure(request, startedAt, e);
             throw new RemoteCallException("线上服务调用被中断", e);
         }
+    }
+
+    /** 仅记录接口路径，不记录查询参数、认证头或响应体。 */
+    private void logResponse(HttpRequest request, int statusCode, long startedAt) {
+        long durationMillis = Duration.ofNanos(System.nanoTime() - startedAt).toMillis();
+        if (statusCode >= 200 && statusCode < 300) {
+            log.info("远程接口调用完成｜请求类型={}｜请求方法={}｜接口路径={}｜HTTP状态={}｜执行耗时={}毫秒",
+                    requestType(request.uri()), request.method(), safeEndpoint(request.uri()), statusCode,
+                    durationMillis);
+        } else {
+            log.warn("远程接口返回异常｜请求类型={}｜请求方法={}｜接口路径={}｜HTTP状态={}｜执行耗时={}毫秒",
+                    requestType(request.uri()), request.method(), safeEndpoint(request.uri()), statusCode,
+                    durationMillis);
+        }
+    }
+
+    private void logFailure(HttpRequest request, long startedAt, Exception exception) {
+        long durationMillis = Duration.ofNanos(System.nanoTime() - startedAt).toMillis();
+        log.error("远程接口通信失败｜请求类型={}｜请求方法={}｜接口路径={}｜执行耗时={}毫秒｜异常类型={}｜异常原因={}",
+                requestType(request.uri()), request.method(), safeEndpoint(request.uri()), durationMillis,
+                exception.getClass().getSimpleName(), safeDiagnostic(exception.getMessage()),
+                safeThrowable(exception));
+    }
+
+    private String requestType(URI uri) {
+        return isOnlineEndpoint(uri) ? "线上医工宝接口" : "对象存储预签名接口";
+    }
+
+    private String safeEndpoint(URI uri) {
+        return isOnlineEndpoint(uri) ? uri.getPath() : "外部对象存储地址（已隐藏）";
+    }
+
+    private boolean isOnlineEndpoint(URI uri) {
+        return Objects.equals(baseUri.getScheme(), uri.getScheme())
+                && Objects.equals(baseUri.getHost(), uri.getHost())
+                && effectivePort(baseUri) == effectivePort(uri)
+                && uri.getPath().startsWith(baseUri.getPath());
+    }
+
+    private static int effectivePort(URI uri) {
+        if (uri.getPort() >= 0) return uri.getPort();
+        return "https".equalsIgnoreCase(uri.getScheme()) ? 443 : 80;
+    }
+
+    private static Throwable safeThrowable(Throwable exception) {
+        RuntimeException sanitized = new RuntimeException(exception.getClass().getSimpleName()
+                + ": " + safeDiagnostic(exception.getMessage()));
+        sanitized.setStackTrace(exception.getStackTrace());
+        return sanitized;
     }
 
     private static URI normalizeBase(URI uri) {
@@ -312,5 +428,25 @@ public final class RemoteHttpSupport {
             throw new RemoteCallException("请求摘要计算失败", e);
         }
     }
+
+    private RemoteHttpSupport dynamicDelegate() {
+        if (dynamicSettings == null) return null;
+        OnlineSettings settings = Objects.requireNonNull(dynamicSettings.get(), "线上连接配置为空");
+        RemoteHttpSupport current = cachedDelegate;
+        if (current != null && settings.equals(cachedSettings)) return current;
+        synchronized (this) {
+            if (cachedDelegate != null && settings.equals(cachedSettings)) return cachedDelegate;
+            HttpClient currentClient = HttpClient.newBuilder().connectTimeout(settings.connectTimeout()).build();
+            RemoteHttpSupport rebuilt = new RemoteHttpSupport(currentClient, mapper, settings.baseUri(),
+                    settings.requestTimeout(), settings.sharedSecret());
+            cachedSettings = settings;
+            cachedDelegate = rebuilt;
+            return rebuilt;
+        }
+    }
+
+    /** 动态线上连接配置，不包含持久化行为。 */
+    public record OnlineSettings(URI baseUri, Duration connectTimeout, Duration requestTimeout,
+                                 String sharedSecret) { }
 
 }

@@ -14,21 +14,21 @@ CREATE TABLE IF NOT EXISTS bk_user (
  create_by BIGINT NULL COMMENT '创建人ID', update_by BIGINT NULL COMMENT '更新人ID', is_deleted TINYINT NOT NULL DEFAULT 0 COMMENT '逻辑删除', PRIMARY KEY(id)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci COMMENT='本地账号';
 
--- 首次联调管理员（仅当 admin 账号不存在时创建，不覆盖已有账号）。
--- 初始账号：admin；初始密码：Admin@123456；首次登录后必须立即修改密码。
+-- 首次联调管理员（仅当 admin1 账号不存在时创建，不覆盖已有账号）。
+-- 初始账号：admin1；密码使用预置 BCrypt 哈希，首次登录后建议立即修改密码。
 -- 密码为 BCrypt 哈希，和 PersistentAccountSyncService/AuthController 使用同一校验算法。
 INSERT INTO bk_user (source_user_id, username, password_hash, real_name, role_code,
                      enabled_status, login_fail_count, emergency_admin)
 SELECT NULL,
-       'admin',
-       '$2a$10$p3T.mN3Jj1LHdZHNU8RNfegoSGh7XOtyCd1Ie4UinbuohkD824YSC',
+       'admin1',
+       '$2a$10$N.zmdr9k7uOCQb376NoUnuTJ8iAt6Z5EHsM8lE9lBOsl7iKTVKIUi',
        '系统管理员',
        'ADMIN',
        'ENABLED',
        0,
        1
 WHERE NOT EXISTS (
-    SELECT 1 FROM bk_user WHERE username = 'admin' AND is_deleted = 0
+    SELECT 1 FROM bk_user WHERE username = 'admin1' AND is_deleted = 0
 );
 
 CREATE TABLE IF NOT EXISTS bk_user_field_control (
@@ -44,8 +44,16 @@ CREATE TABLE IF NOT EXISTS bk_backup_candidate (
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci COMMENT='本地备份候选投影';
 
 CREATE TABLE IF NOT EXISTS bk_order_snapshot (
- id BIGINT NOT NULL AUTO_INCREMENT COMMENT '主键ID', source_order_id BIGINT NOT NULL COMMENT '线上订单ID', order_code VARCHAR(64) NULL COMMENT '订单号', order_created_at DATETIME(3) NULL COMMENT '订单创建时间', source_status VARCHAR(32) NOT NULL COMMENT '首次快照状态', classic_case TINYINT NOT NULL DEFAULT 0 COMMENT '经典案例快照',
- order_raw_json JSON NOT NULL COMMENT 'order_main全列原始快照', display_json JSON NOT NULL COMMENT '列表非操作列展示快照', related_business_json JSON NOT NULL COMMENT '关联业务快照', manifest_revision VARCHAR(128) NOT NULL COMMENT '清单修订号', manifest_sha256 CHAR(64) NOT NULL COMMENT 'JCS清单哈希', snapshot_status VARCHAR(32) NOT NULL COMMENT 'AVAILABLE/RECEIPT_SUSPENDED/CORRUPT', backup_completed_at DATETIME(3) NOT NULL COMMENT '首次成功时间', latest_verified_at DATETIME(3) NULL COMMENT '最近校验时间', cloud_rollup VARCHAR(32) NOT NULL COMMENT '云端聚合状态', hot_rollup VARCHAR(32) NOT NULL COMMENT '热备聚合状态', cold_rollup VARCHAR(32) NOT NULL COMMENT '冷备聚合状态',
+ id BIGINT NOT NULL AUTO_INCREMENT COMMENT '主键ID', backup_mode VARCHAR(32) NOT NULL DEFAULT 'REAL' COMMENT 'REAL/METADATA_SIMULATION', source_order_id BIGINT NOT NULL COMMENT '线上订单ID', order_code VARCHAR(64) NULL COMMENT '订单号', public_order_code VARCHAR(64) NULL COMMENT '对外展示单号', order_created_at DATETIME(3) NULL COMMENT '订单创建时间',
+ order_type INT NULL COMMENT '订单类型', order_type_name VARCHAR(64) NULL COMMENT '订单类型名称', needs_physical_delivery INT NULL COMMENT '实体交付类型', needs_physical_delivery_name VARCHAR(64) NULL COMMENT '实体交付名称', business_type VARCHAR(32) NULL COMMENT '业务类型编码', business_type_name VARCHAR(128) NULL COMMENT '业务类型名称',
+ org_id BIGINT NULL COMMENT '提单机构ID', org_name VARCHAR(255) NULL COMMENT '提单机构名称', operator_id BIGINT NULL COMMENT '操作员ID', operator_name VARCHAR(128) NULL COMMENT '操作员姓名', operator_phone VARCHAR(64) NULL COMMENT '操作员电话', operator_dept_id BIGINT NULL COMMENT '操作员部门ID', operator_dept_name VARCHAR(255) NULL COMMENT '操作员部门名称',
+ hospital_id BIGINT NULL COMMENT '医院ID', hospital_name VARCHAR(255) NULL COMMENT '医院名称', area_id BIGINT NULL COMMENT '地区ID', area_name VARCHAR(255) NULL COMMENT '地区名称', full_area_name VARCHAR(512) NULL COMMENT '完整地区名称', hospital_dept_id BIGINT NULL COMMENT '医院科室ID', hospital_dept_name VARCHAR(255) NULL COMMENT '医院科室名称',
+ doctor_id BIGINT NULL COMMENT '医生ID', doctor_name VARCHAR(128) NULL COMMENT '医生姓名', doctor_phone VARCHAR(64) NULL COMMENT '医生电话', patient_name VARCHAR(128) NULL COMMENT '患者姓名', patient_age INT NULL COMMENT '患者年龄', patient_gender VARCHAR(32) NULL COMMENT '患者性别编码', patient_gender_name VARCHAR(32) NULL COMMENT '患者性别名称',
+ source_status VARCHAR(32) NOT NULL COMMENT '订单业务状态兼容字段', classic_case TINYINT NOT NULL DEFAULT 0 COMMENT '经典案例快照', is_urgent INT NULL COMMENT '是否加急', is_postal INT NULL COMMENT '是否邮寄', postal_address VARCHAR(1024) NULL COMMENT '邮寄地址',
+ designer_id BIGINT NULL COMMENT '设计师ID', designer_name VARCHAR(128) NULL COMMENT '设计师姓名', expected_delivery_date DATETIME(3) NULL COMMENT '期望交付时间', estimated_cost DECIMAL(18,2) NULL COMMENT '预估费用', data_evaluation_opinion TEXT NULL COMMENT '影像数据评估意见', designer_remark TEXT NULL COMMENT '设计师备注',
+ phase INT NULL COMMENT '订单阶段', phase_name VARCHAR(64) NULL COMMENT '订单阶段名称', status INT NULL COMMENT '订单状态', status_name VARCHAR(128) NULL COMMENT '订单状态名称', status_color_json JSON NULL COMMENT '状态颜色对象', regional_audit_json JSON NULL COMMENT '区域审核对象', design_audit_json JSON NULL COMMENT '设计审核对象',
+ design_start_time DATETIME(3) NULL COMMENT '设计开始时间', design_submit_time DATETIME(3) NULL COMMENT '设计提交时间', production_start_time DATETIME(3) NULL COMMENT '生产开始时间', production_end_time DATETIME(3) NULL COMMENT '生产结束时间', source_version INT NULL COMMENT '线上订单版本', rebuild_project_list_json JSON NULL COMMENT '重建项目列表',
+ order_raw_json JSON NOT NULL COMMENT 'order_main全列原始快照', display_json JSON NOT NULL COMMENT '列表非操作列展示快照', related_business_json JSON NOT NULL COMMENT '关联业务快照', manifest_revision VARCHAR(128) NOT NULL COMMENT '清单修订号', manifest_sha256 CHAR(64) NOT NULL COMMENT 'JCS清单哈希', snapshot_status VARCHAR(32) NOT NULL COMMENT 'PENDING_RECEIPT/AVAILABLE/RECEIPT_SUSPENDED/CORRUPT', backup_completed_at DATETIME(3) NOT NULL COMMENT '本地订单包写入时间', latest_verified_at DATETIME(3) NULL COMMENT '最近校验时间', cloud_rollup VARCHAR(32) NOT NULL COMMENT '云端聚合状态', hot_rollup VARCHAR(32) NOT NULL COMMENT '热备聚合状态', cold_rollup VARCHAR(32) NOT NULL COMMENT '冷备聚合状态',
  create_time DATETIME(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3) COMMENT '创建时间', update_time DATETIME(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3) ON UPDATE CURRENT_TIMESTAMP(3) COMMENT '更新时间', create_by BIGINT NULL COMMENT '创建人ID', update_by BIGINT NULL COMMENT '更新人ID', is_deleted TINYINT NOT NULL DEFAULT 0 COMMENT '逻辑删除', PRIMARY KEY(id)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci COMMENT='不可变订单快照';
 
@@ -60,7 +68,7 @@ CREATE TABLE IF NOT EXISTS bk_asset_relation (
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci COMMENT='资产typed业务关系';
 
 CREATE TABLE IF NOT EXISTS bk_order_package (
- id BIGINT NOT NULL AUTO_INCREMENT COMMENT '主键ID', snapshot_id BIGINT NOT NULL COMMENT '快照ID', storage_key VARCHAR(1024) NOT NULL COMMENT 'NAS相对键', package_format VARCHAR(32) NOT NULL COMMENT 'ORDER_ZIP64_V1', file_count INT NOT NULL COMMENT '文件数', source_total_size BIGINT NOT NULL COMMENT '源总字节数', package_size BIGINT NOT NULL COMMENT '包字节数', package_sha256 CHAR(64) NOT NULL COMMENT '包SHA-256', manifest_sha256 CHAR(64) NOT NULL COMMENT '清单SHA-256', status VARCHAR(32) NOT NULL COMMENT 'WRITING/AVAILABLE/CORRUPT/ABSENT/UNKNOWN', verified_at DATETIME(3) NULL COMMENT '校验时间', cold_covered_at DATETIME(3) NULL COMMENT '冷备覆盖时间', hot_deleted_at DATETIME(3) NULL COMMENT '热备删除时间', version INT NOT NULL DEFAULT 0 COMMENT '乐观锁版本',
+ id BIGINT NOT NULL AUTO_INCREMENT COMMENT '主键ID', backup_mode VARCHAR(32) NOT NULL DEFAULT 'REAL' COMMENT 'REAL/METADATA_SIMULATION', snapshot_id BIGINT NOT NULL COMMENT '快照ID', storage_key VARCHAR(1024) NOT NULL COMMENT 'NAS相对键', package_format VARCHAR(32) NOT NULL COMMENT 'ORDER_ZIP64_V1', file_count INT NOT NULL COMMENT '文件数', source_total_size BIGINT NOT NULL COMMENT '源总字节数', package_size BIGINT NOT NULL COMMENT '包字节数', package_sha256 CHAR(64) NOT NULL COMMENT '包SHA-256', manifest_sha256 CHAR(64) NOT NULL COMMENT '清单SHA-256', status VARCHAR(32) NOT NULL COMMENT 'PENDING_RECEIPT/AVAILABLE/CORRUPT/ABSENT/UNKNOWN', verified_at DATETIME(3) NULL COMMENT '校验时间', cold_covered_at DATETIME(3) NULL COMMENT '冷备覆盖时间', hot_deleted_at DATETIME(3) NULL COMMENT '热备删除时间', version INT NOT NULL DEFAULT 0 COMMENT '乐观锁版本',
  create_time DATETIME(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3) COMMENT '创建时间', update_time DATETIME(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3) ON UPDATE CURRENT_TIMESTAMP(3) COMMENT '更新时间', create_by BIGINT NULL COMMENT '创建人ID', update_by BIGINT NULL COMMENT '更新人ID', is_deleted TINYINT NOT NULL DEFAULT 0 COMMENT '逻辑删除', PRIMARY KEY(id)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci COMMENT='订单ZIP64包';
 
@@ -100,7 +108,7 @@ CREATE TABLE IF NOT EXISTS bk_job (
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci COMMENT='通用长任务';
 
 CREATE TABLE IF NOT EXISTS bk_job_order (
- id BIGINT NOT NULL AUTO_INCREMENT COMMENT '主键ID', job_id BIGINT NOT NULL COMMENT '任务ID', source_order_id BIGINT NOT NULL COMMENT '线上订单ID', snapshot_id BIGINT NULL COMMENT '本地快照ID', status VARCHAR(32) NOT NULL COMMENT '订单级结果状态', failure_code VARCHAR(64) NULL COMMENT '失败码', failure_message VARCHAR(1024) NULL COMMENT '失败信息',
+ id BIGINT NOT NULL AUTO_INCREMENT COMMENT '主键ID', job_id BIGINT NOT NULL COMMENT '任务ID', source_order_id BIGINT NOT NULL COMMENT '线上订单ID', snapshot_id BIGINT NULL COMMENT '本地快照ID', order_code VARCHAR(128) NULL COMMENT '订单编号', order_created_at VARCHAR(64) NULL COMMENT '订单创建时间', source_status VARCHAR(32) NULL COMMENT '线上业务状态', order_business_json JSON NULL COMMENT '完整订单业务快照', expected_file_count INT NULL COMMENT '模拟预计文件数', expected_bytes BIGINT NULL COMMENT '模拟预计文件容量', simulation_path VARCHAR(1024) NULL COMMENT '模拟制品隔离目录', status VARCHAR(32) NOT NULL COMMENT '订单级结果状态', failure_code VARCHAR(64) NULL COMMENT '失败码', failure_message VARCHAR(1024) NULL COMMENT '失败信息',
  create_time DATETIME(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3) COMMENT '创建时间', update_time DATETIME(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3) ON UPDATE CURRENT_TIMESTAMP(3) COMMENT '更新时间', create_by BIGINT NULL COMMENT '创建人ID', update_by BIGINT NULL COMMENT '更新人ID', is_deleted TINYINT NOT NULL DEFAULT 0 COMMENT '逻辑删除；一期不删除', PRIMARY KEY(id)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci COMMENT='任务订单级结果';
 
@@ -145,17 +153,17 @@ CREATE TABLE IF NOT EXISTS bk_storage_probe_history (
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci COMMENT='存储探测历史';
 
 CREATE TABLE IF NOT EXISTS bk_space_reservation (
- id BIGINT NOT NULL AUTO_INCREMENT COMMENT '主键ID', storage_pool_id BIGINT NOT NULL COMMENT '容量域ID', job_id BIGINT NOT NULL COMMENT '任务ID', reserved_bytes BIGINT NOT NULL COMMENT '预留字节数', lease_until DATETIME(3) NOT NULL COMMENT '租约截止', fencing_token BIGINT NOT NULL COMMENT '单调隔离令牌', status VARCHAR(32) NOT NULL COMMENT 'ACTIVE/RELEASED/EXPIRED', status_active TINYINT GENERATED ALWAYS AS (CASE WHEN status='ACTIVE' AND is_deleted=0 THEN 1 ELSE 0 END) STORED COMMENT '活动状态唯一键', version INT NOT NULL DEFAULT 0 COMMENT '乐观锁版本',
+ id BIGINT NOT NULL AUTO_INCREMENT COMMENT '主键ID', storage_pool_id BIGINT NOT NULL COMMENT '容量域ID', job_id BIGINT NOT NULL COMMENT '任务ID', reserved_bytes BIGINT NOT NULL COMMENT '预留字节数', lease_until DATETIME(3) NOT NULL COMMENT '租约截止', fencing_token BIGINT NOT NULL COMMENT '单调隔离令牌', status VARCHAR(32) NOT NULL COMMENT 'ACTIVE/RELEASED/EXPIRED', status_active TINYINT GENERATED ALWAYS AS (CASE WHEN status='ACTIVE' AND is_deleted=0 THEN 1 ELSE NULL END) STORED COMMENT '活动状态唯一键；非活动记录为NULL以保留多条历史', version INT NOT NULL DEFAULT 0 COMMENT '乐观锁版本',
  create_time DATETIME(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3) COMMENT '创建时间', update_time DATETIME(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3) ON UPDATE CURRENT_TIMESTAMP(3) COMMENT '更新时间', create_by BIGINT NULL COMMENT '创建人ID', update_by BIGINT NULL COMMENT '更新人ID', is_deleted TINYINT NOT NULL DEFAULT 0 COMMENT '逻辑删除', PRIMARY KEY(id)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci COMMENT='空间原子预留';
 
 CREATE TABLE IF NOT EXISTS bk_config (
- id BIGINT NOT NULL AUTO_INCREMENT COMMENT '主键ID', config_key VARCHAR(128) NOT NULL COMMENT '配置键', scope VARCHAR(64) NOT NULL COMMENT '作用域', value_type VARCHAR(32) NOT NULL COMMENT '值类型', config_value TEXT NULL COMMENT '非敏感配置值', secret_ref VARCHAR(512) NULL COMMENT '外部密钥引用', config_version INT NOT NULL COMMENT '配置版本', changed_by BIGINT NULL COMMENT '修改人', changed_at DATETIME(3) NOT NULL COMMENT '修改时间', version INT NOT NULL DEFAULT 0 COMMENT '乐观锁版本',
+ id BIGINT NOT NULL AUTO_INCREMENT COMMENT '主键ID', config_key VARCHAR(128) NOT NULL COMMENT '配置键', config_name VARCHAR(128) NULL COMMENT '配置名称', category_code VARCHAR(32) NULL COMMENT '配置分类编码', category_name VARCHAR(64) NULL COMMENT '配置分类名称', scope VARCHAR(64) NOT NULL COMMENT '作用域', value_type VARCHAR(32) NOT NULL COMMENT '值类型', config_value TEXT NULL COMMENT '非敏感配置值', options_json JSON NULL COMMENT '配置可选项JSON', description VARCHAR(1024) NULL COMMENT '配置说明及影响', secret_ref VARCHAR(512) NULL COMMENT '外部密钥引用', config_version INT NOT NULL COMMENT '配置版本', changed_by BIGINT NULL COMMENT '修改人', changed_at DATETIME(3) NOT NULL COMMENT '修改时间', version INT NOT NULL DEFAULT 0 COMMENT '乐观锁版本',
  create_time DATETIME(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3) COMMENT '创建时间', update_time DATETIME(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3) ON UPDATE CURRENT_TIMESTAMP(3) COMMENT '更新时间', create_by BIGINT NULL COMMENT '创建人ID', update_by BIGINT NULL COMMENT '更新人ID', is_deleted TINYINT NOT NULL DEFAULT 0 COMMENT '逻辑删除', PRIMARY KEY(id)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci COMMENT='版本化配置';
 
 CREATE TABLE IF NOT EXISTS bk_sync_cursor (
- id BIGINT NOT NULL AUTO_INCREMENT COMMENT '主键ID', cursor_type VARCHAR(64) NOT NULL COMMENT 'CANDIDATE/USER/PERMIT_REQUEST', cursor_value VARCHAR(2048) NOT NULL COMMENT '不透明游标', high_watermark VARCHAR(2048) NULL COMMENT '分页高水位', lookback_seconds INT NOT NULL DEFAULT 0 COMMENT '回看窗口秒数', last_success_at DATETIME(3) NULL COMMENT '最近成功时间', version INT NOT NULL DEFAULT 0 COMMENT '乐观锁版本',
+ id BIGINT NOT NULL AUTO_INCREMENT COMMENT '主键ID', cursor_type VARCHAR(64) NOT NULL COMMENT 'CANDIDATE/USER/PERMIT_REQUEST', cursor_value VARCHAR(2048) NOT NULL COMMENT '不透明游标', high_watermark VARCHAR(2048) NULL COMMENT '分页高水位', lookback_seconds INT NOT NULL DEFAULT 0 COMMENT '回看窗口秒数', last_success_at DATETIME(3) NULL COMMENT '最近成功时间', last_attempt_at DATETIME(3) NULL COMMENT '最近尝试时间', sync_status VARCHAR(16) NOT NULL DEFAULT 'IDLE' COMMENT 'IDLE/RUNNING/SUCCEEDED/FAILED', last_item_count INT NOT NULL DEFAULT 0 COMMENT '最近一轮已提交数量', last_error_message VARCHAR(1024) NULL COMMENT '最近失败原因', version INT NOT NULL DEFAULT 0 COMMENT '乐观锁版本',
  create_time DATETIME(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3) COMMENT '创建时间', update_time DATETIME(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3) ON UPDATE CURRENT_TIMESTAMP(3) COMMENT '更新时间', create_by BIGINT NULL COMMENT '创建人ID', update_by BIGINT NULL COMMENT '更新人ID', is_deleted TINYINT NOT NULL DEFAULT 0 COMMENT '逻辑删除', PRIMARY KEY(id)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci COMMENT='增量同步游标';
 

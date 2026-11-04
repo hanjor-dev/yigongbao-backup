@@ -3,10 +3,12 @@ package com.yigongbao.backup.account;
 import cn.dev33.satoken.stp.StpUtil;
 import com.yigongbao.backup.audit.AuditLogService;
 import com.baomidou.mybatisplus.core.toolkit.Wrappers;
+import com.baomidou.mybatisplus.extension.plugins.pagination.Page;
 import com.yigongbao.backup.common.ApiResponse;
 import lombok.RequiredArgsConstructor;
 import org.springframework.security.crypto.bcrypt.BCryptPasswordEncoder;
 import org.springframework.web.bind.annotation.*;
+import com.yigongbao.backup.config.RuntimeConfigService;
 
 import java.util.List;
 import java.util.UUID;
@@ -19,14 +21,44 @@ public class AdminAccountController {
     private final BkUserMapper mapper;
     private final BkUserFieldControlService fieldControl;
     private final AuditLogService audit;
+    private final AccountSyncCheckpointService syncCheckpoints;
+    private final AccountSyncCoordinator syncCoordinator;
+    private final RuntimeConfigService configs;
     private final BCryptPasswordEncoder encoder = new BCryptPasswordEncoder();
 
     /** 查询本地账号列表，密码哈希永不返回。 */
     @GetMapping
-    public ApiResponse<List<AccountView>> list() {
+    public ApiResponse<Page<AccountView>> list(
+            @RequestParam(name = "current", defaultValue = "1") long current,
+            @RequestParam(name = "size", defaultValue = "20") long size) {
         admin();
-        List<AccountView> result = mapper.selectList(Wrappers.<BkUserEntity>lambdaQuery().orderByAsc(BkUserEntity::getUsername))
-                .stream().map(u -> new AccountView(u.getId(), u.getUsername(), u.getRealName(), u.getRoleCode(), u.getEnabledStatus(), u.getSourceUpdatedAt(), u.getLastSyncedAt())).toList();
+        if (current < 1 || size < 1 || size > 100) throw new IllegalArgumentException("账号分页参数非法");
+        Page<BkUserEntity> source = mapper.selectPage(new Page<>(current, size),
+                Wrappers.<BkUserEntity>lambdaQuery().orderByAsc(BkUserEntity::getUsername));
+        Page<AccountView> result = new Page<>(source.getCurrent(), source.getSize(), source.getTotal());
+        result.setRecords(source.getRecords().stream().map(AdminAccountController::view).toList());
+        return ApiResponse.ok(result, rid());
+    }
+
+    /** 查询账号同步开关、持久化游标和最近运行结果。 */
+    @GetMapping("/sync/status")
+    public ApiResponse<SyncStatusView> syncStatus() {
+        admin();
+        AccountSyncCheckpointService.Status status = syncCheckpoints.status();
+        return ApiResponse.ok(new SyncStatusView(
+                configs.getBoolean("account.sync-enabled", true),
+                configs.getBoolean("online.enabled", false),
+                status.status(), status.lastAttemptAt(), status.lastSuccessAt(), status.lastItemCount(),
+                status.lastErrorMessage(), status.cursor()), rid());
+    }
+
+    /** 管理员立即触发同步；与定时同步使用同一互斥锁和持久化检查点。 */
+    @PostMapping("/sync")
+    public ApiResponse<AccountSyncCoordinator.Result> syncNow() {
+        admin();
+        long actor = StpUtil.getLoginIdAsLong();
+        AccountSyncCoordinator.Result result = syncCoordinator.synchronize(true);
+        audit.append(new AuditLogService.Event("ACCOUNT_SYNC_MANUAL", "USER", String.valueOf(actor), result.status()));
         return ApiResponse.ok(result, rid());
     }
 
@@ -56,4 +88,7 @@ public class AdminAccountController {
     public record StatusCommand(String enabledStatus) {}
     public record PasswordCommand(String password) {}
     public record AccountView(Long id, String username, String realName, String roleCode, String enabledStatus, java.time.LocalDateTime sourceUpdatedAt, java.time.LocalDateTime lastSyncedAt) {}
+    public record SyncStatusView(boolean syncEnabled, boolean onlineEnabled, String status,
+                                 java.time.LocalDateTime lastAttemptAt, java.time.LocalDateTime lastSuccessAt,
+                                 int lastItemCount, String lastErrorMessage, String cursor) { }
 }
