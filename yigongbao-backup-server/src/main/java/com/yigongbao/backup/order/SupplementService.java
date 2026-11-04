@@ -28,7 +28,7 @@ public final class SupplementService {
         String safe = safeFileName(fileName); int dot=safe.lastIndexOf('.'); String ext=dot<0?"":safe.substring(dot+1).toLowerCase();
         if (!allowedExtensions().contains(ext)) throw new IllegalArgumentException("补传文件格式不允许");
         String id=UUID.randomUUID().toString();
-        String key="orders/"+orderId+"/supplements/"+id+"-"+safe;
+        String key="supplements/"+orderId+"/"+id+"-"+safe;
         store.put(key, bounded(content));
         return id;
     }
@@ -44,7 +44,7 @@ public final class SupplementService {
         if (!allowedExtensions().contains(ext)) throw new IllegalArgumentException("补传文件格式不允许");
         if (size < 0 || size > maxBytes()) throw new IllegalArgumentException("补传文件超过大小上限");
         String id = UUID.randomUUID().toString();
-        String key = "orders/" + safeOrder(orderId) + "/supplements/" + id + "-" + safe;
+        String key = "supplements/" + safeOrder(orderId) + "/" + id + "-" + safe;
         String digest;
         long actualSize;
         try {
@@ -79,14 +79,14 @@ public final class SupplementService {
             throw new IllegalArgumentException("补传文件标识非法");
         }
         String prefix = fileId + "-";
-        try (var paths = store.list("orders/" + orderId + "/supplements")) {
+        try (var paths = store.list("supplements/" + orderId)) {
             Path match = paths.filter(Files::isRegularFile)
                     .filter(path -> path.getFileName().toString().startsWith(prefix))
                     .findFirst().orElse(null);
             if (match == null) {
                 throw new java.nio.file.NoSuchFileException(fileId);
             }
-            return store.open("orders/" + orderId + "/supplements/" + match.getFileName());
+            return store.open("supplements/" + orderId + "/" + match.getFileName());
         } catch (java.nio.file.NoSuchFileException exception) {
             throw exception;
         }
@@ -97,7 +97,7 @@ public final class SupplementService {
         if (orderId == null || !orderId.matches("[A-Za-z0-9_-]{1,64}")) {
             throw new IllegalArgumentException("订单号非法");
         }
-        try (var paths = store.list("orders/" + orderId + "/supplements")) {
+        try (var paths = store.list("supplements/" + orderId)) {
             return paths.filter(Files::isRegularFile)
                     .map(path -> {
                         String name = path.getFileName().toString();

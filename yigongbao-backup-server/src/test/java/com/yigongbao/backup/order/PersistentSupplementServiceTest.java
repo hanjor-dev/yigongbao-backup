@@ -24,7 +24,7 @@ class PersistentSupplementServiceTest {
         String id = service.uploadForSnapshot(3L, "order-1", "engine.step",
                 new ByteArrayInputStream("abc".getBytes()), 3, 9L, "application/octet-stream", "remark");
         BkSupplementFileEntity saved = new BkSupplementFileEntity(); saved.setSnapshotId(3L);
-        saved.setStorageKey("orders/order-1/supplements/" + id + "-engine.step");
+        saved.setStorageKey("supplements/order-1/" + id + "-engine.step");
         saved.setInternalFilename(id + "-engine.step"); saved.setOriginalFilename("engine.step"); saved.setSize(3L);
         when(mapper.selectList(any())).thenReturn(List.of(saved));
         assertThat(service.openForSnapshot(3L, id).readAllBytes()).containsExactly('a', 'b', 'c');
