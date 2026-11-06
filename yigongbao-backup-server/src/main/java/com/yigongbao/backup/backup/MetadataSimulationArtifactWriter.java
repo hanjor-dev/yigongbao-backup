@@ -18,6 +18,7 @@ import java.util.zip.ZipOutputStream;
 import java.security.MessageDigest;
 import java.io.InputStream;
 import com.yigongbao.backup.storage.api.ArtifactStore;
+import com.yigongbao.backup.storage.api.VolumeArtifactStore;
 
 /** 在隔离目录生成 Manifest、模拟摘要和零字节文件占位符。 */
 public class MetadataSimulationArtifactWriter {
@@ -26,6 +27,8 @@ public class MetadataSimulationArtifactWriter {
             "LPT1", "LPT2", "LPT3", "LPT4", "LPT5", "LPT6", "LPT7", "LPT8", "LPT9");
     private final Path root;
     private final ArtifactStore store;
+    private final VolumeArtifactStore volumeStore;
+    private final Long storageVolumeId;
     private final ObjectMapper mapper;
 
     /** 创建绑定到指定隔离根目录的写入器。 */
@@ -33,6 +36,19 @@ public class MetadataSimulationArtifactWriter {
         if (root == null) throw new IllegalArgumentException("模拟制品根目录不能为空");
         this.root = root.toAbsolutePath().normalize();
         this.store = java.util.Objects.requireNonNull(store, "store");
+        this.volumeStore = null;
+        this.storageVolumeId = null;
+        this.mapper = mapper;
+    }
+
+    /** 多卷模式：模拟 ZIP 也必须走与真实备份一致的目标卷。 */
+    public MetadataSimulationArtifactWriter(Path root, VolumeArtifactStore volumeStore, long storageVolumeId, ObjectMapper mapper) {
+        // 值 0 仅由 LegacyArtifactStoreVolumeAdapter 的历史测试兼容路径使用；真实路由会拒绝它。
+        if (root == null || storageVolumeId < 0) throw new IllegalArgumentException("模拟制品根目录或目标卷非法");
+        this.root = root.toAbsolutePath().normalize();
+        this.store = null;
+        this.volumeStore = java.util.Objects.requireNonNull(volumeStore, "volumeStore");
+        this.storageVolumeId = storageVolumeId;
         this.mapper = mapper;
     }
 
@@ -108,7 +124,10 @@ public class MetadataSimulationArtifactWriter {
             }
             String packageSha256 = sha256(zip);
             long packageSize = Files.size(zip);
-            try (InputStream input = Files.newInputStream(zip)) { store.put(storageKey, input); }
+            try (InputStream input = Files.newInputStream(zip)) {
+                if (volumeStore == null) store.put(storageKey, input);
+                else volumeStore.put(storageVolumeId, storageKey, input);
+            }
             Map<String, String> hashes = new LinkedHashMap<>();
             Map<String, String> packageEntryNames = new LinkedHashMap<>();
             String emptySha256 = sha256(new byte[0]);

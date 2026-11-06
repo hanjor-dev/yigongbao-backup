@@ -6,4 +6,11 @@ public interface SpaceReservationService extends SpacePlanner {
     default SpaceReservation reserve(String capacityDomain, long bytes, long jobId) {
         return reserve(capacityDomain, bytes);
     }
+
+    /**
+     * 为指定存储卷预留空间。实现必须根据卷绑定的容量域探测，不能再回退到全局热备目录。
+     */
+    default SpaceReservation reserve(long storageVolumeId, long bytes, long jobId) {
+        return reserve("volume:" + storageVolumeId, bytes, jobId);
+    }
 }

@@ -2,6 +2,8 @@ package com.yigongbao.backup.backup;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.yigongbao.backup.storage.api.ArtifactStore;
+import com.yigongbao.backup.storage.api.LegacyArtifactStoreVolumeAdapter;
+import com.yigongbao.backup.storage.api.VolumeArtifactStore;
 import lombok.extern.slf4j.Slf4j;
 import com.yigongbao.backup.common.BusinessLogFormatter;
 
@@ -25,6 +27,7 @@ public final class OrderBackupPipeline {
     private final OnlineManifestClient manifests;
     private final CosObjectClient cos;
     private final ArtifactStore store;
+    private final VolumeArtifactStore volumeStore;
     private final ObjectMapper mapper;
 
     public OrderBackupPipeline(OnlineManifestClient manifests, CosObjectClient cos,
@@ -32,6 +35,17 @@ public final class OrderBackupPipeline {
         this.manifests = manifests;
         this.cos = cos;
         this.store = store;
+        this.volumeStore = null;
+        this.mapper = mapper;
+    }
+
+    /** 多卷模式构造器；订单任务必须在创建时提供并固化目标卷。 */
+    public OrderBackupPipeline(OnlineManifestClient manifests, CosObjectClient cos,
+                               VolumeArtifactStore volumeStore, ObjectMapper mapper) {
+        this.manifests = manifests;
+        this.cos = cos;
+        this.store = null;
+        this.volumeStore = volumeStore;
         this.mapper = mapper;
     }
 
@@ -60,13 +74,30 @@ public final class OrderBackupPipeline {
     /** 按备份任务日期和订单业务单号生成稳定的订单包存储键。 */
     public Result backupWithResult(String orderId, BackupManifest manifest, String backupDate, String orderNo,
                                    AssetProgressListener listener, Runnable beforeCommit) {
+        return backupWithResult(orderId, manifest, backupDate, orderNo, listener, beforeCommit, null);
+    }
+
+    /** 按已固化的目标存储卷写入订单 ZIP，避免任务运行期间跟随默认热备目录漂移。 */
+    public Result backupWithResult(String orderId, BackupManifest manifest, String backupDate, String orderNo,
+                                   AssetProgressListener listener, Runnable beforeCommit, Long storageVolumeId) {
         if (manifest == null || manifest.assets() == null) throw new IllegalStateException("订单清单不存在");
+        if (volumeStore != null && (storageVolumeId == null || storageVolumeId < 1)
+                && !(volumeStore instanceof LegacyArtifactStoreVolumeAdapter)) {
+            throw new IllegalArgumentException("多卷订单备份必须指定目标存储卷");
+        }
         AssetProgressListener progressListener = listener == null ? AssetProgressListener.NOOP : listener;
         long startedAt = System.nanoTime();
         long totalBytes = manifest.assets().stream().mapToLong(BackupManifest.Asset::size).sum();
         String normalizedDate = normalizeBackupDate(backupDate);
         String safeOrderNo = safeOrderPart(orderNo, orderId);
-        Path staging = store.root().resolve(".staging").resolve(orderId + "-" + System.nanoTime());
+        Path staging;
+        try {
+            staging = volumeStore == null
+                    ? store.root().resolve(".staging").resolve(orderId + "-" + System.nanoTime())
+                    : volumeStore.resolve(storageVolumeId, ".staging/" + orderId + "-" + System.nanoTime());
+        } catch (IOException exception) {
+            throw new IllegalStateException("无法创建订单备份暂存目录", exception);
+        }
         log.info("订单备份流水线开始｜订单ID={}｜文件数量={}｜文件总容量={}",
                 orderId, manifest.assets().size(), BusinessLogFormatter.bytes(totalBytes));
         try {
@@ -145,7 +176,10 @@ public final class OrderBackupPipeline {
                     + safeOrderPart(orderId, "order") + ".zip";
             String packageSha256 = sha256(zip);
             long packageSize = Files.size(zip);
-            try (InputStream in = Files.newInputStream(zip)) { store.put(storageKey, in); }
+            try (InputStream in = Files.newInputStream(zip)) {
+                if (volumeStore == null) store.put(storageKey, in);
+                else volumeStore.put(storageVolumeId, storageKey, in);
+            }
             log.info("订单备份制品提交完成｜订单ID={}｜本地存储键={}｜压缩包容量={}｜包摘要={}｜总执行耗时={}",
                     orderId, storageKey, BusinessLogFormatter.bytes(packageSize),
                     BusinessLogFormatter.shortHash(packageSha256),

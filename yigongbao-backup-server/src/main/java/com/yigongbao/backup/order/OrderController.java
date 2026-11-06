@@ -4,7 +4,10 @@ import cn.dev33.satoken.stp.StpUtil;
 import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
 import com.baomidou.mybatisplus.extension.plugins.pagination.Page;
 import com.yigongbao.backup.common.ApiResponse;
+import com.yigongbao.backup.storage.api.VolumeArtifactStore;
 import com.yigongbao.backup.storage.api.ArtifactStore;
+import com.yigongbao.backup.storage.api.LegacyArtifactStoreVolumeAdapter;
+import com.yigongbao.backup.storage.volume.StorageVolumeUnavailableException;
 import org.springframework.core.io.InputStreamResource;
 import org.springframework.http.HttpHeaders;
 import org.springframework.http.ContentDisposition;
@@ -38,11 +41,11 @@ public class OrderController {
     private final OrderSnapshotMapper snapshots;
     private final AssetMapper assets;
     private final OrderPackageMapper packages;
-    private final ArtifactStore store;
+    private final VolumeArtifactStore store;
 
     /** 显式声明唯一注入构造器，避免多构造器导致 Spring 回退查找无参构造器。 */
     public OrderController(OrderSnapshotMapper snapshots, AssetMapper assets,
-                           OrderPackageMapper packages, ArtifactStore store) {
+                           OrderPackageMapper packages, VolumeArtifactStore store) {
         this.snapshots = snapshots;
         this.assets = assets;
         this.packages = packages;
@@ -51,6 +54,12 @@ public class OrderController {
 
     private static String rid() {
         return UUID.randomUUID().toString();
+    }
+
+    /** 兼容既有列表查询测试；实际下载链路通过多卷构造器注入。 */
+    public OrderController(OrderSnapshotMapper snapshots, AssetMapper assets,
+                           OrderPackageMapper packages, ArtifactStore store) {
+        this(snapshots, assets, packages, new LegacyArtifactStoreVolumeAdapter(store));
     }
 
     /**
@@ -203,22 +212,22 @@ public class OrderController {
                 com.baomidou.mybatisplus.core.toolkit.Wrappers.<OrderPackageEntity>lambdaQuery()
                         .eq(OrderPackageEntity::getSnapshotId, id)
                         .eq(OrderPackageEntity::getStatus, "AVAILABLE").last("limit 1"));
-        if (orderPackage == null || orderPackage.getStorageKey() == null) return ResponseEntity.notFound().build();
+        if (orderPackage == null || orderPackage.getStorageKey() == null || orderPackage.getStorageVolumeId() == null) return ResponseEntity.notFound().build();
         String code = snapshot.getOrderCode() == null ? String.valueOf(snapshot.getSourceOrderId()) : snapshot.getOrderCode();
         String key = orderPackage.getStorageKey();
-        Path packagePath = store.root().resolve(key).normalize();
-        if (!packagePath.startsWith(store.root()) || !Files.isRegularFile(packagePath)) {
-            return ResponseEntity.notFound().build();
-        }
         try {
+            Path packagePath = store.resolve(orderPackage.getStorageVolumeId(), key);
+            if (!Files.isRegularFile(packagePath)) return ResponseEntity.notFound().build();
             long size = Files.size(packagePath);
-            InputStreamResource body = new InputStreamResource(store.open(key));
+            InputStreamResource body = new InputStreamResource(store.open(orderPackage.getStorageVolumeId(), key));
             return ResponseEntity.ok()
                     .contentType(MediaType.APPLICATION_OCTET_STREAM)
                     .contentLength(size)
                     .header(HttpHeaders.CONTENT_DISPOSITION,
                             ContentDisposition.attachment().filename(downloadFileName(code), StandardCharsets.UTF_8).build().toString())
                     .body(body);
+        } catch (StorageVolumeUnavailableException exception) {
+            return ResponseEntity.status(409).body(ApiResponse.ok(java.util.Map.of("code", "STORAGE_VOLUME_OFFLINE", "message", exception.getMessage()), rid()));
         } catch (NoSuchFileException | FileNotFoundException exception) {
             return ResponseEntity.notFound().build();
         }

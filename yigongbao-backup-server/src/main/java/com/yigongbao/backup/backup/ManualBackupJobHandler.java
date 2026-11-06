@@ -4,7 +4,9 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import com.yigongbao.backup.job.JobEntity;
 import com.yigongbao.backup.job.JobExecutionContext;
 import com.yigongbao.backup.job.JobHandler;
+import com.yigongbao.backup.storage.api.VolumeArtifactStore;
 import com.yigongbao.backup.storage.api.ArtifactStore;
+import com.yigongbao.backup.storage.api.LegacyArtifactStoreVolumeAdapter;
 import com.yigongbao.backup.storage.api.SpacePlanner.SpaceReservation;
 import com.yigongbao.backup.storage.api.SpaceReservationService;
 import com.yigongbao.backup.common.BusinessLogFormatter;
@@ -27,12 +29,21 @@ import java.time.format.DateTimeFormatter;
 public class ManualBackupJobHandler implements JobHandler {
     private final ObjectProvider<OnlineManifestClient> manifests;
     private final ObjectProvider<CosObjectClient> cosClients;
-    private final ArtifactStore store;
+    private final VolumeArtifactStore store;
     private final ObjectMapper mapper;
     private final SpaceReservationService reservations;
     private final BackupEvidenceService backupEvidence;
     private final RuntimeConfigService configs;
     private final BackupExecutionModeProvider executionModes;
+
+    /** 保留旧单根目录构造器，供历史单元测试和未迁移任务兼容；生产容器注入多卷接口。 */
+    public ManualBackupJobHandler(ObjectProvider<OnlineManifestClient> manifests, ObjectProvider<CosObjectClient> cosClients,
+                                  ArtifactStore store, ObjectMapper mapper, SpaceReservationService reservations,
+                                  BackupEvidenceService backupEvidence, RuntimeConfigService configs,
+                                  BackupExecutionModeProvider executionModes) {
+        this(manifests, cosClients, new LegacyArtifactStoreVolumeAdapter(store), mapper, reservations,
+                backupEvidence, configs, executionModes);
+    }
 
     @Override
     public void execute(JobExecutionContext context, JobEntity job) throws Exception {
@@ -242,16 +253,19 @@ public class ManualBackupJobHandler implements JobHandler {
                 "已识别任务目标订单｜订单ID=" + orderId + "｜订单号=" + businessValue(manifest, "orderNo", "orderCode", "publicOrderCode", "code"),
                 java.util.Map.of("sourceOrderId", orderId, "orderNo", businessValue(manifest, "orderNo", "orderCode", "publicOrderCode", "code")));
         if (executionMode == BackupExecutionMode.METADATA_SIMULATION) {
+            long targetStorageVolumeId = requireTargetVolume(job);
             MetadataSimulationArtifactWriter writer = new MetadataSimulationArtifactWriter(
-                    resolveSimulationRoot(simulationRoot), store, mapper);
+                    resolveSimulationRoot(simulationRoot), store, targetStorageVolumeId, mapper);
             String orderNo = businessValue(manifest, "orderNo", "orderCode", "publicOrderCode", "code");
             // Manifest 已成功获取后立即固化业务快照与预计规模；即使本地制品生成失败，详情页仍可定位具体订单。
             context.orderMetadata(orderId, null, orderNo, manifest.orderCreatedAt(),
                     businessValue(manifest, "status", "statusCode"), json(manifest.order()));
             SimulationArtifactResult result = writer.write(job.getId(), job.getJobNo(), backupDate,
                     orderId, orderNo, manifest);
-            com.yigongbao.backup.order.OrderSnapshotEntity snapshot = backupEvidence.saveSimulation(
-                    orderId, manifest, result.packageResult());
+            // 旧单根目录构造器仍保留旧方法签名，避免历史测试/迁移任务意外写入哨兵卷号。
+            com.yigongbao.backup.order.OrderSnapshotEntity snapshot = isLegacyStore()
+                    ? backupEvidence.saveSimulation(orderId, manifest, result.packageResult())
+                    : backupEvidence.saveSimulation(orderId, manifest, result.packageResult(), targetStorageVolumeId);
             backupEvidence.markSimulationAvailable(orderId);
             // simulationPath 字段保存最终热备 ZIP 的 storageKey，不保存已清理的临时解压目录。
             context.orderSimulationMetadata(result.expectedFileCount(), result.expectedBytes(), result.storageKey());
@@ -269,8 +283,10 @@ public class ManualBackupJobHandler implements JobHandler {
         }
         int reservationPercent = configs.getInt("storage.backup-reservation-percent", 300, 100);
         long reserveBytes = BackupWorkingSpaceEstimator.estimate(manifest, reservationPercent);
-        SpaceReservation reservation = reservations.reserve("hot",
-                reserveBytes, job.getId());
+        long targetStorageVolumeId = requireTargetVolume(job);
+        SpaceReservation reservation = isLegacyStore()
+                ? reservations.reserve("hot", reserveBytes, job.getId())
+                : reservations.reserve(targetStorageVolumeId, reserveBytes, job.getId());
         log.info("订单备份空间预留完成｜任务ID={}｜订单ID={}｜预留容量={}｜预留比例={}％",
                 job.getId(), orderId, BusinessLogFormatter.bytes(reserveBytes), reservationPercent);
         java.util.Set<String> failedAssets = new java.util.HashSet<>();
@@ -312,12 +328,14 @@ public class ManualBackupJobHandler implements JobHandler {
                             log.warn("任务文件处理失败｜任务ID={}｜订单ID={}｜文件ID={}｜异常类型={}｜异常原因={}",
                                     job.getId(), orderId, asset.assetId(), failure.getClass().getSimpleName(), safe(failure));
                         }
-                    }, () -> context.safePoint("BACKUP_COMMIT_" + orderId, 0));
+                    }, () -> context.safePoint("BACKUP_COMMIT_" + orderId, 0), targetStorageVolumeId);
             generatedPackage = result;
             log.info("订单本地制品生成完成｜任务ID={}｜订单ID={}｜压缩包容量={}｜本地存储键={}｜包摘要={}",
                     job.getId(), orderId, BusinessLogFormatter.bytes(result.packageSize()), result.storageKey(),
                     BusinessLogFormatter.shortHash(result.packageSha256()));
-            com.yigongbao.backup.order.OrderSnapshotEntity snapshot = backupEvidence.save(orderId, manifest, result);
+            com.yigongbao.backup.order.OrderSnapshotEntity snapshot = isLegacyStore()
+                    ? backupEvidence.save(orderId, manifest, result)
+                    : backupEvidence.save(orderId, manifest, result, targetStorageVolumeId);
             context.orderInfo(orderId, "BACKUP_PACKAGE_CREATED", "本地打包",
                     "订单压缩包生成完成｜ZIP实际容量=" + BusinessLogFormatter.bytes(result.packageSize()),
                     java.util.Map.of("storageKey", result.storageKey(), "packageBytes", result.packageSize(), "packageSha256", result.packageSha256(), "snapshotId", snapshot.getId()));
@@ -498,6 +516,20 @@ public class ManualBackupJobHandler implements JobHandler {
         }
         if (executionModes.simulationRoot() != null) return executionModes.simulationRoot();
         throw new IllegalStateException("模拟任务缺少制品目录快照，且当前环境未配置 BACKUP_SIMULATION_ROOT");
+    }
+
+    /** 历史任务可通过迁移补齐；新任务未锁定卷时禁止写入，避免回退到单根目录。 */
+    private long requireTargetVolume(JobEntity job) {
+        // 旧的单根目录构造器只被既有单元测试使用；生产 Spring 注入的是 VolumeArtifactStoreRouter。
+        if (isLegacyStore()) return 0L;
+        if (job.getTargetStorageVolumeId() == null || job.getTargetStorageVolumeId() < 1) {
+            throw new IllegalStateException("订单备份任务未固化目标存储卷");
+        }
+        return job.getTargetStorageVolumeId();
+    }
+
+    private boolean isLegacyStore() {
+        return store instanceof LegacyArtifactStoreVolumeAdapter;
     }
 
     public record Payload(List<Long> sourceOrderIds, int orderTotal, String backupDate,

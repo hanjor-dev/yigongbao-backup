@@ -13,6 +13,8 @@ import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Service;
 import org.springframework.core.env.Environment;
 import com.yigongbao.backup.config.RuntimeConfigService;
+import com.yigongbao.backup.storage.volume.ActiveVolumeSelectionService;
+import com.yigongbao.backup.storage.volume.StorageVolumeEntity;
 
 import java.util.List;
 import java.time.LocalDateTime;
@@ -33,6 +35,7 @@ public class ScheduledBackupService {
     private final JobOrderMapper jobOrders;
     private final Environment environment;
     private final BackupExecutionModeProvider executionModes;
+    private final ActiveVolumeSelectionService activeVolumes;
     private volatile long lastReconcileAt;
     private volatile LocalDateTime previousSchedulePollAt;
 
@@ -40,12 +43,13 @@ public class ScheduledBackupService {
                                   OrderSnapshotMapper snapshots, PersistentJobCoordinator coordinator,
                                   RuntimeConfigService runtimeConfig, BackupScheduleCheckpointService checkpoint,
                                   Environment environment, JobOrderMapper jobOrders,
-                                  BackupExecutionModeProvider executionModes) {
+                                  BackupExecutionModeProvider executionModes, ActiveVolumeSelectionService activeVolumes) {
         this.candidates = candidates; this.mapper = mapper; this.snapshots = snapshots;
         this.coordinator = coordinator; this.runtimeConfig = runtimeConfig; this.checkpoint = checkpoint;
         this.environment = environment;
         this.jobOrders = jobOrders;
         this.executionModes = executionModes;
+        this.activeVolumes = activeVolumes;
     }
 
     /** 定时入口；线上适配器未启用时由配置条件保证不会实例化。 */
@@ -122,8 +126,9 @@ public class ScheduledBackupService {
                     executionModes.simulationRoot() == null ? null : executionModes.simulationRoot().toString())); }
             catch (Exception exception) { throw new IllegalStateException("定时备份任务参数序列化失败", exception); }
             String dailyPayload = now.toLocalDate() + ":" + payload;
+            StorageVolumeEntity targetVolume = activeVolumes.requireActiveHotVolume();
             com.yigongbao.backup.job.JobEntity created = coordinator.create(
-                    "ORDER_BACKUP", JobIdempotency.key("ORDER_BACKUP", 0L, dailyPayload), 0L, payload);
+                    "ORDER_BACKUP", JobIdempotency.key("ORDER_BACKUP", 0L, dailyPayload), 0L, payload, targetVolume.getId());
             log.info("定时备份任务已创建｜任务ID={}｜任务编号={}｜订单总数={}｜计划日期={}｜首个订单ID={}｜最后订单ID={}",
                     created.getId(), created.getJobNo(), orderIds.size(), now.toLocalDate(),
                     orderIds.iterator().next(), last(orderIds));

@@ -24,17 +24,30 @@ public class BackupEvidenceService {
     /** 幂等覆盖同一订单的当前备份证据；外部文件已完整提交后才调用。 */
     @Transactional
     public OrderSnapshotEntity save(Long orderId, BackupManifest manifest, OrderBackupPipeline.Result result) {
-        return save(orderId, manifest, result, BackupExecutionMode.REAL);
+        return save(orderId, manifest, result, BackupExecutionMode.REAL, null);
+    }
+
+    /** 保存订单包时固化实际写入卷，不能在下载或恢复时重新推导默认路径。 */
+    @Transactional
+    public OrderSnapshotEntity save(Long orderId, BackupManifest manifest, OrderBackupPipeline.Result result, long storageVolumeId) {
+        return save(orderId, manifest, result, BackupExecutionMode.REAL, storageVolumeId);
     }
 
     /** 保存完整可查询、可下载但不可用于线上恢复的模拟证据。 */
     @Transactional
     public OrderSnapshotEntity saveSimulation(Long orderId, BackupManifest manifest, OrderBackupPipeline.Result result) {
-        return save(orderId, manifest, result, BackupExecutionMode.METADATA_SIMULATION);
+        return save(orderId, manifest, result, BackupExecutionMode.METADATA_SIMULATION, null);
+    }
+
+    /** 模拟模式同样保存实际 ZIP 所属卷，确保下载链路与真实模式一致。 */
+    @Transactional
+    public OrderSnapshotEntity saveSimulation(Long orderId, BackupManifest manifest, OrderBackupPipeline.Result result,
+                                              long storageVolumeId) {
+        return save(orderId, manifest, result, BackupExecutionMode.METADATA_SIMULATION, storageVolumeId);
     }
 
     private OrderSnapshotEntity save(Long orderId, BackupManifest manifest, OrderBackupPipeline.Result result,
-                                     BackupExecutionMode mode) {
+                                     BackupExecutionMode mode, Long storageVolumeId) {
         Map<String, Object> rawOrder = manifest.orderRaw() == null ? Map.of() : manifest.orderRaw();
         Map<String, Object> displayOrder = manifest.orderDisplay() == null ? rawOrder : manifest.orderDisplay();
         OrderSnapshotEntity snapshot = snapshots.selectOne(Wrappers.<OrderSnapshotEntity>lambdaQuery()
@@ -75,6 +88,8 @@ public class BackupEvidenceService {
                 .eq(OrderPackageEntity::getSnapshotId, snapshot.getId()).last("limit 1"));
         if (pkg == null) pkg = new OrderPackageEntity();
         pkg.setSnapshotId(snapshot.getId());
+        // 0 是历史单根目录测试适配器的内部哨兵，不得落入真实的存储卷外键。
+        if (storageVolumeId != null && storageVolumeId > 0) pkg.setStorageVolumeId(storageVolumeId);
         pkg.setBackupMode(mode.name());
         pkg.setStorageKey(result.storageKey());
         pkg.setPackageFormat("ORDER_ZIP64_V1");
