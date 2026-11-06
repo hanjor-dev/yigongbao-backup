@@ -14,6 +14,14 @@ public class JobOrderEntity extends BaseEntity {
     private Long jobId;
     private Long sourceOrderId;
     private Long snapshotId;
+    /** 恢复任务创建时固化的订单包，避免重试时改读当前默认卷。 */
+    private Long sourcePackageId;
+    /** 恢复任务创建时固化的源存储卷。 */
+    private Long sourceStorageVolumeId;
+    /** 恢复任务创建时固化的卷内相对路径。 */
+    private String sourceStorageKey;
+    /** 恢复任务创建时固化的订单包完整性校验值。 */
+    private String sourcePackageSha256;
     private String orderCode;
     private String orderCreatedAt;
     private String sourceStatus;

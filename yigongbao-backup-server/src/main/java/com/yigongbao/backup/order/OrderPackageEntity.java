@@ -12,6 +12,8 @@ import java.time.LocalDateTime;
 @EqualsAndHashCode(callSuper = true)
 @TableName("bk_order_package")
 public class OrderPackageEntity extends BaseEntity {
+    /** 订单包实际所在存储卷。 */
+    private Long storageVolumeId;
     private String backupMode;
     private Long snapshotId;
     private String storageKey;

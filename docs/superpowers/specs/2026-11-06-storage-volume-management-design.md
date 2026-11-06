@@ -177,7 +177,7 @@ supplements/20260707000021/design-file.zip
 
 - `bk_order_package` 增加 `storage_volume_id`；
 - `bk_supplement_file` 增加 `storage_volume_id`；
-- `bk_artifact_location` 增加或改用 `storage_volume_id`，不再仅依赖 `location_type + location_ref_id` 表达真实路径；
+- 现有 `bk_artifact_copy` 增加 `storage_volume_id`，不再仅依赖 `location_type + location_ref_id` 表达真实路径；该表作为多副本位置台账，避免引入重复的 `bk_artifact_location` 表。
 - 为 `(storage_volume_id, storage_key)` 建立唯一索引；原仅按 `storage_key` 的唯一约束需迁移；
 - 历史数据迁移为一个“legacy-hot”卷，根目录取迁移执行前已生效的热备根路径；迁移完成后不得切换该卷路径来改变历史文件位置。
 
@@ -249,4 +249,3 @@ supplements/20260707000021/design-file.zip
 3. 是否准备多个预先纳管的备用热备卷，以启用自动切换。
 4. 冷备盘是否保留稳定卷标记文件，及其插拔、盘符分配和运维登记流程。
 5. NAS 容量、配额、网络带宽和单文件大小限制。
-
