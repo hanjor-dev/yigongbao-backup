@@ -6,8 +6,10 @@ import java.nio.file.Files;
 import java.nio.file.Path;
 import java.time.Duration;
 import java.time.Instant;
+import org.springframework.stereotype.Service;
 
 /** 存储卷健康探测服务；探测失败仅更新健康判断，不推断文件是否丢失。 */
+@Service
 public class StorageVolumeHealthService {
     /** 读取目录可访问性、容量与可写状态。 */
     public HealthSnapshot probe(StorageVolumeEntity volume) {

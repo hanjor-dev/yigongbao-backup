@@ -8,6 +8,7 @@ import java.nio.file.Path;
 import java.util.ArrayList;
 import java.util.Collection;
 import java.util.List;
+import org.springframework.stereotype.Service;
 
 /**
  * 发现 Windows 服务账号可见的挂载点。
@@ -15,6 +16,7 @@ import java.util.List;
  * <p>发现过程严格只读：不会创建受控目录、卷标记或数据库记录；这些动作只能由
  * 管理员后续纳管操作执行。</p>
  */
+@Service
 public class StorageVolumeDiscoveryService {
     private static final String MANAGED_DIRECTORY = "yigongbao-backup";
 

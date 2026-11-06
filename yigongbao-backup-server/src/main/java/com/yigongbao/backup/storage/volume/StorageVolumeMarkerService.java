@@ -8,8 +8,10 @@ import java.nio.file.Files;
 import java.nio.file.Path;
 import java.time.Instant;
 import java.util.UUID;
+import org.springframework.stereotype.Service;
 
 /** 受控存储根目录的卷身份标记读写服务。 */
+@Service
 public class StorageVolumeMarkerService {
     private static final String MARKER_FILENAME = ".yigongbao-volume.json";
     private final ObjectMapper objectMapper = new ObjectMapper();
