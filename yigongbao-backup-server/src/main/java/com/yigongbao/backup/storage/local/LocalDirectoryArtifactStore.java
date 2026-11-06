@@ -24,6 +24,8 @@ public final class LocalDirectoryArtifactStore implements ArtifactStore {
         }
     }
     public InputStream open(String relativePath) throws IOException { return Files.newInputStream(safe(relativePath)); }
+    /** 解析卷内路径但不打开文件，供下载响应和受控临时处理使用。 */
+    public Path resolve(String relativePath) { return safe(relativePath); }
     public Stream<Path> list(String relativeDirectory) throws IOException { return Files.list(safe(relativeDirectory)); }
     public void move(String source, String target) throws IOException {
         Path from = safe(source), to = safe(target); Files.createDirectories(to.getParent());
