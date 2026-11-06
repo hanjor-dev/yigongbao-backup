@@ -47,3 +47,20 @@ test('admin navigation has a runtime guard and job status normalization', () => 
   assert.match(consoleSource, /!isAdmin\.value/);
   assert.match(jobTable, /job\.state \|\| job\.status/);
 });
+
+test('restore task page passes unwrapped arrays to Element Plus tables', () => {
+  const restoreView = fs.readFileSync(path.join(root, 'src', 'views', 'RestoreView.vue'), 'utf8');
+  assert.match(restoreView, /const \{[\s\S]*tasks,[\s\S]*\} = useRestoreTasks\(\)/);
+  assert.match(restoreView, /:tasks="tasks"/);
+  assert.doesNotMatch(restoreView, /:tasks="restore\.tasks"/);
+});
+
+test('restore task detail provides task and order execution log entry points', () => {
+  const detail = fs.readFileSync(path.join(root, 'src', 'components', 'restores', 'RestoreTaskDetail.vue'), 'utf8');
+  const composable = fs.readFileSync(path.join(root, 'src', 'composables', 'useRestoreTasks.js'), 'utf8');
+  assert.match(detail, /查看任务日志/);
+  assert.match(detail, /查看订单日志/);
+  assert.match(detail, /el-dialog/);
+  assert.match(composable, /\$\{base\}\/logs\?current=/);
+  assert.match(composable, /\$\{base\}\/orders\/\$\{encodeURIComponent\(scope\.sourceOrderId\)\}\/logs/);
+});

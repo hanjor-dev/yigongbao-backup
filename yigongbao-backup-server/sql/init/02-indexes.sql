@@ -68,6 +68,8 @@ CALL add_backup_index_if_missing('bk_job_order','uk_bk_job_order','CREATE UNIQUE
 CALL add_backup_index_if_missing('bk_job_order','idx_bk_job_order_snapshot','CREATE INDEX idx_bk_job_order_snapshot ON bk_job_order(snapshot_id)');
 CALL add_backup_index_if_missing('bk_job_file','uk_bk_job_file_step','CREATE UNIQUE INDEX uk_bk_job_file_step ON bk_job_file(job_id,asset_identity,step)');
 CALL add_backup_index_if_missing('bk_job_file','idx_bk_job_file_status','CREATE INDEX idx_bk_job_file_status ON bk_job_file(job_id,status,id)');
+CALL add_backup_index_if_missing('bk_job_execution_log','idx_bk_job_log_task_time','CREATE INDEX idx_bk_job_log_task_time ON bk_job_execution_log(job_id,occurred_at,id)');
+CALL add_backup_index_if_missing('bk_job_execution_log','idx_bk_job_log_order_time','CREATE INDEX idx_bk_job_log_order_time ON bk_job_execution_log(job_id,source_order_id,occurred_at,id)');
 CALL add_backup_index_if_missing('bk_lock','uk_bk_lock_key','CREATE UNIQUE INDEX uk_bk_lock_key ON bk_lock(lock_key)');
 CALL add_backup_index_if_missing('bk_lock','idx_bk_lock_lease','CREATE INDEX idx_bk_lock_lease ON bk_lock(lease_until)');
 

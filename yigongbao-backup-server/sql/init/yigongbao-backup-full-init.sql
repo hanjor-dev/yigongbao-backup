@@ -94,7 +94,7 @@ CREATE TABLE IF NOT EXISTS bk_order_snapshot (
  source_status VARCHAR(32) NOT NULL COMMENT '订单业务状态兼容字段', classic_case TINYINT NOT NULL DEFAULT 0 COMMENT '经典案例快照', is_urgent INT NULL COMMENT '是否加急', is_postal INT NULL COMMENT '是否邮寄', postal_address VARCHAR(1024) NULL COMMENT '邮寄地址',
  designer_id BIGINT NULL COMMENT '设计师ID', designer_name VARCHAR(128) NULL COMMENT '设计师姓名', expected_delivery_date DATETIME(3) NULL COMMENT '期望交付时间', estimated_cost DECIMAL(18,2) NULL COMMENT '预估费用', data_evaluation_opinion TEXT NULL COMMENT '影像数据评估意见', designer_remark TEXT NULL COMMENT '设计师备注',
  phase INT NULL COMMENT '订单阶段', phase_name VARCHAR(64) NULL COMMENT '订单阶段名称', status INT NULL COMMENT '订单状态', status_name VARCHAR(128) NULL COMMENT '订单状态名称', status_color_json JSON NULL COMMENT '状态颜色对象', regional_audit_json JSON NULL COMMENT '区域审核对象', design_audit_json JSON NULL COMMENT '设计审核对象',
- design_start_time DATETIME(3) NULL COMMENT '设计开始时间', design_submit_time DATETIME(3) NULL COMMENT '设计提交时间', production_start_time DATETIME(3) NULL COMMENT '生产开始时间', production_end_time DATETIME(3) NULL COMMENT '生产结束时间', source_version INT NULL COMMENT '线上订单版本', rebuild_project_list_json JSON NULL COMMENT '重建项目列表',
+ design_start_time DATETIME(3) NULL COMMENT '设计开始时间', design_submit_time DATETIME(3) NULL COMMENT '设计提交时间', production_start_time DATETIME(3) NULL COMMENT '生产开始时间', production_end_time DATETIME(3) NULL COMMENT '生产结束时间', source_version INT NULL COMMENT '线上订单版本', rebuild_project_list_json JSON NULL COMMENT '重建项目列表', rebuild_project_names TEXT NULL COMMENT '重建项目名称检索文本',
  order_raw_json JSON NOT NULL COMMENT 'order_main全列原始快照', display_json JSON NOT NULL COMMENT '列表非操作列展示快照', related_business_json JSON NOT NULL COMMENT '关联业务快照', manifest_revision VARCHAR(128) NOT NULL COMMENT '清单修订号', manifest_sha256 CHAR(64) NOT NULL COMMENT 'JCS清单哈希', snapshot_status VARCHAR(32) NOT NULL COMMENT 'PENDING_RECEIPT/AVAILABLE/RECEIPT_SUSPENDED/CORRUPT', backup_completed_at DATETIME(3) NOT NULL COMMENT '本地订单包写入时间', latest_verified_at DATETIME(3) NULL COMMENT '最近校验时间', cloud_rollup VARCHAR(32) NOT NULL COMMENT '云端聚合状态', hot_rollup VARCHAR(32) NOT NULL COMMENT '热备聚合状态', cold_rollup VARCHAR(32) NOT NULL COMMENT '冷备聚合状态',
  create_time DATETIME(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3) COMMENT '创建时间', update_time DATETIME(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3) ON UPDATE CURRENT_TIMESTAMP(3) COMMENT '更新时间', create_by BIGINT NULL COMMENT '创建人ID', update_by BIGINT NULL COMMENT '更新人ID', is_deleted TINYINT NOT NULL DEFAULT 0 COMMENT '逻辑删除', PRIMARY KEY(id)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci COMMENT='不可变订单快照';
@@ -158,6 +158,11 @@ CREATE TABLE IF NOT EXISTS bk_job_file (
  id BIGINT NOT NULL AUTO_INCREMENT COMMENT '主键ID', job_id BIGINT NOT NULL COMMENT '任务ID', source_order_id BIGINT NULL COMMENT '线上订单ID', asset_identity VARCHAR(255) NOT NULL COMMENT '资产身份', step VARCHAR(64) NOT NULL COMMENT '文件步骤', status VARCHAR(32) NOT NULL COMMENT '步骤状态', bytes_done BIGINT NOT NULL DEFAULT 0 COMMENT '完成字节', bytes_total BIGINT NOT NULL DEFAULT 0 COMMENT '总字节', platform VARCHAR(64) NULL COMMENT 'COS平台', bucket VARCHAR(255) NULL COMMENT 'Bucket', object_key VARCHAR(1024) NULL COMMENT '对象键', version_identity VARCHAR(255) NULL COMMENT '版本身份', temp_path VARCHAR(1024) NULL COMMENT '临时路径', sha256 CHAR(64) NULL COMMENT 'SHA-256', failure_code VARCHAR(64) NULL COMMENT '失败码', failure_message VARCHAR(1024) NULL COMMENT '失败信息',
  create_time DATETIME(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3) COMMENT '创建时间', update_time DATETIME(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3) ON UPDATE CURRENT_TIMESTAMP(3) COMMENT '更新时间', create_by BIGINT NULL COMMENT '创建人ID', update_by BIGINT NULL COMMENT '更新人ID', is_deleted TINYINT NOT NULL DEFAULT 0 COMMENT '逻辑删除；一期不删除', PRIMARY KEY(id)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci COMMENT='任务文件级证据';
+
+CREATE TABLE IF NOT EXISTS bk_job_execution_log (
+ id BIGINT NOT NULL AUTO_INCREMENT COMMENT '主键ID', job_id BIGINT NOT NULL COMMENT '任务ID', source_order_id BIGINT NULL COMMENT '线上订单ID；空表示任务级日志', log_level VARCHAR(16) NOT NULL COMMENT 'INFO/WARN/ERROR', stage VARCHAR(64) NOT NULL COMMENT '可读执行阶段', event_code VARCHAR(64) NOT NULL COMMENT '稳定事件编码', message TEXT NOT NULL COMMENT '中文日志正文（完整保留）', detail_json JSON NULL COMMENT '已脱敏结构化明细', occurred_at DATETIME(3) NOT NULL COMMENT '事件实际发生时间', version INT NOT NULL DEFAULT 0 COMMENT '乐观锁版本',
+ create_time DATETIME(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3) COMMENT '创建时间', update_time DATETIME(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3) ON UPDATE CURRENT_TIMESTAMP(3) COMMENT '更新时间', create_by BIGINT NULL COMMENT '创建人ID', update_by BIGINT NULL COMMENT '更新人ID', is_deleted TINYINT NOT NULL DEFAULT 0 COMMENT '逻辑删除；一期不删除', PRIMARY KEY(id)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci COMMENT='任务执行过程日志';
 
 CREATE TABLE IF NOT EXISTS bk_lock (
  id BIGINT NOT NULL AUTO_INCREMENT COMMENT '主键ID', lock_key VARCHAR(255) NOT NULL COMMENT '锁键', holder_job_id BIGINT NULL COMMENT '持有任务ID', lease_owner VARCHAR(128) NOT NULL COMMENT '租约持有者', lease_until DATETIME(3) NOT NULL COMMENT '租约截止', fencing_token BIGINT NOT NULL COMMENT '单调隔离令牌', version INT NOT NULL DEFAULT 0 COMMENT '乐观锁版本',
@@ -239,7 +244,7 @@ CREATE TABLE IF NOT EXISTS cos_delete_permit (
  create_time DATETIME(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3) COMMENT '创建时间', update_time DATETIME(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3) ON UPDATE CURRENT_TIMESTAMP(3) COMMENT '更新时间', create_by BIGINT NULL COMMENT '创建人ID', update_by BIGINT NULL COMMENT '更新人ID', is_deleted TINYINT NOT NULL DEFAULT 0 COMMENT '逻辑删除', PRIMARY KEY(id)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci COMMENT='COS删除授权';
 
--- 执行后验证：应返回 29；所有表均应包含六个公共字段。
+-- 执行后验证：应返回 30；所有表均应包含六个公共字段。
 SELECT COUNT(*) AS local_domain_table_count FROM information_schema.tables WHERE table_schema=DATABASE() AND table_name LIKE 'bk\_%';
 SELECT t.table_name FROM information_schema.tables t WHERE t.table_schema=DATABASE() AND t.table_name LIKE 'bk\_%'
 AND EXISTS (SELECT 1 FROM (SELECT 'id' c UNION ALL SELECT 'create_time' UNION ALL SELECT 'update_time' UNION ALL SELECT 'create_by' UNION ALL SELECT 'update_by' UNION ALL SELECT 'is_deleted') required_column
@@ -322,6 +327,8 @@ CALL add_backup_index_if_missing('bk_job_order','uk_bk_job_order','CREATE UNIQUE
 CALL add_backup_index_if_missing('bk_job_order','idx_bk_job_order_snapshot','CREATE INDEX idx_bk_job_order_snapshot ON bk_job_order(snapshot_id)');
 CALL add_backup_index_if_missing('bk_job_file','uk_bk_job_file_step','CREATE UNIQUE INDEX uk_bk_job_file_step ON bk_job_file(job_id,asset_identity,step)');
 CALL add_backup_index_if_missing('bk_job_file','idx_bk_job_file_status','CREATE INDEX idx_bk_job_file_status ON bk_job_file(job_id,status,id)');
+CALL add_backup_index_if_missing('bk_job_execution_log','idx_bk_job_log_task_time','CREATE INDEX idx_bk_job_log_task_time ON bk_job_execution_log(job_id,occurred_at,id)');
+CALL add_backup_index_if_missing('bk_job_execution_log','idx_bk_job_log_order_time','CREATE INDEX idx_bk_job_log_order_time ON bk_job_execution_log(job_id,source_order_id,occurred_at,id)');
 CALL add_backup_index_if_missing('bk_lock','uk_bk_lock_key','CREATE UNIQUE INDEX uk_bk_lock_key ON bk_lock(lock_key)');
 CALL add_backup_index_if_missing('bk_lock','idx_bk_lock_lease','CREATE INDEX idx_bk_lock_lease ON bk_lock(lease_until)');
 
@@ -442,7 +449,7 @@ FROM (
     UNION ALL SELECT 'cold.import-root','冷备导入区目录','COLD_ARCHIVE','冷备归档与导入','PATH','D:/yigongbao-backup/cold-import',NULL,'管理员复制冷备大压缩包后的受控扫描目录。',NULL
     UNION ALL SELECT 'cold.max-import-bytes','最大导入解压量（字节）','COLD_ARCHIVE','冷备归档与导入','LONG','4398046511104',NULL,'单个冷备导入任务允许解压的总量，默认4TiB。',NULL
     UNION ALL SELECT 'restore.enabled','线上恢复开关','ONLINE_RESTORE','线上恢复策略','BOOLEAN','true','[{"label":"启用","value":"true"},{"label":"停用","value":"false"}]','控制管理员能否创建线上恢复任务。',NULL
-    UNION ALL SELECT 'restore.conflict-policy','恢复冲突策略','ONLINE_RESTORE','线上恢复策略','ENUM','KEEP_ONLINE','[{"label":"保留线上文件","value":"KEEP_ONLINE"},{"label":"备份覆盖线上","value":"OVERWRITE_ONLINE"},{"label":"保留较新版本","value":"KEEP_NEWEST"}]','线上存在较新文件时的处理策略。',NULL
+    UNION ALL SELECT 'restore.conflict-policy','恢复冲突策略','ONLINE_RESTORE','线上恢复策略','ENUM','REJECT','[{"label":"拒绝覆盖（推荐）","value":"REJECT"},{"label":"管理员确认后覆盖","value":"CONFIRM_OVERWRITE"},{"label":"直接强制覆盖","value":"FORCE_OVERWRITE"}]','线上订单文件或关联关系已变化时的处理方式。默认拒绝覆盖；强制覆盖可能回填历史文件记录，需由管理员审慎使用。',NULL
     UNION ALL SELECT 'restore.retry-count','恢复失败重试次数','ONLINE_RESTORE','线上恢复策略','INTEGER','3',NULL,'单订单恢复失败后的自动重试次数，范围0至10。',NULL
     UNION ALL SELECT 'cleanup.schedule.enabled','COS自动清理开关','CLOUD_CLEANUP','云端清理策略','BOOLEAN','false','[{"label":"启用","value":"true"},{"label":"停用","value":"false"}]','启用后按周期自动创建并执行COS清理任务。',NULL
     UNION ALL SELECT 'cleanup.schedule.interval-hours','COS自动清理周期（小时）','CLOUD_CLEANUP','云端清理策略','INTEGER','24',NULL,'自动扫描及执行COS清理的周期。',NULL

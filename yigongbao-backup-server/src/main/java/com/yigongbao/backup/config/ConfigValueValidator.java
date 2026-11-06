@@ -106,8 +106,8 @@ public final class ConfigValueValidator {
             return;
         }
         if (key.equals("restore.conflict-policy")) {
-            if (!normalized.equals("KEEP_ONLINE") && !normalized.equals("OVERWRITE_ONLINE")
-                    && !normalized.equals("KEEP_NEWEST")) throw new IllegalArgumentException("恢复冲突策略非法");
+            if (!normalized.equals("REJECT") && !normalized.equals("CONFIRM_OVERWRITE")
+                    && !normalized.equals("FORCE_OVERWRITE")) throw new IllegalArgumentException("恢复冲突策略非法");
             return;
         }
         if (key.equals("online.base-url") && !normalized.isBlank()

@@ -21,19 +21,41 @@ public interface OnlineRestoreClient {
 
     /** uploadTargets 通常是线上签发的 COS 预签名 URL；保留两参数构造器兼容旧实现。 */
     record Session(String id, List<String> expectedAssets, Map<String, String> uploadTargets,
-                   String signedPlanDigest) {
+                   Map<String, String> uploadObjectKeys, String signedPlanDigest, String status) {
         public Session(String id, List<String> expectedAssets) {
-            this(id, expectedAssets, Map.of(), null);
+            this(id, expectedAssets, Map.of(), Map.of(), null, "PREPARED");
+        }
+        public Session(String id, List<String> expectedAssets, Map<String, String> uploadTargets,
+                       String signedPlanDigest) {
+            this(id, expectedAssets, uploadTargets, Map.of(), signedPlanDigest, "PREPARED");
         }
 
         public Session {
             expectedAssets = expectedAssets == null ? List.of() : List.copyOf(expectedAssets);
             uploadTargets = uploadTargets == null ? Map.of() : Map.copyOf(uploadTargets);
+            uploadObjectKeys = uploadObjectKeys == null ? Map.of() : Map.copyOf(uploadObjectKeys);
+        }
+    }
+
+    /** ZIP 内固化的文件资产与关联快照；线上以它作为历史恢复计划的权威输入。 */
+    record RestoreAsset(String assetIdentity, String originalFilename, long size, String sha256,
+                        String platform, String sourceObjectKey, List<Map<String, Object>> relations) {
+        public RestoreAsset {
+            relations = relations == null ? List.of() : List.copyOf(relations);
         }
     }
 
     record RestoreRequest(String manifestRevision, String manifestSha256, String conflictPolicy,
-                          String requestDigest, String assetSetDigest, String relationSetHash) {}
+                          String requestDigest, String assetSetDigest, String relationSetHash,
+                          List<RestoreAsset> assets) {
+        public RestoreRequest(String manifestRevision, String manifestSha256, String conflictPolicy,
+                              String requestDigest, String assetSetDigest, String relationSetHash) {
+            this(manifestRevision, manifestSha256, conflictPolicy, requestDigest, assetSetDigest, relationSetHash, List.of());
+        }
+        public RestoreRequest {
+            assets = assets == null ? List.of() : List.copyOf(assets);
+        }
+    }
 
     record SessionStatus(String sessionId, String status) {}
 }

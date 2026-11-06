@@ -67,5 +67,9 @@ class ManualBackupJobHandlerLoggingTest {
                 .collect(java.util.stream.Collectors.joining("\n"));
         assertThat(logs).contains("订单备份任务开始", "订单备份开始", "订单备份尝试失败", "订单备份终态失败", "订单备份任务汇总",
                 "任务ID=9", "订单ID=101", "处理进度=1/1", "异常原因=remote unavailable");
+        // 任务控制台需要能在不展开订单日志的前提下，看到订单进入、失败和最终汇总。
+        verify(context).taskInfo(eq("BACKUP_ORDER_STARTED"), eq("订单进度"), contains("订单备份开始"), anyMap());
+        verify(context).taskError(eq("BACKUP_ORDER_FAILED"), eq("订单进度"), contains("订单备份最终失败"), anyMap());
+        verify(context).taskInfo(eq("BACKUP_TASK_SUMMARY"), eq("任务结束"), contains("订单备份任务处理完成"), anyMap());
     }
 }

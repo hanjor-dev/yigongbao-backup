@@ -1,0 +1,46 @@
+<script setup>
+import { orderBusinessFields } from '../../taskCenter.js';
+import OrderBusinessFields from '../orders/OrderBusinessFields.vue';
+
+const props = defineProps({ task: Object, orders: { type: Array, default: () => [] }, orderFiles: { type: Object, default: () => ({}) }, orderFileLoading: { type: Object, default: () => ({}) }, orderCurrent: Number, orderSize: Number, orderTotal: Number, progress: Number, loading: Boolean, logVisible: Boolean, logTitle: String, logs: { type: Array, default: () => [] }, logCurrent: Number, logSize: Number, logTotal: Number, logLoading: Boolean });
+const emit = defineEmits(['cancel', 'retry', 'page-change', 'size-change', 'expand-order', 'file-page-change', 'file-size-change', 'open-task-logs', 'open-order-logs', 'log-page-change', 'log-size-change', 'update:log-visible']);
+const bytes = value => { const n = Number(value || 0); if (n < 1024) return `${n} B`; if (n < 1048576) return `${(n / 1024).toFixed(2)} KB`; if (n < 1073741824) return `${(n / 1048576).toFixed(2)} MB`; return `${(n / 1073741824).toFixed(2)} GB`; };
+const terminal = value => ['SUCCEEDED', 'FAILED', 'PARTIAL_FAILED', 'CANCELLED'].includes(String(value || '').toUpperCase());
+const business = row => orderBusinessFields(row.orderBusinessJson);
+const evidence = orderId => props.orderFiles[String(orderId)] || { records: [], total: 0, current: 1, size: 20 };
+const loadingFiles = orderId => Boolean(props.orderFileLoading[String(orderId)]);
+const displayFileName = row => { const leaf = String(row.objectKey || '').split('/').filter(Boolean).pop() || ''; const prefix = `${row.assetIdentity || ''}-`; return leaf.startsWith(prefix) ? leaf.slice(prefix.length) : (leaf || row.assetIdentity || '-'); };
+const logTone = level => ({ ERROR: 'is-error', WARN: 'is-warn', INFO: 'is-info' })[String(level || '').toUpperCase()] || 'is-info';
+const formatTime = value => value ? String(value).replace('T', ' ').replace(/\.\d+$/, '') : '-';
+const detail = value => { try { return JSON.stringify(typeof value === 'string' ? JSON.parse(value) : (value || {}), null, 2); } catch { return value || ''; } };
+</script>
+
+<template>
+  <el-card v-if="task" class="job-detail detail" shadow="never">
+    <template #header><div class="detail-heading"><div><span class="eyebrow">RESTORE TASK DETAIL</span><h3>恢复任务 {{ task.id }}</h3></div><div class="detail-actions"><status-badge :value="task.state" /><el-button plain @click="emit('open-task-logs')">查看任务日志</el-button><el-button v-if="!terminal(task.state) && !task.cancelRequested" type="danger" plain @click="emit('cancel')">取消任务</el-button><el-button v-if="['FAILED','PARTIAL_FAILED','CANCELLED'].includes(task.state)" type="primary" plain @click="emit('retry')">重试任务</el-button></div></div></template>
+    <div class="job-progress-panel"><div class="progress-meta"><span>整体恢复进度</span><strong>{{ progress }}%</strong><span v-if="loading" class="muted">正在刷新…</span></div><el-progress :percentage="progress" :stroke-width="10" :status="task.state === 'SUCCEEDED' ? 'success' : task.state === 'FAILED' ? 'exception' : undefined" /></div>
+    <el-descriptions :column="4" border class="mb-16"><el-descriptions-item label="任务状态"><status-badge :value="task.state" /></el-descriptions-item><el-descriptions-item label="目标订单数">{{ task.orderTotal || 0 }}</el-descriptions-item><el-descriptions-item label="已上传包容量">{{ bytes(task.bytesCompleted) }}</el-descriptions-item><el-descriptions-item label="冲突策略">{{ task.conflictPolicy || '-' }}</el-descriptions-item></el-descriptions>
+    <el-alert v-if="task.failureCode || task.failureEvidence" type="error" :closable="false" show-icon class="mb-16" :title="`失败原因：${task.failureCode || ''} ${task.failureEvidence || ''}`" />
+    <h4>订单恢复明细</h4>
+    <el-table :data="orders" row-key="sourceOrderId" stripe border class="mb-16" empty-text="暂无订单恢复明细" @expand-change="(row, expandedRows) => emit('expand-order', row, expandedRows)">
+      <el-table-column type="expand"><template #default="{ row }"><div class="restore-order-expand"><OrderBusinessFields :value="row.orderBusinessJson" /><div class="restore-file-heading"><strong>压缩包内文件上传明细</strong><span class="muted">按需加载，仅展示本订单的文件级证据</span></div><el-table v-loading="loadingFiles(row.sourceOrderId)" :data="evidence(row.sourceOrderId).records" size="small" border empty-text="该历史任务未记录文件级上传明细"><el-table-column label="文件名" min-width="230" show-overflow-tooltip><template #default="{ row: file }">{{ displayFileName(file) }}</template></el-table-column><el-table-column prop="assetIdentity" label="资产 ID" min-width="180" show-overflow-tooltip /><el-table-column label="文件容量" width="145"><template #default="{ row: file }">{{ bytes(file.bytesTotal) }}</template></el-table-column><el-table-column label="已上传" width="145"><template #default="{ row: file }">{{ bytes(file.bytesDone) }}</template></el-table-column><el-table-column label="上传状态" width="130"><template #default="{ row: file }"><status-badge :value="file.status" /></template></el-table-column><el-table-column label="失败原因" min-width="240" show-overflow-tooltip><template #default="{ row: file }"><span class="error-text">{{ file.failureCode || '' }} {{ file.failureMessage || '' }}</span></template></el-table-column></el-table><el-pagination v-if="evidence(row.sourceOrderId).total" class="table-pagination nested-pagination" small background layout="total, prev, pager, next, sizes" :current-page="evidence(row.sourceOrderId).current" :page-size="evidence(row.sourceOrderId).size" :total="evidence(row.sourceOrderId).total" :page-sizes="[10,20,50,100]" @current-change="emit('file-page-change', row.sourceOrderId, $event)" @size-change="emit('file-size-change', row.sourceOrderId, $event)" /></div></template></el-table-column>
+      <el-table-column label="订单号" min-width="180"><template #default="{ row }">{{ row.orderCode || row.sourceOrderId }}</template></el-table-column><el-table-column prop="orderCreatedAt" label="创建时间" min-width="170" /><el-table-column label="所属机构" min-width="160"><template #default="{ row }">{{ business(row).orgName || '-' }}</template></el-table-column><el-table-column label="业务状态" width="140"><template #default="{ row }">{{ row.sourceStatus || '-' }}</template></el-table-column><el-table-column label="恢复状态" width="140"><template #default="{ row }"><status-badge :value="row.status" /></template></el-table-column><el-table-column label="失败原因" min-width="250" show-overflow-tooltip><template #default="{ row }"><span class="error-text">{{ row.failureCode || '' }} {{ row.failureMessage || '' }}</span></template></el-table-column><el-table-column label="日志" width="120" fixed="right"><template #default="{ row }"><el-button link type="primary" @click="emit('open-order-logs', row)">查看订单日志</el-button></template></el-table-column>
+    </el-table>
+    <el-pagination v-if="orderTotal" class="table-pagination" background layout="total, sizes, prev, pager, next" :current-page="orderCurrent" :page-size="orderSize" :total="orderTotal" :page-sizes="[10,20,50,100]" @current-change="emit('page-change', $event)" @size-change="emit('size-change', $event)" />
+    <el-dialog :model-value="logVisible" :title="logTitle" width="min(980px, 92vw)" top="7vh" destroy-on-close @update:model-value="emit('update:log-visible', $event)">
+      <div v-loading="logLoading" class="log-console" aria-label="执行日志控制台"><div v-if="!logs.length" class="console-empty">暂无已持久化的执行日志。历史任务不会补写旧日志。</div><details v-for="entry in logs" :key="entry.id" class="console-entry" :class="logTone(entry.logLevel)"><summary><time>{{ formatTime(entry.occurredAt) }}</time><b>[{{ entry.logLevel || 'INFO' }}]</b><span>[{{ entry.stage || '-' }}]</span><span>{{ entry.message }}</span></summary><pre v-if="entry.detailJson">{{ detail(entry.detailJson) }}</pre></details></div>
+      <template #footer><el-pagination v-if="logTotal" small background layout="total, sizes, prev, pager, next" :current-page="logCurrent" :page-size="logSize" :total="logTotal" :page-sizes="[20,50,100]" @current-change="emit('log-page-change', $event)" @size-change="emit('log-size-change', $event)" /></template>
+    </el-dialog>
+  </el-card>
+</template>
+
+<style scoped>
+.restore-order-expand { padding: 4px 10px 12px; background: var(--el-fill-color-lighter); }
+.restore-file-heading { display: flex; align-items: baseline; gap: 12px; margin: 16px 0 10px; }
+.nested-pagination { margin-top: 10px; justify-content: flex-end; }
+.log-console { min-height: 280px; max-height: 62vh; overflow: auto; padding: 14px; border-radius: 8px; background: #111827; color: #d1d5db; font: 12px/1.7 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; }
+.console-entry { border-bottom: 1px solid #273244; padding: 8px 0; }
+.console-entry summary { cursor: pointer; display: flex; gap: 8px; align-items: baseline; }
+.console-entry time { color: #94a3b8; white-space: nowrap; }.console-entry b { color: #60a5fa; }.console-entry.is-warn b { color: #fbbf24; }.console-entry.is-error b { color: #f87171; }.console-entry span:last-child { color: #e5e7eb; overflow-wrap: anywhere; }
+.console-entry pre { margin: 8px 0 0 20px; padding: 8px; white-space: pre-wrap; overflow-wrap: anywhere; color: #a5b4fc; background: #0b1120; border-radius: 4px; }.console-empty { color: #94a3b8; padding: 32px 0; text-align: center; }
+</style>

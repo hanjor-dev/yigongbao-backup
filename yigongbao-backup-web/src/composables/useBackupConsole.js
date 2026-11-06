@@ -32,21 +32,16 @@ export function useBackupConsole() {
     const supplements = ref([]);
     const supplementUpload = ref({ status: 'IDLE', percent: 0, message: '', fileName: '', jobId: null });
     const notice = ref('');
-    const orderCode = ref('');
+    const keyword = ref('');
     const createdFrom = ref('');
     const createdTo = ref('');
-    const snapshotStatus = ref('');
-    const sourceStatus = ref('');
-    const orgName = ref('');
-    const hospitalName = ref('');
-    const patientName = ref('');
-    const doctorName = ref('');
     const businessType = ref('');
-    const phase = ref('');
     const status = ref('');
+    const needsPhysicalDelivery = ref('');
     const cloudRollup = ref('');
     const hotRollup = ref('');
     const coldRollup = ref('');
+    const orderFilterOptions = ref({ orderStatuses: [], businessTypes: [], physicalDeliveries: [], storageStates: [] });
     const storagePath = ref('');
     const storage = ref(null);
     const days = ref(180);
@@ -63,6 +58,15 @@ export function useBackupConsole() {
     const jobOrderTotal = ref(0);
     const jobFiles = ref([]);
     const jobLoading = ref(false);
+    const jobLogVisible = ref(false);
+    const jobLogTitle = ref('');
+    const jobLogRecords = ref([]);
+    const jobLogCurrent = ref(1);
+    const jobLogSize = ref(50);
+    const jobLogTotal = ref(0);
+    const jobLogLoading = ref(false);
+    const jobLogScope = ref(null);
+    const scheduledBackupRunning = ref(false);
     const coldBatches = ref([]);
     const coldDisks = ref([]);
     const coldDiskId = ref('');
@@ -176,18 +180,14 @@ export function useBackupConsole() {
     async function loadOrders(pageNumber = orderPage.value) {
       try {
         const params = new URLSearchParams({ current: String(pageNumber), size: String(orderSize.value) });
-        if (orderCode.value.trim()) params.set('orderCode', orderCode.value.trim());
+        const normalizedKeyword = String(keyword.value || '').trim();
+        const normalizedBusinessType = String(businessType.value || '').trim();
+        if (normalizedKeyword) params.set('keyword', normalizedKeyword);
         if (createdFrom.value) params.set('createdFrom', createdFrom.value);
         if (createdTo.value) params.set('createdTo', createdTo.value);
-        if (snapshotStatus.value) params.set('snapshotStatus', snapshotStatus.value);
-        if (sourceStatus.value) params.set('sourceStatus', sourceStatus.value);
-        if (orgName.value.trim()) params.set('orgName', orgName.value.trim());
-        if (hospitalName.value.trim()) params.set('hospitalName', hospitalName.value.trim());
-        if (patientName.value.trim()) params.set('patientName', patientName.value.trim());
-        if (doctorName.value.trim()) params.set('doctorName', doctorName.value.trim());
-        if (businessType.value.trim()) params.set('businessType', businessType.value.trim());
-        if (phase.value !== '') params.set('phase', phase.value);
-        if (status.value !== '') params.set('status', status.value);
+        if (normalizedBusinessType) params.set('businessType', normalizedBusinessType);
+        if (status.value !== '' && status.value != null) params.set('status', status.value);
+        if (needsPhysicalDelivery.value !== '' && needsPhysicalDelivery.value != null) params.set('needsPhysicalDelivery', needsPhysicalDelivery.value);
         if (cloudRollup.value) params.set('cloudRollup', cloudRollup.value);
         if (hotRollup.value) params.set('hotRollup', hotRollup.value);
         if (coldRollup.value) params.set('coldRollup', coldRollup.value);
@@ -306,9 +306,13 @@ export function useBackupConsole() {
       try {
         const result = await api('/admin/restores', {
           method: 'POST',
+          headers: { 'Idempotency-Key': `restore-${crypto.randomUUID()}` },
           body: JSON.stringify({ orderSnapshotId: selectedOrder.value.id })
         });
-        await openJob(extractJobId(result), '线上恢复任务已提交');
+        const jobId = extractJobId(result);
+        if (jobId) sessionStorage.setItem('backup-restore-task-focus', String(jobId));
+        route.navigate('restore');
+        notice.value = '线上恢复任务已提交，已跳转至恢复任务页面。';
       } catch (error) {
         notice.value = error.message || '线上恢复失败';
       }
@@ -322,9 +326,13 @@ export function useBackupConsole() {
       try {
         const result = await api('/admin/restores/batch', {
           method: 'POST',
+          headers: { 'Idempotency-Key': `restore-${crypto.randomUUID()}` },
           body: JSON.stringify({ orderSnapshotIds: selectedIds.value.length ? selectedIds.value : [], createdFrom: selectedIds.value.length ? null : (createdFrom.value || null), createdTo: selectedIds.value.length ? null : (createdTo.value || null) })
         });
-        await openJob(extractJobId(result), '批量线上恢复任务已提交');
+        const jobId = extractJobId(result);
+        if (jobId) sessionStorage.setItem('backup-restore-task-focus', String(jobId));
+        route.navigate('restore');
+        notice.value = '批量线上恢复任务已提交，已跳转至恢复任务页面。';
       } catch (error) { notice.value = error.message || '批量恢复失败'; }
     }
 
@@ -414,6 +422,52 @@ export function useBackupConsole() {
       }
     }
 
+    /** 管理员主动执行一次候选扫描；服务端仍复用自动备份的筛选、排重与任务幂等规则。 */
+    async function runScheduledBackupNow() {
+      if (scheduledBackupRunning.value) return;
+      if (!confirm('确认立即执行一次自动备份扫描？该操作会跳过今日计划时间限制，但仍仅处理符合备份条件且尚未完成备份的订单。')) return;
+      scheduledBackupRunning.value = true;
+      try {
+        await api('/admin/backup/schedule/run-now', { method: 'POST', body: '{}' });
+        await loadJobs(1);
+        notice.value = '自动备份扫描已完成，请在任务列表查看本次创建的任务；如无新任务，表示当前没有待备份订单。';
+      } catch (error) {
+        notice.value = error.message || '立即执行自动备份扫描失败';
+      } finally {
+        scheduledBackupRunning.value = false;
+      }
+    }
+
+    /** 加载本地固定订单筛选项；接口不可用时不阻断订单列表查询。 */
+    async function loadOrderFilterOptions() {
+      try {
+        const result = await api('/orders/filter-options');
+        const data = result.data || {};
+        orderFilterOptions.value = {
+          orderStatuses: Array.isArray(data.orderStatuses) ? data.orderStatuses : [],
+          businessTypes: Array.isArray(data.businessTypes) ? data.businessTypes : [],
+          physicalDeliveries: Array.isArray(data.physicalDeliveries) ? data.physicalDeliveries : [],
+          storageStates: Array.isArray(data.storageStates) ? data.storageStates : []
+        };
+      } catch (error) {
+        notice.value = error.message || '订单筛选项加载失败';
+      }
+    }
+
+    /** 清空订单文件页筛选条件，并重新从第一页查询。 */
+    function resetOrderFilters() {
+      keyword.value = '';
+      createdFrom.value = '';
+      createdTo.value = '';
+      status.value = '';
+      businessType.value = '';
+      needsPhysicalDelivery.value = '';
+      cloudRollup.value = '';
+      hotRollup.value = '';
+      coldRollup.value = '';
+      loadOrders(1);
+    }
+
     function changeJobOrderPage(pageNumber) {
       jobOrderPage.value = pageNumber;
       loadJobDetails(selectedJobId.value);
@@ -424,6 +478,39 @@ export function useBackupConsole() {
       jobOrderPage.value = 1;
       loadJobDetails(selectedJobId.value);
     }
+
+    /** 读取任务或指定订单的持久化执行日志；服务端已做敏感信息脱敏。 */
+    async function loadBackupExecutionLogs(scope, current = jobLogCurrent.value) {
+      if (!selectedJobId.value || !scope) return;
+      jobLogLoading.value = true;
+      try {
+        const base = `/admin/backup/jobs/${encodeURIComponent(selectedJobId.value)}`;
+        const url = scope.type === 'order'
+          ? `${base}/orders/${encodeURIComponent(scope.sourceOrderId)}/logs?current=${encodeURIComponent(current)}&size=${encodeURIComponent(jobLogSize.value)}`
+          : `${base}/logs?current=${encodeURIComponent(current)}&size=${encodeURIComponent(jobLogSize.value)}`;
+        const result = await api(url);
+        const pageData = normalizePage(result.data);
+        jobLogRecords.value = pageData.records;
+        jobLogCurrent.value = pageData.current;
+        jobLogSize.value = pageData.size;
+        jobLogTotal.value = pageData.total;
+      } catch (error) { notice.value = error.message || '备份执行日志加载失败'; }
+      finally { jobLogLoading.value = false; }
+    }
+
+    async function openBackupTaskLogs() {
+      jobLogScope.value = { type: 'task' }; jobLogTitle.value = `备份任务 ${selectedJobId.value || ''} 执行日志`;
+      jobLogCurrent.value = 1; jobLogVisible.value = true; await loadBackupExecutionLogs(jobLogScope.value, 1);
+    }
+
+    async function openBackupOrderLogs(order) {
+      jobLogScope.value = { type: 'order', sourceOrderId: order.sourceOrderId };
+      jobLogTitle.value = `订单 ${order.orderCode || order.sourceOrderId} 执行日志`;
+      jobLogCurrent.value = 1; jobLogVisible.value = true; await loadBackupExecutionLogs(jobLogScope.value, 1);
+    }
+
+    async function changeBackupLogPage(value) { await loadBackupExecutionLogs(jobLogScope.value, value); }
+    async function changeBackupLogSize(value) { jobLogSize.value = value; await loadBackupExecutionLogs(jobLogScope.value, 1); }
 
     function selectJob(job) {
       selectedJobId.value = String(job.id);
@@ -736,7 +823,9 @@ export function useBackupConsole() {
         return;
       }
       route.navigate(target);
+      if (target === 'orders') { Promise.all([loadOrderFilterOptions(), loadOrders(1)]); return; }
       if (target === 'backup') loadJobs();
+      if (target === 'restore') return;
       if (target === 'overview') { loadOverview(); loadAudit(); }
       if (target === 'audit') loadAudit();
       if (target === 'accounts') loadAccounts();
@@ -752,25 +841,27 @@ export function useBackupConsole() {
           await loadJobs();
           if (selectedJobId.value && selectedJob.value && !isTerminalJob(selectedJob.value)) startJobPolling();
           break;
+        case 'restore': break;
         case 'overview': await Promise.all([loadOverview(), loadAudit()]); break;
         case 'audit': await loadAudit(); break;
         case 'cold': await Promise.all([loadCold(), scanColdImports()]); break;
         case 'configs': await loadConfigs(); break;
-        default: await loadOrders();
+        default: await Promise.all([loadOrderFilterOptions(), loadOrders()]);
       }
     }
 
     return {
       token, role, isAdmin, page, username, password, orders, selectedOrder, selectedIds, assets, supplements, supplementUpload, notice,
-      orderCode, createdFrom, createdTo, snapshotStatus, sourceStatus, orgName, hospitalName, patientName,
-      doctorName, businessType, phase, status, cloudRollup, hotRollup, coldRollup,
+      keyword, createdFrom, createdTo, businessType, status, needsPhysicalDelivery, cloudRollup, hotRollup, coldRollup, orderFilterOptions,
       orderPage, orderSize, orderTotal, orderPages, storagePath, storage, days, cleanupResult, jobs, jobPage, jobSize, jobTotal,
       selectedJobId, selectedJob, jobOrders, jobOrderPage, jobOrderSize, jobOrderTotal, jobFiles, jobLoading, jobProgress, overview, auditRows,
+      jobLogVisible, jobLogTitle, jobLogRecords, jobLogCurrent, jobLogSize, jobLogTotal, jobLogLoading,
+      scheduledBackupRunning,
       coldBatches, coldDisks, coldDiskId, coldFrom, coldTo, diskCode, diskLabel, coldArchives, coldArchive, coldOrderIds, coldRoot, writePackages, hotCleanupPackages, selectedBatchId, selectedColdBatch, coldBusy, coldDiagnostics, configs, configCategories, selectedConfigCategory, configKey, configValue, configVersion, accounts, accountPage, accountSize, accountTotal, accountPages, accountPassword, accountSyncStatus, accountSyncRunning,
       createColdBatch, registerColdDisk,
       loadAccounts, changeAccountPage, changeAccountSize, syncAccountsNow, toggleAccount, resetAccountPassword, selfPassword, changeSelfPassword,
-      login, loadOrders, changeOrderPage, changeOrderSize, selectOrder, toggleSelected, downloadOrder, uploadSupplement, downloadSupplement, restoreSelectedOrder, restoreBatch,
-      probeStorage, loadOverview, loadAudit, dryCleanup, executeCleanup, loadJobs, changeJobPage, changeJobSize, loadJobDetails, changeJobOrderPage, changeJobOrderSize, selectJob, cancelJob, retryJob, loadCold, selectColdBatch, verifyColdBatch, cleanupColdBatch, writeCold, scanColdImports, restoreColdImport, loadConfigs, editConfig,
+      login, loadOrders, loadOrderFilterOptions, resetOrderFilters, changeOrderPage, changeOrderSize, selectOrder, toggleSelected, downloadOrder, uploadSupplement, downloadSupplement, restoreSelectedOrder, restoreBatch,
+      probeStorage, loadOverview, loadAudit, dryCleanup, executeCleanup, loadJobs, runScheduledBackupNow, changeJobPage, changeJobSize, loadJobDetails, changeJobOrderPage, changeJobOrderSize, openBackupTaskLogs, openBackupOrderLogs, changeBackupLogPage, changeBackupLogSize, selectJob, cancelJob, retryJob, loadCold, selectColdBatch, verifyColdBatch, cleanupColdBatch, writeCold, scanColdImports, restoreColdImport, loadConfigs, editConfig,
       saveConfig, logout, navigate, storageState, taskFailureSummary
     };
 

@@ -22,11 +22,13 @@ import java.nio.file.Files;
 import java.nio.file.NoSuchFileException;
 import java.nio.file.Path;
 import java.nio.charset.StandardCharsets;
+import java.time.LocalDate;
 import java.time.LocalDateTime;
 import java.time.OffsetDateTime;
 import java.util.List;
 import java.util.Map;
 import java.util.HashMap;
+import java.util.LinkedHashMap;
 import java.util.UUID;
 
 /** 普通用户订单查询、资产查看和订单包下载接口。 */
@@ -51,51 +53,88 @@ public class OrderController {
         return UUID.randomUUID().toString();
     }
 
-    /** 分页查询全部订单快照，并支持订单号、创建时间和快照状态筛选。 */
+    /**
+     * 返回订单文件页可用的固定筛选项。
+     * <p>选项由线上订单业务契约固化，不依赖线上服务或本地已有快照，离线场景下仍可完整展示。</p>
+     *
+     * @return 状态、业务类型、实体交付及三地存储状态选项
+     */
+    @GetMapping("/filter-options")
+    public ApiResponse<Map<String, List<Map<String, Object>>>> filterOptions() {
+        StpUtil.checkLogin();
+        Map<String, List<Map<String, Object>>> options = new LinkedHashMap<>();
+        options.put("orderStatuses", List.of(
+                option(1010, "草稿"), option(1020, "数据待审核"), option(1030, "数据审核通过"),
+                option(1040, "数据审核不通过"), option(2010, "待设计"), option(2020, "设计中"),
+                option(2030, "设计完成"), option(3010, "待打印"), option(3020, "打印中"),
+                option(3030, "打印完成"), option(3040, "打印失败"), option(4010, "后处理中"),
+                option(5010, "质检中"), option(5020, "质检合格"), option(5030, "质检不合格"),
+                option(5040, "返工"), option(5050, "包装中"), option(6010, "待入库"),
+                option(6020, "已入库"), option(6030, "已出库"), option(8010, "已完成"), option(9010, "已取消")));
+        options.put("businessTypes", List.of(
+                option("11.1", "业务"), option("11.2", "测试"),
+                option("11.3", "试用"), option("11.4", "代理")));
+        options.put("physicalDeliveries", List.of(
+                option(0, "不需要实体交付"), option(1, "需要实体交付"), option(2, "异地打印")));
+        options.put("storageStates", List.of(
+                option("PRESENT", "存在"), option("ABSENT", "缺失"), option("PARTIAL", "部分存在"),
+                option("CLEARED", "已清理"), option("RESTORING", "恢复中"),
+                option("ERROR", "异常"), option("UNKNOWN", "未知")));
+        return ApiResponse.ok(options, rid());
+    }
+
+    /** 构建筛选项值与展示名称，使用可预测的字段契约供前端统一渲染。 */
+    private static Map<String, Object> option(Object value, String label) {
+        Map<String, Object> item = new LinkedHashMap<>();
+        item.put("value", value);
+        item.put("label", label);
+        return item;
+    }
+
+    /** 分页查询订单快照，支持统一关键词、订单业务字段和三地存储状态筛选。 */
     @GetMapping
     public ApiResponse<Page<OrderSnapshotEntity>> list(
             @RequestParam(name = "current", defaultValue = "1") long current,
             @RequestParam(name = "size", defaultValue = "20") long size,
-            @RequestParam(name = "orderCode", required = false) String orderCode,
+            @RequestParam(name = "keyword", required = false) String keyword,
             @RequestParam(name = "createdFrom", required = false) String createdFrom,
             @RequestParam(name = "createdTo", required = false) String createdTo,
-            @RequestParam(name = "snapshotStatus", required = false) String snapshotStatus,
-            @RequestParam(name = "sourceStatus", required = false) String sourceStatus,
+            @RequestParam(name = "status", required = false) Integer status,
+            @RequestParam(name = "businessType", required = false) String businessType,
+            @RequestParam(name = "needsPhysicalDelivery", required = false) Integer needsPhysicalDelivery,
             @RequestParam(name = "cloudRollup", required = false) String cloudRollup,
             @RequestParam(name = "hotRollup", required = false) String hotRollup,
-            @RequestParam(name = "coldRollup", required = false) String coldRollup,
-            @RequestParam(name = "orgName", required = false) String orgName,
-            @RequestParam(name = "hospitalName", required = false) String hospitalName,
-            @RequestParam(name = "patientName", required = false) String patientName,
-            @RequestParam(name = "doctorName", required = false) String doctorName,
-            @RequestParam(name = "businessType", required = false) String businessType,
-            @RequestParam(name = "phase", required = false) Integer phase,
-            @RequestParam(name = "status", required = false) Integer status) {
+            @RequestParam(name = "coldRollup", required = false) String coldRollup) {
         StpUtil.checkLogin();
         if (current < 1 || size < 1) {
             throw new IllegalArgumentException("分页参数必须大于零");
         }
-        if (orderCode != null && orderCode.length() > 128) {
-            throw new IllegalArgumentException("订单号筛选条件过长");
+        if (keyword != null && keyword.trim().length() > 128) {
+            throw new IllegalArgumentException("关键词筛选条件过长");
         }
         LambdaQueryWrapper<OrderSnapshotEntity> query = new LambdaQueryWrapper<>();
-        if (orderCode != null && !orderCode.isBlank()) {
-            String keyword = orderCode.trim();
-            query.and(value -> value.like(OrderSnapshotEntity::getOrderCode, keyword)
-                    .or().like(OrderSnapshotEntity::getPublicOrderCode, keyword));
+        if (keyword != null && !keyword.isBlank()) {
+            String normalizedKeyword = keyword.trim();
+            query.and(value -> value.like(OrderSnapshotEntity::getOrderCode, normalizedKeyword)
+                    .or().like(OrderSnapshotEntity::getPublicOrderCode, normalizedKeyword)
+                    .or().like(OrderSnapshotEntity::getOrgName, normalizedKeyword)
+                    .or().like(OrderSnapshotEntity::getHospitalName, normalizedKeyword)
+                    .or().like(OrderSnapshotEntity::getPatientName, normalizedKeyword)
+                    .or().like(OrderSnapshotEntity::getOperatorName, normalizedKeyword)
+                    .or().like(OrderSnapshotEntity::getDoctorName, normalizedKeyword)
+                    .or().like(OrderSnapshotEntity::getRebuildProjectNames, normalizedKeyword));
         }
-        applyLike(query, orgName, "机构名称", OrderSnapshotEntity::getOrgName);
-        applyLike(query, hospitalName, "医院名称", OrderSnapshotEntity::getHospitalName);
-        applyLike(query, patientName, "患者姓名", OrderSnapshotEntity::getPatientName);
-        applyLike(query, doctorName, "医生姓名", OrderSnapshotEntity::getDoctorName);
         if (businessType != null && !businessType.isBlank()) {
             requireBusinessType(businessType);
             query.eq(OrderSnapshotEntity::getBusinessType, businessType.trim());
         }
-        query.eq(phase != null, OrderSnapshotEntity::getPhase, phase)
-                .eq(status != null, OrderSnapshotEntity::getStatus, status);
-        LocalDateTime from = parseTime(createdFrom, "createdFrom");
-        LocalDateTime to = parseTime(createdTo, "createdTo");
+        if (needsPhysicalDelivery != null && (needsPhysicalDelivery < 0 || needsPhysicalDelivery > 2)) {
+            throw new IllegalArgumentException("实体交付类型非法");
+        }
+        query.eq(status != null, OrderSnapshotEntity::getStatus, status)
+                .eq(needsPhysicalDelivery != null, OrderSnapshotEntity::getNeedsPhysicalDelivery, needsPhysicalDelivery);
+        LocalDateTime from = parseDateBoundary(createdFrom, "createdFrom", false);
+        LocalDateTime to = parseDateBoundary(createdTo, "createdTo", true);
         if (from != null && to != null && from.isAfter(to)) {
             throw new IllegalArgumentException("创建时间范围无效");
         }
@@ -103,15 +142,7 @@ public class OrderController {
             query.ge(OrderSnapshotEntity::getOrderCreatedAt, from);
         }
         if (to != null) {
-            query.le(OrderSnapshotEntity::getOrderCreatedAt, to);
-        }
-        if (snapshotStatus != null && !snapshotStatus.isBlank()) {
-            requireStatus(snapshotStatus, "快照状态", SNAPSHOT_STATES);
-            query.eq(OrderSnapshotEntity::getSnapshotStatus, snapshotStatus);
-        }
-        if (sourceStatus != null && !sourceStatus.isBlank()) {
-            requireCode(sourceStatus, "订单业务状态");
-            query.eq(OrderSnapshotEntity::getSourceStatus, sourceStatus.trim());
+            query.lt(OrderSnapshotEntity::getOrderCreatedAt, to);
         }
         if (cloudRollup != null && !cloudRollup.isBlank()) {
             requireStatus(cloudRollup, "云端存储状态", ROLLUP_STATES);
@@ -193,11 +224,15 @@ public class OrderController {
         }
     }
 
-    private static LocalDateTime parseTime(String value, String field) {
+    private static LocalDateTime parseDateBoundary(String value, String field, boolean exclusiveEnd) {
         if (value == null || value.isBlank()) {
             return null;
         }
         try {
+            if (value.matches("\\d{4}-\\d{2}-\\d{2}")) {
+                LocalDate date = LocalDate.parse(value);
+                return (exclusiveEnd ? date.plusDays(1) : date).atStartOfDay();
+            }
             return OffsetDateTime.parse(value).toLocalDateTime();
         } catch (RuntimeException ignored) {
             try {
@@ -235,20 +270,11 @@ public class OrderController {
         return safe.substring(0, Math.min(120, safe.length())) + ".zip";
     }
 
-    private static final java.util.Set<String> SNAPSHOT_STATES = java.util.Set.of(
-            "AVAILABLE", "SIMULATED", "RECEIPT_SUSPENDED", "CORRUPT");
     private static final java.util.Set<String> ROLLUP_STATES = java.util.Set.of(
             "PRESENT", "CLEARED", "RESTORING", "AVAILABLE", "PARTIAL", "ABSENT", "ERROR", "UNKNOWN");
 
     private static void requireStatus(String value, String field, java.util.Set<String> allowed) {
         if (!allowed.contains(value.trim().toUpperCase(java.util.Locale.ROOT))) {
-            throw new IllegalArgumentException(field + "非法");
-        }
-    }
-
-    /** 校验线上业务状态编码，允许随线上字典扩展但拒绝注入和超长输入。 */
-    private static void requireCode(String value, String field) {
-        if (!value.trim().matches("[A-Za-z0-9_-]{1,32}")) {
             throw new IllegalArgumentException(field + "非法");
         }
     }
@@ -260,11 +286,4 @@ public class OrderController {
         }
     }
 
-    /** 为结构化文本字段追加安全模糊查询，避免从 JSON 中运行时提取。 */
-    private static void applyLike(LambdaQueryWrapper<OrderSnapshotEntity> query, String value, String field,
-                                  com.baomidou.mybatisplus.core.toolkit.support.SFunction<OrderSnapshotEntity, ?> column) {
-        if (value == null || value.isBlank()) return;
-        if (value.trim().length() > 128) throw new IllegalArgumentException(field + "筛选条件过长");
-        query.like(column, value.trim());
-    }
 }

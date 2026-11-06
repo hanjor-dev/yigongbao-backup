@@ -40,7 +40,7 @@ public final class HttpOnlineRestoreClient implements OnlineRestoreClient {
     public Session prepare(String orderId) {
         // 旧抽象没有携带清单摘要，只能生成稳定的兼容请求；正式调用应使用带清单参数的重载。
         String digest = sha256(orderId);
-        return prepare(orderId, new PrepareRequest(digest, digest, "REJECT", digest, digest, digest));
+        return prepare(orderId, new PrepareRequest(digest, digest, "REJECT", digest, digest, digest, List.of()));
     }
 
     /** 使用清单确认阶段生成的不可变摘要调用 YAML 定义的 prepare 请求。 */
@@ -48,7 +48,7 @@ public final class HttpOnlineRestoreClient implements OnlineRestoreClient {
     public Session prepare(String orderId, OnlineRestoreClient.RestoreRequest request) {
         if (request == null) throw new IllegalArgumentException("恢复准备参数不能为空");
         return prepare(orderId, new PrepareRequest(request.manifestRevision(), request.manifestSha256(),
-                request.conflictPolicy(), request.requestDigest(), request.assetSetDigest(), request.relationSetHash()));
+                request.conflictPolicy(), request.requestDigest(), request.assetSetDigest(), request.relationSetHash(), request.assets()));
     }
 
     /** 保留具体客户端的请求类型，方便需要显式配置冲突策略的调用方。 */
@@ -87,8 +87,10 @@ public final class HttpOnlineRestoreClient implements OnlineRestoreClient {
         }
         List<String> expected = strings(data, "expectedAssets", "assets", "uploadTargets");
         Map<String, String> targets = uploadTargets(data);
+        Map<String, String> objectKeys = uploadObjectKeys(data);
         if (expected.isEmpty() && !targets.isEmpty()) expected = List.copyOf(targets.keySet());
-        return new Session(id, expected, targets, text(data, "signedPlanDigest"));
+        return new Session(id, expected, targets, objectKeys, text(data, "signedPlanDigest"),
+                text(data, "status", "state") == null ? "PREPARED" : text(data, "status", "state"));
     }
 
     @Override
@@ -108,13 +110,15 @@ public final class HttpOnlineRestoreClient implements OnlineRestoreClient {
             String etag = response.headers().firstValue("ETag").orElse("");
             String version = response.headers().firstValue("x-version-id").orElse("");
             RestoreEvidenceStore.UploadEvidence evidence = new RestoreEvidenceStore.UploadEvidence(
-                    assetName, objectKey(target, assetName), version, etag, Math.max(size, 0L), digest);
+                    assetName, plannedObjectKey(session, assetName), version, etag, Math.max(size, 0L), digest);
             evidenceStore.uploaded(session.id(), evidence);
             uploaded.computeIfAbsent(session.id(), ignored -> new ArrayList<>()).add(evidence);
+            log.info("线上恢复对象上传完成｜会话ID={}｜资产ID={}｜对象键={}｜容量={}字节｜ETag={}",
+                    session.id(), assetName, evidence.objectKey(), evidence.size(), etag);
         } catch (RuntimeException failure) {
             // PUT 超时可能已经在 COS 产生对象；记录不完整证据，abort 后转入孤儿对象人工确认队列。
             RestoreEvidenceStore.UploadEvidence uncertain = new RestoreEvidenceStore.UploadEvidence(
-                    assetName, objectKey(target, assetName), "", "", tracked.count(), safeDigest(tracked));
+                    assetName, plannedObjectKey(session, assetName), "", "", tracked.count(), safeDigest(tracked));
             try { evidenceStore.uploadFailed(session.id(), uncertain); }
             catch (RuntimeException persistFailure) { log.warn("恢复上传结果未知且证据落库失败, sessionId={}, asset={}", session.id(), assetName); }
             throw failure;
@@ -180,6 +184,7 @@ public final class HttpOnlineRestoreClient implements OnlineRestoreClient {
             }
             markCommitted(session.id());
             uploaded.remove(session.id());
+            log.info("线上恢复会话提交完成｜会话ID={}｜上传对象数={}", session.id(), evidence.size());
         } catch (Exception ex) {
             if (ex instanceof RuntimeException runtime) throw runtime;
             throw new IllegalStateException("恢复提交请求构造失败", ex);
@@ -308,20 +313,31 @@ public final class HttpOnlineRestoreClient implements OnlineRestoreClient {
         return Map.copyOf(result);
     }
 
-    private static String objectKey(String target, String fallback) {
-        try {
-            String path = URI.create(target).getPath();
-            if (path != null && !path.isBlank() && !"/".equals(path)) {
-                return path.startsWith("/") ? path.substring(1) : path;
-            }
-        } catch (RuntimeException ignored) {
-            // 上传地址在 stream() 中还会被严格校验；这里仅保证提交证据始终有值。
+    /** 解析由线上恢复计划显式给出的对象键，杜绝 COS endpoint/bucket 前缀导致的 URL 反推歧义。 */
+    private static Map<String, String> uploadObjectKeys(JsonNode data) {
+        JsonNode array = data == null ? null : data.get("uploadTargets");
+        if (array == null || !array.isArray()) return Map.of();
+        Map<String, String> result = new LinkedHashMap<>();
+        for (JsonNode target : array) {
+            if (!target.isObject()) continue;
+            String asset = text(target, "assetIdentity", "assetId", "fileName", "filename");
+            String objectKey = text(target, "objectKey");
+            if (asset != null && objectKey != null && !objectKey.isBlank()) result.put(asset, objectKey);
         }
-        return fallback;
+        return Map.copyOf(result);
+    }
+
+    private static String plannedObjectKey(Session session, String assetName) throws IOException {
+        String objectKey = session.uploadObjectKeys().get(assetName);
+        if (objectKey == null || objectKey.isBlank()) {
+            throw new IOException("线上恢复计划缺少对象键: " + assetName);
+        }
+        return objectKey;
     }
 
     public record PrepareRequest(String manifestRevision, String manifestSha256, String conflictPolicy,
-                                 String requestDigest, String assetSetDigest, String relationSetHash) {}
+                                 String requestDigest, String assetSetDigest, String relationSetHash,
+                                 List<OnlineRestoreClient.RestoreAsset> assets) {}
 
     private static final class CountingDigestInputStream extends InputStream {
         private final InputStream delegate;

@@ -174,6 +174,13 @@ public class RemoteHttpSupport {
         ensureSuccess(response);
         try {
             JsonNode root = mapper.readTree(response.body());
+            // 线上系统可能以 HTTP 200 返回统一错误信封。必须在这里识别业务失败，
+            // 不能让各业务客户端将空 data 误解析为“缺少字段”的协议错误。
+            if (root != null && root.isObject() && root.has("code")
+                    && !"OK".equalsIgnoreCase(root.path("code").asText())) {
+                throw new RemoteCallException("线上服务业务失败" + structuredErrorDiagnostic(response.body()),
+                        response.statusCode(), structuredRetryable(response.body(), false));
+            }
             JsonNode data = root == null ? null : root.get("data");
             return data == null || data.isMissingNode() || data.isNull() ? root : data;
         } catch (IOException e) {

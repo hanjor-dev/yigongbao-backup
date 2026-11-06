@@ -33,6 +33,7 @@ public class PersistentRestoreEvidenceStore implements RestoreEvidenceStore {
         String localKey = idempotencyKey(prepared);
         RestoreSessionEntity session = sessionMapper.findByRemoteSessionId(prepared.sessionId());
         if (session == null) session = sessionMapper.findByLocalIdempotencyKey(localKey);
+        boolean remoteSessionChanged = session != null && !prepared.sessionId().equals(session.getRemoteSessionId());
         if (session == null) {
             session = new RestoreSessionEntity();
             session.setLocalJobId(0L);
@@ -40,6 +41,8 @@ public class PersistentRestoreEvidenceStore implements RestoreEvidenceStore {
             session.setRemoteSessionId(prepared.sessionId());
             session.setSourceOrderId(parseId(prepared.orderId()));
             session.setSnapshotId(0L);
+            // conflict_policy 是恢复会话的非空审计字段，必须在首次 insert 前固化。
+            session.setConflictPolicy(value(prepared.conflictPolicy(), "REJECT"));
             session.setStatus("PREPARED");
             sessionMapper.insert(session);
         }
@@ -49,7 +52,7 @@ public class PersistentRestoreEvidenceStore implements RestoreEvidenceStore {
         session.setPreparedRevision(prepared.manifestRevision());
         session.setSignedPlanDigest(prepared.signedPlanDigest());
         session.setRelationSetHash(prepared.relationSetHash());
-        if (!"COMMITTED".equals(session.getStatus()) && !"ABORTED".equals(session.getStatus())) {
+        if (remoteSessionChanged || (!"COMMITTED".equals(session.getStatus()) && !"ABORTED".equals(session.getStatus()))) {
             session.setStatus("PREPARED");
         }
         sessionMapper.updateById(session);
@@ -83,16 +86,23 @@ public class PersistentRestoreEvidenceStore implements RestoreEvidenceStore {
             file = new RestoreFileEntity();
             file.setRestoreSessionId(session.getId());
             file.setAssetIdentity(evidence.assetIdentity());
+            // bk_restore_file 的对象键、状态、容量和摘要都是非空审计字段，必须首次插入前写全。
+            applyUploadEvidence(file, evidence, status);
             fileMapper.insert(file);
         }
-        file.setTargetObjectKey(evidence.objectKey());
-        file.setUploadStatus(status);
+        applyUploadEvidence(file, evidence, status);
+        fileMapper.updateById(file);
+    }
+
+    /** 将一次对象上传结果规范化写入恢复文件证据，供首次插入和幂等更新共同复用。 */
+    private static void applyUploadEvidence(RestoreFileEntity file, UploadEvidence evidence, String status) {
+        file.setTargetObjectKey(value(evidence.objectKey(), "UNKNOWN"));
+        file.setUploadStatus(value(status, "UPLOAD_UNKNOWN"));
         file.setEtag(evidence.etag());
         file.setVersionId(evidence.versionId());
         file.setSize(Math.max(evidence.size(), 0L));
-        file.setSha256(evidence.sha256());
+        file.setSha256(value(evidence.sha256(), ""));
         file.setNewUrl(evidence.objectKey());
-        fileMapper.updateById(file);
     }
 
     @Override

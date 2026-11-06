@@ -26,7 +26,7 @@ FROM (
     UNION ALL SELECT 'cold.import-root','冷备导入区目录','COLD_ARCHIVE','冷备归档与导入','PATH','D:/yigongbao-backup/cold-import',NULL,'管理员复制冷备大压缩包后的受控扫描目录。',NULL
     UNION ALL SELECT 'cold.max-import-bytes','最大导入解压量（字节）','COLD_ARCHIVE','冷备归档与导入','LONG','4398046511104',NULL,'单个冷备导入任务允许解压的总量，默认4TiB。',NULL
     UNION ALL SELECT 'restore.enabled','线上恢复开关','ONLINE_RESTORE','线上恢复策略','BOOLEAN','true','[{"label":"启用","value":"true"},{"label":"停用","value":"false"}]','控制管理员能否创建线上恢复任务。',NULL
-    UNION ALL SELECT 'restore.conflict-policy','恢复冲突策略','ONLINE_RESTORE','线上恢复策略','ENUM','KEEP_ONLINE','[{"label":"保留线上文件","value":"KEEP_ONLINE"},{"label":"备份覆盖线上","value":"OVERWRITE_ONLINE"},{"label":"保留较新版本","value":"KEEP_NEWEST"}]','线上存在较新文件时的处理策略。',NULL
+    UNION ALL SELECT 'restore.conflict-policy','恢复冲突策略','ONLINE_RESTORE','线上恢复策略','ENUM','REJECT','[{"label":"拒绝覆盖（推荐）","value":"REJECT"},{"label":"管理员确认后覆盖","value":"CONFIRM_OVERWRITE"},{"label":"直接强制覆盖","value":"FORCE_OVERWRITE"}]','线上订单文件或关联关系已变化时的处理方式。默认拒绝覆盖；强制覆盖可能回填历史文件记录，需由管理员审慎使用。',NULL
     UNION ALL SELECT 'restore.retry-count','恢复失败重试次数','ONLINE_RESTORE','线上恢复策略','INTEGER','3',NULL,'单订单恢复失败后的自动重试次数，范围0至10。',NULL
     UNION ALL SELECT 'cleanup.schedule.enabled','COS自动清理开关','CLOUD_CLEANUP','云端清理策略','BOOLEAN','false','[{"label":"启用","value":"true"},{"label":"停用","value":"false"}]','启用后按周期自动创建并执行COS清理任务。',NULL
     UNION ALL SELECT 'cleanup.schedule.interval-hours','COS自动清理周期（小时）','CLOUD_CLEANUP','云端清理策略','INTEGER','24',NULL,'自动扫描及执行COS清理的周期。',NULL

@@ -49,12 +49,12 @@ class ConfigValueValidatorTest {
     }
 
     @Test
-    void usesOnlineSideNamesForRestoreConflictPolicy() {
-        assertThatCode(() -> ConfigValueValidator.validate("restore.conflict-policy", "KEEP_ONLINE"))
+    void validatesRestoreProtocolConflictPolicy() {
+        assertThatCode(() -> ConfigValueValidator.validate("restore.conflict-policy", "REJECT"))
                 .doesNotThrowAnyException();
-        assertThatCode(() -> ConfigValueValidator.validate("restore.conflict-policy", "OVERWRITE_ONLINE"))
+        assertThatCode(() -> ConfigValueValidator.validate("restore.conflict-policy", "FORCE_OVERWRITE"))
                 .doesNotThrowAnyException();
-        assertThatThrownBy(() -> ConfigValueValidator.validate("restore.conflict-policy", "KEEP_LOCAL"))
+        assertThatThrownBy(() -> ConfigValueValidator.validate("restore.conflict-policy", "KEEP_ONLINE"))
                 .isInstanceOf(IllegalArgumentException.class);
     }
 

@@ -34,4 +34,12 @@ class DailyBackupSchedulePolicyTest {
         assertThat(DailyBackupSchedulePolicy.isDue(LocalDateTime.of(2026, 11, 3, 8, 0),
                 "05:00", 1, LocalDateTime.of(2026, 11, 2, 5, 0), null)).isFalse();
     }
+
+    @Test
+    void administratorForcedRunBypassesOnlyTheDailyTimeWindow() {
+        LocalDateTime sameDaySuccess = LocalDateTime.of(2026, 11, 6, 10, 54);
+
+        assertThat(DailyBackupSchedulePolicy.isDue(LocalDateTime.of(2026, 11, 6, 14, 29),
+                "05:00", 1, sameDaySuccess, LocalDateTime.of(2026, 11, 6, 14, 28), true)).isTrue();
+    }
 }

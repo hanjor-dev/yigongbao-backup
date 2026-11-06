@@ -76,4 +76,51 @@ class PersistentJobServiceTest {
         assertThat(result.getExpectedFileTotal()).isEqualTo(3);
         assertThat(result.getExpectedBytes()).isEqualTo(30L);
     }
+
+    @Test
+    void listsRestoreTasksAndDerivesTheirTargetOrderTotal() {
+        JobMapper jobs = mock(JobMapper.class); JobOrderMapper orders = mock(JobOrderMapper.class); JobFileMapper files = mock(JobFileMapper.class);
+        JobEntity entity = new JobEntity(); entity.setId(11L); entity.setJobType("RESTORE");
+        entity.setStatus("CREATED"); entity.setFencingToken(0L);
+        entity.setConfigSnapshotJson("{\"orderSnapshotIds\":[301,302]}");
+        when(jobs.selectList(any())).thenReturn(List.of(entity));
+        when(orders.selectList(any())).thenReturn(List.of());
+        when(files.selectList(any())).thenReturn(List.of());
+
+        Job result = new PersistentJobService(jobs, orders, files).listRestoreJobs().getFirst();
+
+        assertThat(result.getJobType()).isEqualTo("RESTORE");
+        assertThat(result.getOrderTotal()).isEqualTo(2);
+    }
+
+    @Test
+    void countsSkippedRestoreOrdersAsProcessedEvidence() {
+        JobMapper jobs = mock(JobMapper.class); JobOrderMapper orders = mock(JobOrderMapper.class); JobFileMapper files = mock(JobFileMapper.class);
+        JobEntity entity = new JobEntity(); entity.setId(12L); entity.setJobType("RESTORE");
+        entity.setStatus("SUCCEEDED"); entity.setFencingToken(0L);
+        entity.setConfigSnapshotJson("{\"orderSnapshotIds\":[401]}");
+        JobOrderEntity skipped = new JobOrderEntity(); skipped.setStatus("SKIPPED");
+        when(jobs.selectList(any())).thenReturn(List.of(entity));
+        when(orders.selectList(any())).thenReturn(List.of(skipped));
+        when(files.selectList(any())).thenReturn(List.of());
+
+        Job result = new PersistentJobService(jobs, orders, files).listRestoreJobs().getFirst();
+
+        assertThat(result.getOrderSkipped()).isEqualTo(1);
+    }
+
+    @Test
+    void restoreTaskCapacityUsesZipAggregateInsteadOfDoubleCountingAssetRows() {
+        JobMapper jobs = mock(JobMapper.class); JobOrderMapper orders = mock(JobOrderMapper.class); JobFileMapper files = mock(JobFileMapper.class);
+        JobEntity entity = new JobEntity(); entity.setId(13L); entity.setJobType("RESTORE"); entity.setStatus("SUCCEEDED"); entity.setFencingToken(0L);
+        entity.setConfigSnapshotJson("{\"orderSnapshotIds\":[501]}");
+        JobFileEntity zip = new JobFileEntity(); zip.setStep("RESTORE_UPLOAD"); zip.setStatus("SUCCEEDED"); zip.setBytesDone(100L); zip.setBytesTotal(100L);
+        JobFileEntity asset = new JobFileEntity(); asset.setStep("RESTORE_OBJECT_UPLOAD"); asset.setStatus("SUCCEEDED"); asset.setBytesDone(240L); asset.setBytesTotal(240L);
+        when(jobs.selectList(any())).thenReturn(List.of(entity)); when(orders.selectList(any())).thenReturn(List.of()); when(files.selectList(any())).thenReturn(List.of(zip, asset));
+
+        Job result = new PersistentJobService(jobs, orders, files).listRestoreJobs().getFirst();
+
+        assertThat(result.getBytesCompleted()).isEqualTo(100L);
+        assertThat(result.getFileCompleted()).isEqualTo(1);
+    }
 }

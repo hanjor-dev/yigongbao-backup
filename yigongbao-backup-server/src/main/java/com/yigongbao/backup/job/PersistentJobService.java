@@ -118,12 +118,85 @@ public class PersistentJobService {
                 page.getTotal(), page.getCurrent(), page.getSize(), page.getPages());
     }
 
+    /** 只返回线上恢复任务，避免恢复记录与订单备份调度批次混在同一管理列表。 */
+    public List<Job> listRestoreJobs() {
+        return mapper.selectList(Wrappers.<JobEntity>lambdaQuery()
+                        .eq(JobEntity::getJobType, "RESTORE")
+                        .orderByDesc(JobEntity::getId))
+                .stream().map(this::viewWithEvidence).toList();
+    }
+
+    /** 服务端分页读取线上恢复任务；恢复历史可独立长期保留和审计。 */
+    public JobPage listRestoreJobs(long current, long size) {
+        if (current < 1 || size < 1 || size > 100) throw new IllegalArgumentException("任务分页参数非法");
+        Page<JobEntity> page = mapper.selectPage(Page.of(current, size), Wrappers.<JobEntity>lambdaQuery()
+                .eq(JobEntity::getJobType, "RESTORE").orderByDesc(JobEntity::getId));
+        return new JobPage(page.getRecords().stream().map(this::viewWithEvidence).toList(),
+                page.getTotal(), page.getCurrent(), page.getSize(), page.getPages());
+    }
+
     public record JobPage(List<Job> records, long total, long current, long size, long pages) { }
 
     public Job get(long id) {
         JobEntity entity = required(id);
         return viewWithEvidence(entity);
     }
+
+    /** 查询单个恢复任务，并拒绝通过恢复接口跨类型读取其他运维任务。 */
+    public Job getRestoreJob(long id) {
+        JobEntity entity = required(id);
+        requireRestore(entity);
+        return viewWithEvidence(entity);
+    }
+
+    /** 查询订单备份任务，并拒绝通过备份日志接口读取其他任务。 */
+    public Job getBackupJob(long id) {
+        JobEntity entity = required(id);
+        if (!"ORDER_BACKUP".equals(entity.getJobType()) && !"MANUAL_BACKUP".equals(entity.getJobType())) {
+            throw new IllegalArgumentException("不是订单备份任务");
+        }
+        return viewWithEvidence(entity);
+    }
+
+    /** 分页读取恢复订单明细，保证详情接口也具有任务类型边界。 */
+    public JobOrderPage listRestoreOrders(long jobId, long current, long size) {
+        requireRestore(required(jobId));
+        return listOrders(jobId, current, size);
+    }
+
+    /** 读取恢复任务全部订单证据，仅用于在服务端生成“失败订单补偿任务”。 */
+    public List<JobOrderEntity> listAllRestoreOrders(long jobId) {
+        requireRestore(required(jobId));
+        return listOrders(jobId);
+    }
+
+    /** 读取恢复 ZIP 上传步骤明细，保证详情接口也具有任务类型边界。 */
+    public List<JobFileEntity> listRestoreFiles(long jobId) {
+        requireRestore(required(jobId));
+        return listFiles(jobId);
+    }
+
+    /**
+     * 分页读取一个恢复订单 ZIP 内的逐文件上传证据。
+     *
+     * <p>仅返回 {@code RESTORE_OBJECT_UPLOAD}，不混入订单 ZIP 聚合步骤，避免前端将压缩包误显示为业务文件。</p>
+     */
+    public JobFilePage listRestoreOrderFiles(long jobId, long sourceOrderId, long current, long size) {
+        requireRestore(required(jobId));
+        if (sourceOrderId < 1 || current < 1 || size < 1 || size > 100) {
+            throw new IllegalArgumentException("恢复文件明细分页参数非法");
+        }
+        if (fileMapper == null) throw new IllegalStateException("任务文件明细持久化未配置");
+        Page<JobFileEntity> page = fileMapper.selectPage(Page.of(current, size),
+                Wrappers.<JobFileEntity>lambdaQuery().eq(JobFileEntity::getJobId, jobId)
+                        .eq(JobFileEntity::getSourceOrderId, sourceOrderId)
+                        .eq(JobFileEntity::getStep, "RESTORE_OBJECT_UPLOAD")
+                        .orderByAsc(JobFileEntity::getId));
+        return new JobFilePage(page.getRecords(), page.getTotal(), page.getCurrent(), page.getSize(), page.getPages());
+    }
+
+    /** 统一的文件级证据分页返回结构。 */
+    public record JobFilePage(List<JobFileEntity> records, long total, long current, long size, long pages) { }
 
     /** 受控内部查询任务参数，仅供需要校验任务归属的业务接口使用。 */
     public String configJson(long id) { return required(id).getConfigSnapshotJson(); }
@@ -222,19 +295,30 @@ public class PersistentJobService {
         return entity;
     }
 
+    private static void requireRestore(JobEntity entity) {
+        if (!"RESTORE".equals(entity.getJobType())) throw new IllegalArgumentException("恢复任务不存在");
+    }
+
     private Job viewWithEvidence(JobEntity entity) {
         List<JobOrderEntity> orderRows = orderMapper == null ? List.of() : listOrders(entity.getId());
         List<JobFileEntity> fileRows = fileMapper == null ? List.of() : listFiles(entity.getId());
+        // 恢复任务同时保存 ZIP 聚合步骤和 ZIP 内资产步骤；任务列表容量必须只统计压缩包，
+        // 否则会将压缩后容量与文件原始容量相加，产生双重统计。
+        List<JobFileEntity> progressFileRows = "RESTORE".equals(entity.getJobType())
+                ? fileRows.stream().filter(row -> "RESTORE_UPLOAD".equals(row.getStep())).toList()
+                : fileRows;
         Job job = view(entity,
                 Math.max(orderTotal(entity), orderRows.size()),
-                Math.max(fileTotal(entity), fileRows.size()));
+                Math.max(fileTotal(entity), progressFileRows.size()));
         job.setOrderCompleted((int) orderRows.stream().filter(row -> "SUCCEEDED".equals(row.getStatus()) || "SIMULATED".equals(row.getStatus())).count());
         job.setOrderFailed((int) orderRows.stream().filter(row -> "FAILED".equals(row.getStatus()) || "SIMULATION_FAILED".equals(row.getStatus())).count());
-        job.setFileCompleted((int) fileRows.stream().filter(row -> "SUCCEEDED".equals(row.getStatus())).count());
-        job.setFileFailed((int) fileRows.stream().filter(row -> "FAILED".equals(row.getStatus())).count());
-        job.setBytesTotal(fileRows.stream().mapToLong(row -> row.getBytesTotal() == null ? 0L : row.getBytesTotal()).sum());
-        job.setBytesCompleted(fileRows.stream().mapToLong(row -> row.getBytesDone() == null ? 0L : row.getBytesDone()).sum());
+        job.setOrderSkipped((int) orderRows.stream().filter(row -> "SKIPPED".equals(row.getStatus())).count());
+        job.setFileCompleted((int) progressFileRows.stream().filter(row -> "SUCCEEDED".equals(row.getStatus())).count());
+        job.setFileFailed((int) progressFileRows.stream().filter(row -> "FAILED".equals(row.getStatus())).count());
+        job.setBytesTotal(progressFileRows.stream().mapToLong(row -> row.getBytesTotal() == null ? 0L : row.getBytesTotal()).sum());
+        job.setBytesCompleted(progressFileRows.stream().mapToLong(row -> row.getBytesDone() == null ? 0L : row.getBytesDone()).sum());
         job.setExecutionMode(configText(entity, "executionMode", "REAL"));
+        job.setConflictPolicy(configText(entity, "conflictPolicy", null));
         // Manifest 成功与本地模拟制品成功是两个阶段：已有预计文件数说明 Manifest 已成功返回。
         job.setManifestSucceeded((int) orderRows.stream().filter(row -> row.getExpectedFileCount() != null).count());
         job.setManifestFailed((int) orderRows.stream().filter(row -> "SIMULATION_FAILED".equals(row.getStatus())
@@ -284,7 +368,9 @@ public class PersistentJobService {
         int explicit = parseTotal(entity, "orderTotal");
         if (explicit > 0) return explicit;
         try {
-            JsonNode ids = JSON.readTree(entity.getConfigSnapshotJson()).path("sourceOrderIds");
+            JsonNode config = JSON.readTree(entity.getConfigSnapshotJson());
+            JsonNode ids = config.path("sourceOrderIds");
+            if (!ids.isArray()) ids = config.path("orderSnapshotIds");
             return ids.isArray() ? ids.size() : 0;
         } catch (Exception ignored) {
             return 0;

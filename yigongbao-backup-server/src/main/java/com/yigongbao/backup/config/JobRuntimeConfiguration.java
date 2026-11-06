@@ -15,5 +15,5 @@ import java.util.UUID;
 @Configuration
 public class JobRuntimeConfiguration {
  @Bean JobExecutorRegistry jobExecutorRegistry(RestoreJobHandler restore,ColdWriteJobHandler coldWrite,ColdImportJobHandler coldImport,HotCleanupJobHandler hotCleanup,CleanupDryRunJobHandler cleanupDry,CleanupExecuteJobHandler cleanupExecute,AutomaticCleanupJobHandler automaticCleanup,SupplementUploadJobHandler supplement,ManualBackupJobHandler backup){return new JobExecutorRegistry(Map.of("RESTORE",restore,"COLD_WRITE",coldWrite,"COLD_IMPORT",coldImport,"HOT_CLEANUP",hotCleanup,"CLEANUP_DRY_RUN",cleanupDry,"CLEANUP_EXECUTE",cleanupExecute,"AUTO_CLEANUP",automaticCleanup,"SUPPLEMENT_UPLOAD",supplement,"MANUAL_BACKUP",backup,"ORDER_BACKUP",backup));}
- @Bean JobDispatcher jobDispatcher(PersistentJobCoordinator coordinator,JobExecutorRegistry registry,JobEvidenceService evidence,RuntimeConfigService runtimeConfig){String owner="backup-"+UUID.randomUUID();return new JobDispatcher(coordinator,registry,evidence,owner,runtimeConfig);}
+ @Bean JobDispatcher jobDispatcher(PersistentJobCoordinator coordinator,JobExecutorRegistry registry,JobEvidenceService evidence,JobExecutionLogService executionLogs,RuntimeConfigService runtimeConfig){String owner="backup-"+UUID.randomUUID();return new JobDispatcher(coordinator,registry,evidence,executionLogs,owner,runtimeConfig);}
 }

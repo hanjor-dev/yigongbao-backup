@@ -71,6 +71,8 @@ public class OrderSnapshotEntity extends BaseEntity {
     private LocalDateTime productionEndTime;
     private Integer sourceVersion;
     private String rebuildProjectListJson;
+    /** 从重建项目 JSON 提取的项目名称，用于订单文件页统一关键词检索。 */
+    private String rebuildProjectNames;
     private String orderRawJson;
     private String displayJson;
     private String relatedBusinessJson;

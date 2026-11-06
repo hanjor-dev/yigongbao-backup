@@ -7,8 +7,9 @@ export function jobProgress(job) {
   if (!job) return 0;
   const orderCompleted = Number(job.orderCompleted ?? 0);
   const orderFailed = Number(job.orderFailed ?? 0);
+  const orderSkipped = Number(job.orderSkipped ?? 0);
   const orderTotal = Number(job.orderTotal ?? 0);
-  if (orderTotal > 0) return Math.min(100, Math.max(0, Math.round(((orderCompleted + orderFailed) / orderTotal) * 100)));
+  if (orderTotal > 0) return Math.min(100, Math.max(0, Math.round(((orderCompleted + orderFailed + orderSkipped) / orderTotal) * 100)));
   const completed = Number(job.fileCompleted ?? job.completed ?? 0);
   const total = Number(job.fileTotal ?? job.total ?? 0);
   if (total > 0) return Math.min(100, Math.max(0, Math.round((completed / total) * 100)));

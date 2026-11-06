@@ -50,7 +50,19 @@ public class ScheduledBackupService {
 
     /** 定时入口；线上适配器未启用时由配置条件保证不会实例化。 */
     @Scheduled(fixedDelay = 60000)
-    public synchronized void runScheduled() {
+    public void runScheduled() {
+        run(false);
+    }
+
+    /**
+     * 管理员主动执行一次候选扫描，用于联调、故障补偿或不等待下一个计划日的场景。
+     * 仍遵守自动备份总开关、候选资格、已备份排除及任务幂等约束。
+     */
+    public void runNowByAdministrator() {
+        run(true);
+    }
+
+    private synchronized void run(boolean forced) {
         LocalDateTime now = LocalDateTime.now();
         LocalDateTime previousPollAt = previousSchedulePollAt;
         previousSchedulePollAt = now;
@@ -58,7 +70,7 @@ public class ScheduledBackupService {
         if (!runtimeConfig.getBoolean("backup.schedule.enabled", true)) return;
         long intervalDays = runtimeConfig.getLong("backup.schedule.interval-days", 1L, 1L);
         String startTime = runtimeConfig.get("backup.schedule.start-time", "05:00");
-        if (!DailyBackupSchedulePolicy.isDue(now, startTime, intervalDays, checkpoint.lastSuccessAt(), previousPollAt)) return;
+        if (!DailyBackupSchedulePolicy.isDue(now, startTime, intervalDays, checkpoint.lastSuccessAt(), previousPollAt, forced)) return;
         // 每轮从成熟且尚无有效回执的集合起点扫描。不能沿用永久事件游标，
         // 否则此前未成熟或较晚才转为正式状态的历史订单会被永久越过。
         String cursor = "";
@@ -68,8 +80,8 @@ public class ScheduledBackupService {
         int developmentLimit = developmentLimit();
         java.util.LinkedHashSet<Long> orderIds = new java.util.LinkedHashSet<>();
         checkpoint.begin();
-        log.info("定时备份候选扫描开始｜执行模式={}｜计划日期={}｜备份间隔={}天｜计划开始时间={}｜备份{}天前的订单｜订单创建时间上界={}（排他）｜开发测试上限={}",
-                executionModes.mode(), now.toLocalDate(), intervalDays, startTime, daysBefore, orderCreatedBefore,
+        log.info("{}备份候选扫描开始｜执行模式={}｜计划日期={}｜备份间隔={}天｜计划开始时间={}｜备份{}天前的订单｜订单创建时间上界={}（排他）｜开发测试上限={}",
+                forced ? "管理员立即" : "定时", executionModes.mode(), now.toLocalDate(), intervalDays, startTime, daysBefore, orderCreatedBefore,
                 developmentLimit == 0 ? "不限制" : developmentLimit + "个订单");
         try {
           while (true) {

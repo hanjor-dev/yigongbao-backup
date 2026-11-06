@@ -18,9 +18,12 @@ import java.util.Map;
 import java.util.zip.ZipFile;
 import java.util.zip.ZipEntry;
 import java.util.zip.ZipInputStream;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 
 /** 线上恢复协调器：订单内全部文件上传成功后才 commit，任何失败都 abort，订单整体失败。 */
 public final class LocalOrderRestoreService {
+    private static final Logger log = LoggerFactory.getLogger(LocalOrderRestoreService.class);
     private static final long DEFAULT_MAX_UNCOMPRESSED_BYTES = 20L * 1024 * 1024 * 1024;
     private static final int DEFAULT_MAX_ENTRIES = 100_000;
 
@@ -31,7 +34,7 @@ public final class LocalOrderRestoreService {
     private final String conflictPolicy;
 
     public LocalOrderRestoreService(OnlineRestoreClient client) {
-        this(client, DEFAULT_MAX_UNCOMPRESSED_BYTES, DEFAULT_MAX_ENTRIES, new ObjectMapper(), "KEEP_ONLINE");
+        this(client, DEFAULT_MAX_UNCOMPRESSED_BYTES, DEFAULT_MAX_ENTRIES, new ObjectMapper(), "REJECT");
     }
 
     public LocalOrderRestoreService(OnlineRestoreClient client, String conflictPolicy) {
@@ -39,12 +42,12 @@ public final class LocalOrderRestoreService {
     }
 
     public LocalOrderRestoreService(OnlineRestoreClient client, long maxUncompressedBytes, int maxEntries) {
-        this(client, maxUncompressedBytes, maxEntries, new ObjectMapper(), "KEEP_ONLINE");
+        this(client, maxUncompressedBytes, maxEntries, new ObjectMapper(), "REJECT");
     }
 
     public LocalOrderRestoreService(OnlineRestoreClient client, long maxUncompressedBytes, int maxEntries,
                                     ObjectMapper mapper) {
-        this(client, maxUncompressedBytes, maxEntries, mapper, "KEEP_ONLINE");
+        this(client, maxUncompressedBytes, maxEntries, mapper, "REJECT");
     }
 
     public LocalOrderRestoreService(OnlineRestoreClient client, long maxUncompressedBytes, int maxEntries,
@@ -56,10 +59,8 @@ public final class LocalOrderRestoreService {
         this.maxUncompressedBytes = maxUncompressedBytes;
         this.maxEntries = maxEntries;
         this.mapper = mapper;
-        this.conflictPolicy = switch (conflictPolicy == null ? "KEEP_ONLINE" : conflictPolicy) {
-            case "KEEP_ONLINE" -> "REJECT";
-            case "OVERWRITE_ONLINE" -> "OVERWRITE";
-            case "KEEP_NEWEST" -> "KEEP_NEWEST";
+        this.conflictPolicy = switch (conflictPolicy == null ? "REJECT" : conflictPolicy) {
+            case "REJECT", "CONFIRM_OVERWRITE", "FORCE_OVERWRITE" -> conflictPolicy == null ? "REJECT" : conflictPolicy;
             default -> throw new IllegalArgumentException("恢复冲突策略非法");
         };
     }
@@ -68,6 +69,62 @@ public final class LocalOrderRestoreService {
      * 按 manifest 期望资产逐文件上传。任何一项失败都不提交线上会话，避免出现整单部分恢复。
      */
     public void restore(Path orderZip, String orderId) throws IOException {
+        restore(orderZip, orderId, RestoreAssetListener.noOp());
+    }
+
+    /**
+     * 在请求线上恢复会话前读取 ZIP 内的文件范围。
+     *
+     * <p>仅做本地只读检查，用于订单开始日志；不会调用线上接口、上传文件或改写数据。</p>
+     */
+    public RestorePackageInventory inspect(Path orderZip, String orderId) throws IOException {
+        if (orderZip == null || !Files.isRegularFile(orderZip)) {
+            throw new FileNotFoundException(String.valueOf(orderZip));
+        }
+        OnlineRestoreClient.RestoreRequest request = readPrepareRequest(orderZip, orderId);
+        try (ZipFile zip = new ZipFile(orderZip.toFile())) {
+            Set<String> entries = new HashSet<>();
+            var enumeration = zip.entries();
+            while (enumeration.hasMoreElements()) {
+                ZipEntry entry = enumeration.nextElement();
+                if (!entry.isDirectory() && !"manifest.json".equals(entry.getName())) entries.add(entry.getName());
+            }
+            if (request == null) {
+                List<RestorePackageAsset> assets = entries.stream().sorted()
+                        .map(entry -> new RestorePackageAsset(entry, Path.of(entry).getFileName().toString(),
+                                "UNKNOWN", List.of(), Math.max(0L, zip.getEntry(entry).getSize()), true))
+                        .toList();
+                return new RestorePackageInventory(null, assets);
+            }
+            JsonNode root = readManifestRoot(zip);
+            List<RestorePackageAsset> assets = new ArrayList<>();
+            for (JsonNode asset : root.path("assets")) {
+                String identity = text(asset, "assetIdentity", "assetId", "id");
+                if (identity == null || identity.isBlank()) continue;
+                String fileName = text(asset, "originalFilename", "fileName");
+                List<String> relationKinds = new ArrayList<>();
+                for (JsonNode relation : asset.path("relations")) {
+                    String kind = text(relation, "relationKind", "type");
+                    if (kind != null && !kind.isBlank()) relationKinds.add(kind);
+                }
+                boolean exists = entries.stream().map(path -> Path.of(path).getFileName().toString())
+                        .anyMatch(name -> name.equals(identity) || name.startsWith(identity + "-"));
+                assets.add(new RestorePackageAsset(identity, fileName, text(asset, "assetType", "type"),
+                        List.copyOf(relationKinds), Math.max(0L, asset.path("size").asLong(0L)), exists));
+            }
+            return new RestorePackageInventory(request.manifestRevision(), List.copyOf(assets));
+        }
+    }
+
+    /**
+     * 流式解压订单 ZIP 并逐资产上传，同时向调用方发布可持久化的文件级执行证据。
+     *
+     * @param orderZip 订单热备压缩包
+     * @param orderId 线上订单标识
+     * @param listener 单个 ZIP 条目的上传生命周期监听器
+     */
+    public void restore(Path orderZip, String orderId, RestoreAssetListener listener) throws IOException {
+        listener = listener == null ? RestoreAssetListener.noOp() : listener;
         if (orderZip == null || !Files.isRegularFile(orderZip)) {
             throw new FileNotFoundException(String.valueOf(orderZip));
         }
@@ -76,8 +133,30 @@ public final class LocalOrderRestoreService {
         }
 
         OnlineRestoreClient.RestoreRequest prepareRequest = readPrepareRequest(orderZip, orderId);
+        // 空 Manifest 没有任何对象可上传，若继续 prepare/commit 会创建无法提交的空线上会话。
+        if (prepareRequest != null && prepareRequest.assets().isEmpty()) {
+            throw new IllegalStateException("订单备份包不含可恢复文件");
+        }
+        Map<String, Long> expectedSizes = new java.util.HashMap<>();
+        if (prepareRequest != null) {
+            for (OnlineRestoreClient.RestoreAsset asset : prepareRequest.assets()) {
+                expectedSizes.put(asset.assetIdentity(), Math.max(0L, asset.size()));
+            }
+        }
         OnlineRestoreClient.Session session = prepareRequest == null
                 ? client.prepare(orderId) : client.prepare(orderId, prepareRequest);
+        if ("SKIPPED_DELETED".equalsIgnoreCase(session.status())) {
+            // 线上订单已不存在时禁止上传和提交，符合“恢复默认跳过已删除订单”的约定。
+            return;
+        }
+        // 重试前 prepare 发现线上已成功提交时，禁止再次覆盖恢复对象或重复回写关联。
+        if ("COMMITTED".equalsIgnoreCase(session.status())) {
+            log.info("线上恢复订单已提交，跳过重复上传｜订单ID={}｜会话ID={}", orderId, session.id());
+            return;
+        }
+        if (!"PREPARED".equalsIgnoreCase(session.status())) {
+            throw new IllegalStateException("线上恢复会话状态不可执行: " + session.status());
+        }
         boolean committed = false;
         boolean commitOutcomeUnknown = false;
         try (ZipInputStream in = new ZipInputStream(Files.newInputStream(orderZip))) {
@@ -100,8 +179,18 @@ public final class LocalOrderRestoreService {
                 if (!uploaded.add(assetName)) {
                     throw new IOException("恢复压缩包包含重复资产: " + assetName);
                 }
+                String objectKey = session.uploadObjectKeys().getOrDefault(assetName, "");
+                long entrySize = expectedSizes.getOrDefault(assetName, Math.max(0L, entry.getSize()));
+                listener.started(assetName, entryName, objectKey, entrySize);
                 CountingInputStream bounded = new CountingInputStream(in, maxUncompressedBytes - totalBytes);
-                client.upload(session, assetName, bounded);
+                try {
+                    client.upload(session, assetName, bounded);
+                } catch (IOException | RuntimeException uploadFailure) {
+                    listener.failed(assetName, entryName, objectKey, bounded.count(), uploadFailure);
+                    throw uploadFailure;
+                }
+                log.info("线上恢复文件上传完成｜订单ID={}｜会话ID={}｜资产ID={}｜字节数={}", orderId, session.id(), assetName, bounded.count());
+                listener.succeeded(assetName, entryName, objectKey, bounded.count());
                 totalBytes += bounded.count();
                 if (totalBytes > maxUncompressedBytes) {
                     throw new IOException("恢复压缩包解压总量超过限制");
@@ -112,6 +201,7 @@ public final class LocalOrderRestoreService {
             }
             client.commit(session);
             committed = true;
+            log.info("线上恢复订单提交完成｜订单ID={}｜会话ID={}｜文件数={}", orderId, session.id(), uploaded.size());
         } catch (CommitOutcomeUnknownException unknown) {
             // commit 结果未知时禁止 abort；线上可能已经提交，必须等待查询/对账后再决定。
             commitOutcomeUnknown = true;
@@ -124,8 +214,22 @@ public final class LocalOrderRestoreService {
                     client.abort(session);
                 } catch (RuntimeException abortFailure) {
                     // 原始恢复失败更重要；abort 失败交由任务重试/告警处理。
+                    log.error("线上恢复终止失败｜订单ID={}｜会话ID={}｜原因={}", orderId, session.id(), abortFailure.getMessage(), abortFailure);
                 }
             }
+        }
+    }
+
+    /** 恢复订单 ZIP 内单个资产的执行证据回调；默认无操作，兼容非任务调用方。 */
+    public interface RestoreAssetListener {
+        void started(String assetIdentity, String zipEntryName, String objectKey, long totalBytes);
+        void succeeded(String assetIdentity, String zipEntryName, String objectKey, long uploadedBytes);
+        default void failed(String assetIdentity, String zipEntryName, String objectKey, long uploadedBytes, Throwable failure) { }
+        static RestoreAssetListener noOp() {
+            return new RestoreAssetListener() {
+                @Override public void started(String assetIdentity, String zipEntryName, String objectKey, long totalBytes) { }
+                @Override public void succeeded(String assetIdentity, String zipEntryName, String objectKey, long uploadedBytes) { }
+            };
         }
     }
 
@@ -150,11 +254,26 @@ public final class LocalOrderRestoreService {
             JsonNode assets = root.path("assets");
             List<String> identities = new ArrayList<>();
             List<JsonNode> relations = new ArrayList<>();
+            List<OnlineRestoreClient.RestoreAsset> restoreAssets = new ArrayList<>();
             if (assets.isArray()) {
                 for (JsonNode asset : assets) {
                     String identity = text(asset, "assetIdentity", "assetId", "id");
                     if (identity != null && !identity.isBlank()) identities.add(identity);
                     relations.add(asset.path("relations"));
+                    if (identity != null && !identity.isBlank()) {
+                        // 新版备份 manifest 将来源定位字段放在资产根节点；兼容旧版 sourceObject 嵌套结构。
+                        JsonNode source = asset.path("sourceObject");
+                        String platform = text(asset, "platform");
+                        if (platform == null || platform.isBlank()) platform = text(source, "platform");
+                        String sourceObjectKey = text(asset, "objectKey", "sourceKey");
+                        if (sourceObjectKey == null || sourceObjectKey.isBlank()) {
+                            sourceObjectKey = text(source, "objectKey", "sourceKey");
+                        }
+                        restoreAssets.add(new OnlineRestoreClient.RestoreAsset(identity,
+                                text(asset, "originalFilename", "fileName"), asset.path("size").asLong(-1),
+                                text(asset, "sha256"), platform, sourceObjectKey,
+                                mapper.convertValue(asset.path("relations"), new com.fasterxml.jackson.core.type.TypeReference<List<Map<String, Object>>>() {})));
+                    }
                 }
             }
             identities.sort(Comparator.naturalOrder());
@@ -166,11 +285,29 @@ public final class LocalOrderRestoreService {
             String requestDigest = sha256((orderId + "\n" + manifestSha + "\n"
                     + assetSetDigest + "\n" + relationSetHash).getBytes(java.nio.charset.StandardCharsets.UTF_8));
             return new OnlineRestoreClient.RestoreRequest(revision, manifestSha, conflictPolicy,
-                    requestDigest, assetSetDigest, relationSetHash);
+                    requestDigest, assetSetDigest, relationSetHash, restoreAssets);
         } catch (IOException ex) {
             throw new IOException("读取恢复包 manifest.json 失败", ex);
         }
     }
+
+    /** 从 ZIP 读取并校验 manifest 根节点，供只读清单展示复用。 */
+    private JsonNode readManifestRoot(ZipFile zip) throws IOException {
+        ZipEntry manifest = zip.getEntry("manifest.json");
+        if (manifest == null) throw new IOException("恢复包缺少 manifest.json");
+        try (InputStream input = zip.getInputStream(manifest)) {
+            JsonNode root = mapper.readTree(input.readAllBytes());
+            if (root == null || !root.isObject()) throw new IOException("manifest.json 格式非法");
+            return root;
+        }
+    }
+
+    /** ZIP 内订单文件的只读清单。 */
+    public record RestorePackageInventory(String manifestRevision, List<RestorePackageAsset> assets) { }
+
+    /** 一个待恢复文件及其与订单业务的关系摘要。 */
+    public record RestorePackageAsset(String assetIdentity, String fileName, String assetType,
+                                      List<String> relationKinds, long size, boolean zipEntryPresent) { }
 
     private static String text(JsonNode node, String... names) {
         for (String name : names) {

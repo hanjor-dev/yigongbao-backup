@@ -1,22 +1,23 @@
 <script setup>
 import { useBackupContext } from '../../composables/useBackupContext.js';
-const { orderCode, createdFrom, createdTo, snapshotStatus, sourceStatus, orgName, hospitalName,
-  patientName, doctorName, businessType, phase, status, cloudRollup, hotRollup, coldRollup } = useBackupContext();
+const { keyword, createdFrom, createdTo, status, businessType, needsPhysicalDelivery,
+  cloudRollup, hotRollup, coldRollup, orderFilterOptions, loadOrders, resetOrderFilters } = useBackupContext();
+
+function submit() {
+  loadOrders(1);
+}
 </script>
 <template>
-  <el-form class="order-filter" inline label-position="top">
-    <el-form-item label="订单号"><el-input v-model.trim="orderCode" placeholder="输入订单号" clearable /></el-form-item>
-    <el-form-item label="创建时间"><el-date-picker v-model="createdFrom" type="datetime" value-format="YYYY-MM-DDTHH:mm:ss" placeholder="开始时间" clearable /></el-form-item>
-    <el-form-item label="至"><el-date-picker v-model="createdTo" type="datetime" value-format="YYYY-MM-DDTHH:mm:ss" placeholder="结束时间" clearable /></el-form-item>
-    <el-form-item label="快照状态"><el-input v-model.trim="snapshotStatus" placeholder="如 AVAILABLE" clearable /></el-form-item>
-    <el-form-item label="业务状态"><el-input v-model.trim="sourceStatus" placeholder="输入状态" clearable /></el-form-item>
-    <el-form-item label="机构"><el-input v-model.trim="orgName" placeholder="机构名称" clearable /></el-form-item>
-    <el-form-item label="医院"><el-input v-model.trim="hospitalName" placeholder="医院名称" clearable /></el-form-item>
-    <el-form-item label="患者"><el-input v-model.trim="patientName" placeholder="患者姓名" clearable /></el-form-item>
-    <el-form-item label="医生"><el-input v-model.trim="doctorName" placeholder="医生姓名" clearable /></el-form-item>
-    <el-form-item label="业务类型"><el-input v-model.trim="businessType" placeholder="如 11.1" clearable /></el-form-item>
-    <el-form-item label="阶段"><el-input v-model.trim="phase" placeholder="阶段编码" clearable /></el-form-item>
-    <el-form-item label="状态"><el-input v-model.trim="status" placeholder="状态编码" clearable /></el-form-item>
-    <el-form-item label="云端 / 热备 / 冷备"><div class="filter-triple"><el-select v-model="cloudRollup" placeholder="云端" clearable><el-option label="存在" value="PRESENT" /><el-option label="缺失" value="ABSENT" /></el-select><el-select v-model="hotRollup" placeholder="热备" clearable><el-option label="存在" value="PRESENT" /><el-option label="缺失" value="ABSENT" /></el-select><el-select v-model="coldRollup" placeholder="冷备" clearable><el-option label="存在" value="PRESENT" /><el-option label="缺失" value="ABSENT" /></el-select></div></el-form-item>
+  <el-form class="order-filter" label-position="top" @submit.prevent="submit">
+    <div class="order-filter-grid">
+      <el-form-item class="keyword-filter" label="关键词"><el-input v-model.trim="keyword" placeholder="订单编号、虚拟单号、机构、医院、患者、业务员、医生或重建项目" clearable @keyup.enter="submit" /></el-form-item>
+      <el-form-item label="订单创建时间"><el-date-picker v-model="createdFrom" type="date" value-format="YYYY-MM-DD" placeholder="开始日期" clearable /></el-form-item>
+      <el-form-item label="至"><el-date-picker v-model="createdTo" type="date" value-format="YYYY-MM-DD" placeholder="结束日期" clearable /></el-form-item>
+      <el-form-item label="订单状态"><el-select v-model="status" placeholder="全部状态" clearable filterable><el-option v-for="item in orderFilterOptions.orderStatuses" :key="item.value" :label="item.label" :value="item.value" /></el-select></el-form-item>
+      <el-form-item label="业务类型"><el-select v-model="businessType" placeholder="全部业务类型" clearable><el-option v-for="item in orderFilterOptions.businessTypes" :key="item.value" :label="item.label" :value="item.value" /></el-select></el-form-item>
+      <el-form-item label="实体交付"><el-select v-model="needsPhysicalDelivery" placeholder="全部" clearable><el-option v-for="item in orderFilterOptions.physicalDeliveries" :key="item.value" :label="item.label" :value="item.value" /></el-select></el-form-item>
+      <el-form-item class="storage-filter" label="云端 / 热备 / 冷备"><div class="filter-triple"><el-select v-model="cloudRollup" placeholder="云端" clearable><el-option v-for="item in orderFilterOptions.storageStates" :key="item.value" :label="item.label" :value="item.value" /></el-select><el-select v-model="hotRollup" placeholder="热备" clearable><el-option v-for="item in orderFilterOptions.storageStates" :key="item.value" :label="item.label" :value="item.value" /></el-select><el-select v-model="coldRollup" placeholder="冷备" clearable><el-option v-for="item in orderFilterOptions.storageStates" :key="item.value" :label="item.label" :value="item.value" /></el-select></div></el-form-item>
+      <div class="filter-actions"><el-button type="primary" native-type="submit">查询</el-button><el-button @click="resetOrderFilters">重置</el-button></div>
+    </div>
   </el-form>
 </template>

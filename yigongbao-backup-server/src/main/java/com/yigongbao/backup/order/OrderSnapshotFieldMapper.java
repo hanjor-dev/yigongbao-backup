@@ -1,8 +1,10 @@
 package com.yigongbao.backup.order;
 
 import com.fasterxml.jackson.databind.DeserializationFeature;
+import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 
+import java.util.LinkedHashSet;
 import java.time.LocalDateTime;
 import java.time.OffsetDateTime;
 import java.util.LinkedHashMap;
@@ -43,6 +45,26 @@ public final class OrderSnapshotFieldMapper {
         target.setRegionalAuditJson(jsonOrNull(displayValues.get("regionalAudit")));
         target.setDesignAuditJson(jsonOrNull(displayValues.get("designAudit")));
         target.setRebuildProjectListJson(jsonOrNull(displayValues.get("rebuildProjectList")));
+        target.setRebuildProjectNames(rebuildProjectNames(displayValues.get("rebuildProjectList")));
+    }
+
+    /** 提取重建项目名称为本地检索文本，保留原 JSON 作为完整业务证据。 */
+    private String rebuildProjectNames(Object rebuildProjectList) {
+        if (rebuildProjectList == null) {
+            return null;
+        }
+        JsonNode projects = mapper.valueToTree(rebuildProjectList);
+        if (!projects.isArray()) {
+            return null;
+        }
+        LinkedHashSet<String> names = new LinkedHashSet<>();
+        for (JsonNode project : projects) {
+            String name = project.path("projectName").asText("").trim();
+            if (!name.isEmpty()) {
+                names.add(name);
+            }
+        }
+        return names.isEmpty() ? null : String.join(" ", names);
     }
 
     private String jsonOrNull(Object value) {

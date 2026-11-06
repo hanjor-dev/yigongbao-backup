@@ -21,6 +21,8 @@ public class Job {
     private int orderTotal;
     private int orderCompleted;
     private int orderFailed;
+    /** 线上已删除等无需恢复的订单数量；属于已处理但非成功、非失败。 */
+    private int orderSkipped;
     private int fileTotal;
     private int fileCompleted;
     private int fileFailed;
@@ -30,6 +32,8 @@ public class Job {
     private String failureEvidence;
     private String resultJson;
     private String executionMode = "REAL";
+    /** 线上恢复任务提交时固化的冲突处理策略。 */
+    private String conflictPolicy;
     private int manifestSucceeded;
     private int manifestFailed;
     private int expectedFileTotal;

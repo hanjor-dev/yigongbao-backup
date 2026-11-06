@@ -31,7 +31,9 @@ class OrderSnapshotFieldMapperTest {
         display.put("statusColor", Map.of("textColor", "#111111"));
         display.put("regionalAudit", Map.of("status", 1, "auditorName", "审核员"));
         display.put("designAudit", null);
-        display.put("rebuildProjectList", List.of(Map.of("projectName", "颅骨重建")));
+        display.put("rebuildProjectList", List.of(
+                Map.of("projectName", "颅骨重建"), Map.of("projectName", "颅骨重建"),
+                Map.of("projectName", "下颌骨重建")));
 
         OrderSnapshotEntity target = new OrderSnapshotEntity();
         new OrderSnapshotFieldMapper(new ObjectMapper().findAndRegisterModules()).apply(target, raw, display);
@@ -50,6 +52,7 @@ class OrderSnapshotFieldMapperTest {
         assertThat(target.getRegionalAuditJson()).contains("审核员");
         assertThat(target.getDesignAuditJson()).isNull();
         assertThat(target.getRebuildProjectListJson()).contains("颅骨重建");
+        assertThat(target.getRebuildProjectNames()).isEqualTo("颅骨重建 下颌骨重建");
     }
 
     @Test

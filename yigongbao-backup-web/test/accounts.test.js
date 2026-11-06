@@ -9,7 +9,7 @@ test('status badge renders its value without runtime template compilation', asyn
   const { StatusBadge } = await import('../src/components/StatusBadge.js');
   const render = StatusBadge.setup({ value: 'ENABLED', label: '' });
   assert.equal(typeof render, 'function');
-  assert.equal(render().children, 'ENABLED');
+  assert.equal(render().children, '已启用');
 });
 
 test('accounts page uses server pagination and exposes local status labels', () => {

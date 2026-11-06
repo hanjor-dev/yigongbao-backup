@@ -31,10 +31,13 @@ WHERE NOT EXISTS (
     WHERE c.config_key = v.config_key AND c.scope = 'GLOBAL' AND c.is_deleted = 0
 );
 
--- 恢复冲突枚举从含混的“本地”命名迁移为明确的“线上”命名。
+-- 恢复冲突枚举统一为线上恢复协议值；旧值只在迁移阶段兼容映射，运行时不再接受。
 UPDATE bk_config SET config_value = CASE config_value
-    WHEN 'KEEP_LOCAL' THEN 'KEEP_ONLINE'
-    WHEN 'OVERWRITE_LOCAL' THEN 'OVERWRITE_ONLINE'
+    WHEN 'KEEP_LOCAL' THEN 'REJECT'
+    WHEN 'KEEP_ONLINE' THEN 'REJECT'
+    WHEN 'OVERWRITE_LOCAL' THEN 'FORCE_OVERWRITE'
+    WHEN 'OVERWRITE_ONLINE' THEN 'FORCE_OVERWRITE'
+    WHEN 'KEEP_NEWEST' THEN 'CONFIRM_OVERWRITE'
     ELSE config_value END
 WHERE config_key = 'restore.conflict-policy' AND scope = 'GLOBAL' AND is_deleted = 0;
 
@@ -84,9 +87,9 @@ SET category_code = CASE
 WHERE scope = 'GLOBAL' AND is_deleted = 0;
 
 UPDATE bk_config
-SET options_json = '[{"label":"保留线上文件","value":"KEEP_ONLINE"},{"label":"备份覆盖线上","value":"OVERWRITE_ONLINE"},{"label":"保留较新版本","value":"KEEP_NEWEST"}]',
+SET options_json = '[{"label":"拒绝覆盖（推荐）","value":"REJECT"},{"label":"管理员确认后覆盖","value":"CONFIRM_OVERWRITE"},{"label":"直接强制覆盖","value":"FORCE_OVERWRITE"}]',
     config_name = '恢复冲突策略',
-    description = '线上存在较新文件时的处理策略。'
+    description = '线上订单文件或关联关系已变化时的处理方式。默认拒绝覆盖；强制覆盖可能回填历史文件记录，需由管理员审慎使用。'
 WHERE config_key = 'restore.conflict-policy' AND scope = 'GLOBAL' AND is_deleted = 0;
 
 UPDATE bk_config SET secret_ref = config_value

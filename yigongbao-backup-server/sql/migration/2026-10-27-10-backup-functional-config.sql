@@ -38,7 +38,7 @@ FROM (
  SELECT 'cleanup.retention-days','INTEGER','180' UNION ALL SELECT 'cleanup.dry-run-required','BOOLEAN','true' UNION ALL
  SELECT 'cleanup.require-admin-confirm','BOOLEAN','true' UNION ALL SELECT 'cleanup.skip-classic-case','BOOLEAN','true' UNION ALL
  SELECT 'cleanup.allow-online-deleted-order','BOOLEAN','true' UNION ALL SELECT 'restore.enabled','BOOLEAN','true' UNION ALL
- SELECT 'restore.conflict-policy','STRING','KEEP_LOCAL' UNION ALL SELECT 'restore.skip-online-deleted','BOOLEAN','true' UNION ALL
+ SELECT 'restore.conflict-policy','STRING','REJECT' UNION ALL SELECT 'restore.skip-online-deleted','BOOLEAN','true' UNION ALL
  SELECT 'restore.require-file-complete','BOOLEAN','true' UNION ALL SELECT 'restore.retry-count','INTEGER','3' UNION ALL
  SELECT 'supplement.allowed-extensions','STRING','zip,step,stl,dcm' UNION ALL SELECT 'supplement.max-file-size-bytes','LONG','1073741824' UNION ALL
  SELECT 'supplement.allow-delete','BOOLEAN','false' UNION ALL SELECT 'account.sync-enabled','BOOLEAN','true' UNION ALL
@@ -78,7 +78,7 @@ SET config_name=CASE config_key
 WHERE scope='GLOBAL' AND is_deleted=0 AND (config_name IS NULL OR config_name='');
 UPDATE bk_config SET options_json='[{"label":"启用","value":"true"},{"label":"停用","value":"false"}]'
 WHERE scope='GLOBAL' AND is_deleted=0 AND value_type='BOOLEAN' AND (options_json IS NULL OR JSON_LENGTH(options_json)=0);
-UPDATE bk_config SET options_json='[{"label":"保留本地","value":"KEEP_LOCAL"},{"label":"覆盖本地","value":"OVERWRITE_LOCAL"},{"label":"保留较新版本","value":"KEEP_NEWEST"}]'
+UPDATE bk_config SET options_json='[{"label":"拒绝覆盖（推荐）","value":"REJECT"},{"label":"管理员确认后覆盖","value":"CONFIRM_OVERWRITE"},{"label":"直接强制覆盖","value":"FORCE_OVERWRITE"}]'
 WHERE config_key='restore.conflict-policy' AND scope='GLOBAL' AND is_deleted=0 AND options_json IS NULL;
 UPDATE bk_config SET category_code=CASE WHEN config_key LIKE 'backup.order.%' THEN 'ORDER' WHEN config_key LIKE 'backup.%' THEN 'BACKUP' WHEN config_key LIKE 'storage.%' THEN 'CAPACITY' WHEN config_key LIKE 'account.%' THEN 'ACCOUNT' WHEN config_key LIKE 'cold.%' OR config_key LIKE 'restore.%' OR config_key LIKE 'supplement.%' THEN 'FILE' ELSE 'OTHER' END,
  category_name=CASE WHEN config_key LIKE 'backup.order.%' THEN '订单' WHEN config_key LIKE 'backup.%' THEN '备份' WHEN config_key LIKE 'storage.%' THEN '容量' WHEN config_key LIKE 'account.%' THEN '账号' WHEN config_key LIKE 'cold.%' OR config_key LIKE 'restore.%' OR config_key LIKE 'supplement.%' THEN '文件' ELSE '其他' END

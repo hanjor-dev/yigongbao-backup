@@ -16,6 +16,8 @@ public class JobEvidenceService {
     public void initializeOrders(long jobId, List<Long> sourceOrderIds) {
         if (sourceOrderIds == null) return;
         sourceOrderIds.stream().filter(java.util.Objects::nonNull).distinct()
+                // 任务恢复执行时保留已完成订单的终态，不能将其重置为 PENDING 后重复恢复。
+                .filter(orderId -> findOrder(jobId, orderId) == null)
                 .forEach(orderId -> order(jobId, orderId, null, "PENDING", null));
     }
 
@@ -49,7 +51,29 @@ public class JobEvidenceService {
         if (row.getId() == null) orders.insert(row); else orders.updateById(row);
     }
 
-    public void file(long jobId,Long sourceId,String identity,String step,String status,long done,long total,Throwable failure){JobFileEntity row=files.selectOne(Wrappers.<JobFileEntity>lambdaQuery().eq(JobFileEntity::getJobId,jobId).eq(JobFileEntity::getAssetIdentity,identity).eq(JobFileEntity::getStep,step).last("limit 1"));if(row==null){row=new JobFileEntity();row.setJobId(jobId);row.setSourceOrderId(sourceId);row.setAssetIdentity(identity);row.setStep(step);row.setStatus(status);row.setBytesDone(done);row.setBytesTotal(total);evidence(row,failure);files.insert(row);}else{row.setStatus(status);row.setBytesDone(done);row.setBytesTotal(total);evidence(row,failure);files.updateById(row);}}
+    public void file(long jobId,Long sourceId,String identity,String step,String status,long done,long total,Throwable failure){
+        file(jobId, sourceId, identity, step, status, done, total, null, failure);
+    }
+
+    /** 保存恢复 ZIP 内资产的上传状态；对象键首次写入后随成功/失败状态更新保留。 */
+    public void file(long jobId, Long sourceId, String identity, String step, String status,
+                     long done, long total, String objectKey, Throwable failure) {
+        JobFileEntity row = files.selectOne(Wrappers.<JobFileEntity>lambdaQuery()
+                .eq(JobFileEntity::getJobId, jobId).eq(JobFileEntity::getAssetIdentity, identity)
+                .eq(JobFileEntity::getStep, step).last("limit 1"));
+        if (row == null) {
+            row = new JobFileEntity(); row.setJobId(jobId); row.setSourceOrderId(sourceId);
+            row.setAssetIdentity(identity); row.setStep(step); row.setObjectKey(objectKey);
+            row.setStatus(status); row.setBytesDone(done); row.setBytesTotal(total); evidence(row, failure);
+            files.insert(row);
+        } else {
+            row.setStatus(status); row.setBytesDone(done);
+            // 失败回调可能只能提供已上传字节；保留开始阶段写入的原始文件容量。
+            if (total > 0 || row.getBytesTotal() == null) row.setBytesTotal(total);
+            if (objectKey != null && !objectKey.isBlank()) row.setObjectKey(objectKey);
+            evidence(row, failure); files.updateById(row);
+        }
+    }
 
     private JobOrderEntity findOrder(long jobId, Long sourceId) {
         return orders.selectOne(Wrappers.<JobOrderEntity>lambdaQuery().eq(JobOrderEntity::getJobId,jobId)

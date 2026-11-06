@@ -7,6 +7,7 @@ import org.junit.jupiter.api.Test;
 
 import java.net.URI;
 import java.time.Duration;
+import java.util.List;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
@@ -17,7 +18,7 @@ class HttpOnlineRestoreClientTest {
         RecordingHttpClient transport = new RecordingHttpClient(request -> {
             String path = request.uri().getPath();
             String body = path.endsWith("/prepare")
-                    ? "{\"data\":{\"sessionId\":\"session-1\",\"signedPlanDigest\":\"plan\",\"uploadTargets\":[{\"assetIdentity\":\"a.txt\",\"url\":\"https://cos.example/upload/a.txt\"}]}}"
+                    ? "{\"data\":{\"sessionId\":\"session-1\",\"signedPlanDigest\":\"plan\",\"uploadTargets\":[{\"assetIdentity\":\"a.txt\",\"url\":\"https://cos.example/upload/a.txt\",\"objectKey\":\"backup-restore/1/a.txt\"}]}}"
                     : "{\"code\":\"OK\",\"data\":{}}";
             return RecordingHttpClient.response(request, 200, body);
         });
@@ -40,6 +41,21 @@ class HttpOnlineRestoreClientTest {
         assertThat(transport.requests.get(0).headers().firstValue("X-Signature").orElseThrow())
                 .doesNotContain("do-not-log");
         assertThat(transport.requests.get(0).headers().firstValue("Idempotency-Key")).isPresent();
+    }
+
+    @Test
+    void prepareForwardsImmutableManifestAssetsToOnlinePlan() {
+        RecordingHttpClient transport = new RecordingHttpClient(request -> RecordingHttpClient.response(request, 200,
+                "{\"data\":{\"sessionId\":\"session-assets\",\"signedPlanDigest\":\"plan\",\"uploadTargets\":[]}}"));
+        RemoteHttpSupport support = new RemoteHttpSupport(transport, new ObjectMapper(), URI.create("http://online.example"),
+                Duration.ofSeconds(5), "shared-production-secret-32-bytes!");
+        HttpOnlineRestoreClient client = new HttpOnlineRestoreClient(support, new ObjectMapper());
+
+        client.prepare("order-1", new OnlineRestoreClient.RestoreRequest("revision", "manifest", "REJECT",
+                "request", "assets", "relations", List.of(new OnlineRestoreClient.RestoreAsset(
+                "file-7", "drawing.pdf", 12L, "sha", "oss", "origin/key", List.of()))));
+
+        assertThat(transport.requests).hasSize(1);
     }
 
     @Test
@@ -81,7 +97,7 @@ class HttpOnlineRestoreClientTest {
         RecordingHttpClient transport = new RecordingHttpClient(request -> {
             String path = request.uri().getPath();
             if (path.endsWith("/prepare")) return RecordingHttpClient.response(request, 200,
-                    "{\"data\":{\"sessionId\":\"session-abort\",\"uploadTargets\":[{\"assetIdentity\":\"a\",\"url\":\"https://cos.example/a\"}]}}");
+                    "{\"data\":{\"sessionId\":\"session-abort\",\"uploadTargets\":[{\"assetIdentity\":\"a\",\"url\":\"https://cos.example/a\",\"objectKey\":\"backup-restore/1/a\"}]}}");
             return RecordingHttpClient.response(request, 200, "{\"data\":{}}");
         });
         RemoteHttpSupport support = new RemoteHttpSupport(transport, new ObjectMapper(),

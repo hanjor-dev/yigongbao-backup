@@ -3,6 +3,7 @@ package com.yigongbao.backup.restore;
 import org.junit.jupiter.api.Test;
 
 import java.util.List;
+import java.util.concurrent.atomic.AtomicReference;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.ArgumentMatchers.any;
@@ -23,13 +24,23 @@ class PersistentRestoreEvidenceStoreTest {
         RestoreFileEntity existing = new RestoreFileEntity();
         existing.setId(11L);
         when(files.selectOne(any())).thenReturn(null, existing);
+        AtomicReference<String> insertedObjectKey = new AtomicReference<>();
+        AtomicReference<String> insertedStatus = new AtomicReference<>();
+        AtomicReference<Long> insertedSize = new AtomicReference<>();
+        AtomicReference<String> insertedSha256 = new AtomicReference<>();
+        AtomicReference<String> insertedConflictPolicy = new AtomicReference<>();
         doAnswer(invocation -> {
             RestoreSessionEntity value = invocation.getArgument(0);
+            insertedConflictPolicy.set(value.getConflictPolicy());
             value.setId(9L);
             return 1;
         }).when(sessions).insert(any(RestoreSessionEntity.class));
         doAnswer(invocation -> {
             RestoreFileEntity value = invocation.getArgument(0);
+            insertedObjectKey.set(value.getTargetObjectKey());
+            insertedStatus.set(value.getUploadStatus());
+            insertedSize.set(value.getSize());
+            insertedSha256.set(value.getSha256());
             value.setId(11L);
             return 1;
         }).when(files).insert(any(RestoreFileEntity.class));
@@ -44,6 +55,11 @@ class PersistentRestoreEvidenceStoreTest {
         verify(sessions).insert(any(RestoreSessionEntity.class));
         verify(files).insert(any(RestoreFileEntity.class));
         verify(files, times(2)).updateById(any(RestoreFileEntity.class));
+        assertThat(insertedObjectKey.get()).isEqualTo("orders/1001/a");
+        assertThat(insertedStatus.get()).isEqualTo("UPLOADED");
+        assertThat(insertedSize.get()).isEqualTo(12L);
+        assertThat(insertedSha256.get()).isEqualTo("sha");
+        assertThat(insertedConflictPolicy.get()).isEqualTo("REJECT");
         assertThat(session.getStatus()).isEqualTo("PREPARED");
     }
 
@@ -72,6 +88,23 @@ class PersistentRestoreEvidenceStoreTest {
             assertThat(item.objectKey()).isEqualTo("orders/1002/a");
             assertThat(item.versionId()).isEqualTo("v2");
         });
+    }
+
+    @Test
+    void replacesAbortedLocalSessionWithNewRemotePreparedSession() {
+        RestoreSessionMapper sessions = mock(RestoreSessionMapper.class);
+        RestoreSessionEntity aborted = new RestoreSessionEntity();
+        aborted.setId(8L);
+        aborted.setRemoteSessionId("remote-old");
+        aborted.setStatus("ABORTED");
+        when(sessions.findByRemoteSessionId("remote-new")).thenReturn(null);
+        when(sessions.findByLocalIdempotencyKey(anyString())).thenReturn(aborted);
+
+        new PersistentRestoreEvidenceStore(sessions, mock(RestoreFileMapper.class), mock(OrphanObjectMapper.class))
+                .prepared(new RestoreEvidenceStore.PreparedSession("remote-new", "1001", "r1", "digest", "rel", "REJECT"));
+
+        assertThat(aborted.getRemoteSessionId()).isEqualTo("remote-new");
+        assertThat(aborted.getStatus()).isEqualTo("PREPARED");
     }
 
     @Test

@@ -5,7 +5,7 @@ import { orderBusinessFields } from '../../taskCenter.js';
 import OrderBusinessFields from '../orders/OrderBusinessFields.vue';
 import { statusLabel } from '../StatusBadge.js';
 
-const { selectedJob, jobOrders, jobOrderPage, jobOrderSize, jobOrderTotal, jobFiles, jobLoading, jobProgress, changeJobOrderPage, changeJobOrderSize, cancelJob, retryJob } = useBackupContext();
+const { selectedJob, jobOrders, jobOrderPage, jobOrderSize, jobOrderTotal, jobFiles, jobLoading, jobProgress, changeJobOrderPage, changeJobOrderSize, cancelJob, retryJob, jobLogVisible, jobLogTitle, jobLogRecords, jobLogCurrent, jobLogSize, jobLogTotal, jobLogLoading, openBackupTaskLogs, openBackupOrderLogs, changeBackupLogPage, changeBackupLogSize } = useBackupContext();
 const terminalStates = ['SUCCEEDED', 'FAILED', 'PARTIAL_FAILED', 'CANCELLED', 'CANCELED'];
 const jobState = (job) => job?.state || job?.status || '';
 const progress = computed(() => selectedJob.value ? jobProgress(selectedJob.value) : 0);
@@ -15,6 +15,9 @@ const orderBackup = computed(() => ['ORDER_BACKUP', 'MANUAL_BACKUP'].includes(se
 const stateLabel = computed(() => jobState(selectedJob.value) === 'RETRYING_FAILED_ORDERS' ? '失败订单重试中'
   : simulation.value && jobState(selectedJob.value) === 'SUCCEEDED' ? '模拟完成' : statusLabel(jobState(selectedJob.value)));
 const bytes = (value) => { const n = Number(value || 0); if (n < 1024) return `${n} B`; if (n < 1048576) return `${(n / 1024).toFixed(2)} KB`; if (n < 1073741824) return `${(n / 1048576).toFixed(2)} MB`; return `${(n / 1073741824).toFixed(2)} GB`; };
+const logTone = level => ({ ERROR: 'is-error', WARN: 'is-warn', INFO: 'is-info' })[String(level || '').toUpperCase()] || 'is-info';
+const formatTime = value => value ? String(value).replace('T', ' ').replace(/\.\d+$/, '') : '-';
+const detail = value => { try { return JSON.stringify(typeof value === 'string' ? JSON.parse(value) : (value || {}), null, 2); } catch { return value || ''; } };
 </script>
 
 <template>
@@ -31,6 +34,7 @@ const bytes = (value) => { const n = Number(value || 0); if (n < 1024) return `$
             {{ stateLabel || 'UNKNOWN' }}
           </el-tag>
           <el-tag v-if="selectedJob.cancelRequested" type="warning">取消中</el-tag>
+          <el-button v-if="orderBackup" plain @click="openBackupTaskLogs()">查看任务日志</el-button>
           <el-button v-if="!terminalStates.includes(jobState(selectedJob)) && !selectedJob.cancelRequested" type="danger" plain @click="cancelJob()">取消任务</el-button>
           <el-button v-if="['FAILED', 'PARTIAL_FAILED'].includes(jobState(selectedJob)) && (selectedJob.orderFailed || 0) > 0" type="primary" plain @click="retryJob()">重试失败订单</el-button>
         </div>
@@ -68,6 +72,7 @@ const bytes = (value) => { const n = Number(value || 0); if (n < 1024) return `$
       <el-table-column v-if="simulation" label="ZIP实际容量" width="130"><template #default="{ row }">{{ bytes(row.packageBytes) }}</template></el-table-column>
       <el-table-column v-if="simulation" prop="simulationPath" label="模拟压缩包" min-width="260" show-overflow-tooltip />
       <el-table-column label="失败原因" min-width="260"><template #default="{ row }"><span class="error-text">{{ row.failureCode || '' }} {{ row.failureMessage || '' }}</span></template></el-table-column>
+      <el-table-column v-if="orderBackup" label="日志" width="130" fixed="right"><template #default="{ row }"><el-button link type="primary" @click="openBackupOrderLogs(row)">查看订单日志</el-button></template></el-table-column>
     </el-table>
     <el-pagination v-if="jobOrderTotal > 0" class="table-pagination" background layout="total, sizes, prev, pager, next"
       :current-page="jobOrderPage" :page-size="jobOrderSize" :total="jobOrderTotal" :page-sizes="[10, 20, 50, 100]"
@@ -82,5 +87,14 @@ const bytes = (value) => { const n = Number(value || 0); if (n < 1024) return `$
       <el-table-column label="进度" width="180"><template #default="{ row }">{{ row.bytesDone || 0 }} / {{ row.bytesTotal || 0 }}</template></el-table-column>
       <el-table-column label="失败原因" min-width="260"><template #default="{ row }"><span class="error-text">{{ row.failureCode || '' }} {{ row.failureMessage || '' }}</span></template></el-table-column>
     </el-table>
+    <el-dialog v-model="jobLogVisible" :title="jobLogTitle" width="min(980px, 92vw)" top="7vh" destroy-on-close>
+      <div v-loading="jobLogLoading" class="log-console"><div v-if="!jobLogRecords.length" class="console-empty">暂无已持久化的执行日志。历史任务不会补写旧日志。</div><details v-for="entry in jobLogRecords" :key="entry.id" class="console-entry" :class="logTone(entry.logLevel)"><summary><time>{{ formatTime(entry.occurredAt) }}</time><b>[{{ entry.logLevel || 'INFO' }}]</b><span>[{{ entry.stage || '-' }}]</span><span>{{ entry.message }}</span></summary><pre v-if="entry.detailJson">{{ detail(entry.detailJson) }}</pre></details></div>
+      <template #footer><el-pagination v-if="jobLogTotal" small background layout="total, sizes, prev, pager, next" :current-page="jobLogCurrent" :page-size="jobLogSize" :total="jobLogTotal" :page-sizes="[20,50,100]" @current-change="changeBackupLogPage" @size-change="changeBackupLogSize" /></template>
+    </el-dialog>
   </el-card>
 </template>
+
+<style scoped>
+.log-console { min-height: 280px; max-height: 62vh; overflow: auto; padding: 14px; border-radius: 8px; background: #111827; color: #d1d5db; font: 12px/1.7 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; }
+.console-entry { border-bottom: 1px solid #273244; padding: 8px 0; }.console-entry summary { cursor: pointer; display: flex; gap: 8px; align-items: baseline; }.console-entry time { color: #94a3b8; white-space: nowrap; }.console-entry b { color: #60a5fa; }.console-entry.is-warn b { color: #fbbf24; }.console-entry.is-error b { color: #f87171; }.console-entry span:last-child { color: #e5e7eb; overflow-wrap: anywhere; }.console-entry pre { margin: 8px 0 0 20px; padding: 8px; white-space: pre-wrap; overflow-wrap: anywhere; color: #a5b4fc; background: #0b1120; border-radius: 4px; }.console-empty { color: #94a3b8; padding: 32px 0; text-align: center; }
+</style>
