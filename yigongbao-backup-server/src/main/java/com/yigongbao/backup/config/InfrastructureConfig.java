@@ -12,6 +12,7 @@ import com.yigongbao.backup.cold.HotCleanupService;
 import com.yigongbao.backup.order.BkSupplementFileMapper;
 import com.yigongbao.backup.order.SupplementService;
 import com.yigongbao.backup.storage.api.ArtifactStore;
+import com.yigongbao.backup.storage.api.VolumeArtifactStore;
 import com.yigongbao.backup.storage.api.StorageProbe;
 import com.yigongbao.backup.storage.local.LocalDirectoryArtifactStore;
 import com.yigongbao.backup.storage.probe.DefaultStorageProbe;
@@ -68,7 +69,7 @@ public class InfrastructureConfig {
 
     @Bean
     @ConditionalOnMissingBean
-    SupplementService supplementService(ArtifactStore store, BkSupplementFileMapper mapper,
+    SupplementService supplementService(VolumeArtifactStore store, BkSupplementFileMapper mapper,
                                          RuntimeConfigService runtimeConfig) {
         return new SupplementService(store, mapper, runtimeConfig);
     }

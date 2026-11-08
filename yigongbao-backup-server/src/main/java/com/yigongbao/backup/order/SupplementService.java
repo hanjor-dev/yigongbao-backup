@@ -1,6 +1,8 @@
 package com.yigongbao.backup.order;
 
 import com.yigongbao.backup.storage.api.ArtifactStore;
+import com.yigongbao.backup.storage.api.VolumeArtifactStore;
+import com.yigongbao.backup.storage.api.LegacyArtifactStoreVolumeAdapter;
 import java.io.FilterInputStream;
 import java.io.IOException;
 import java.io.InputStream;
@@ -17,11 +19,13 @@ import com.yigongbao.backup.config.RuntimeConfigService;
 
 /** 订单补传只允许配置的工程文件类型和大小，第一期不提供删除。 */
 public final class SupplementService {
-    private final ArtifactStore store; private final Set<String> extensions; private final long maxBytes; private final BkSupplementFileMapper mapper; private final RuntimeConfigService runtimeConfig;
+    private final VolumeArtifactStore store; private final Set<String> extensions; private final long maxBytes; private final BkSupplementFileMapper mapper; private final RuntimeConfigService runtimeConfig;
     public SupplementService(ArtifactStore store, Set<String> extensions, long maxBytes) { this(store, extensions, maxBytes, null); }
     public SupplementService(ArtifactStore store, Set<String> extensions, long maxBytes, BkSupplementFileMapper mapper) { this(store, extensions, maxBytes, mapper, null); }
     public SupplementService(ArtifactStore store, BkSupplementFileMapper mapper, RuntimeConfigService runtimeConfig) { this(store, Set.of("zip", "step", "stl", "dcm"), 1073741824L, mapper, runtimeConfig); }
-    public SupplementService(ArtifactStore store, Set<String> extensions, long maxBytes, BkSupplementFileMapper mapper, RuntimeConfigService runtimeConfig) { this.store=store; this.extensions=extensions; this.maxBytes=maxBytes; this.mapper=mapper; this.runtimeConfig=runtimeConfig; }
+    public SupplementService(ArtifactStore store, Set<String> extensions, long maxBytes, BkSupplementFileMapper mapper, RuntimeConfigService runtimeConfig) { this.store=new LegacyArtifactStoreVolumeAdapter(store); this.extensions=extensions; this.maxBytes=maxBytes; this.mapper=mapper; this.runtimeConfig=runtimeConfig; }
+    /** 多卷生产构造器：调用方必须在任务创建时锁定目标卷。 */
+    public SupplementService(VolumeArtifactStore store, BkSupplementFileMapper mapper, RuntimeConfigService runtimeConfig) { this.store=store; this.extensions=Set.of("zip", "step", "stl", "dcm"); this.maxBytes=1073741824L; this.mapper=mapper; this.runtimeConfig=runtimeConfig; }
     public String upload(String orderId, String fileName, InputStream content, long size) throws IOException {
         if (orderId == null || !orderId.matches("[A-Za-z0-9_-]{1,64}")) throw new IllegalArgumentException("订单号非法");
         if (size < 0 || size > maxBytes()) throw new IllegalArgumentException("补传文件超过大小上限");
@@ -29,13 +33,19 @@ public final class SupplementService {
         if (!allowedExtensions().contains(ext)) throw new IllegalArgumentException("补传文件格式不允许");
         String id=UUID.randomUUID().toString();
         String key="supplements/"+orderId+"/"+id+"-"+safe;
-        store.put(key, bounded(content));
+        store.put(0L, key, bounded(content));
         return id;
     }
 
     /** 上传并在 bk_supplement_file 中登记元数据；数据库失败时尽力回滚已写入文件。 */
     public String uploadForSnapshot(long snapshotId, String orderId, String fileName, InputStream content,
                                    long size, long uploadedBy, String contentType, String remark) throws IOException {
+        return uploadForSnapshot(snapshotId, orderId, fileName, content, size, uploadedBy, contentType, remark, 0L);
+    }
+
+    /** 上传时将文件位置绑定到已锁定的热备卷。 */
+    public String uploadForSnapshot(long snapshotId, String orderId, String fileName, InputStream content,
+                                   long size, long uploadedBy, String contentType, String remark, long storageVolumeId) throws IOException {
         if (mapper == null) throw new IllegalStateException("补传元数据持久化未配置");
         if (snapshotId < 1) throw new IllegalArgumentException("订单快照非法");
         String safe = safeFileName(fileName);
@@ -50,14 +60,14 @@ public final class SupplementService {
         try {
             MessageDigest sha = MessageDigest.getInstance("SHA-256");
             try (DigestInputStream input = new DigestInputStream(bounded(content), sha)) {
-                store.put(key, input);
+                store.put(storageVolumeId, key, input);
             }
-            Path path = store.root().resolve(key).normalize();
-            if (!path.startsWith(store.root()) || !Files.isRegularFile(path)) throw new IOException("补传文件写入后不存在");
+            Path path = store.resolve(storageVolumeId, key);
+            if (!Files.isRegularFile(path)) throw new IOException("补传文件写入后不存在");
             actualSize = Files.size(path);
             digest = java.util.HexFormat.of().formatHex(sha.digest());
             BkSupplementFileEntity entity = new BkSupplementFileEntity();
-            entity.setSnapshotId(snapshotId); entity.setStorageKey(key); entity.setOriginalFilename(safe);
+            entity.setSnapshotId(snapshotId); if (storageVolumeId > 0) entity.setStorageVolumeId(storageVolumeId); entity.setStorageKey(key); entity.setOriginalFilename(safe);
             entity.setInternalFilename(id + "-" + safe); entity.setSize(actualSize); entity.setSha256(digest);
             entity.setContentType(contentType); entity.setExtension(ext); entity.setUploadedBy(uploadedBy);
             entity.setUploadedAt(LocalDateTime.now()); entity.setRemark(remark); entity.setHotStatus("AVAILABLE");
@@ -67,7 +77,7 @@ public final class SupplementService {
         } catch (java.security.NoSuchAlgorithmException e) {
             throw new IllegalStateException("SHA-256不可用", e);
         } catch (RuntimeException | IOException e) {
-            try { store.delete(key); } catch (IOException ignored) { }
+            try { store.delete(storageVolumeId, key); } catch (IOException ignored) { }
             throw e;
         }
     }
@@ -79,14 +89,14 @@ public final class SupplementService {
             throw new IllegalArgumentException("补传文件标识非法");
         }
         String prefix = fileId + "-";
-        try (var paths = store.list("supplements/" + orderId)) {
+        try (var paths = store.list(0L, "supplements/" + orderId)) {
             Path match = paths.filter(Files::isRegularFile)
                     .filter(path -> path.getFileName().toString().startsWith(prefix))
                     .findFirst().orElse(null);
             if (match == null) {
                 throw new java.nio.file.NoSuchFileException(fileId);
             }
-            return store.open("supplements/" + orderId + "/" + match.getFileName());
+            return store.open(0L, "supplements/" + orderId + "/" + match.getFileName());
         } catch (java.nio.file.NoSuchFileException exception) {
             throw exception;
         }
@@ -97,7 +107,7 @@ public final class SupplementService {
         if (orderId == null || !orderId.matches("[A-Za-z0-9_-]{1,64}")) {
             throw new IllegalArgumentException("订单号非法");
         }
-        try (var paths = store.list("supplements/" + orderId)) {
+        try (var paths = store.list(0L, "supplements/" + orderId)) {
             return paths.filter(Files::isRegularFile)
                     .map(path -> {
                         String name = path.getFileName().toString();
@@ -131,7 +141,7 @@ public final class SupplementService {
                         .eq(BkSupplementFileEntity::getIsDeleted, 0))
                 .stream().filter(item -> fileId.equals(fileId(item.getInternalFilename()))).findFirst().orElse(null);
         if (entity == null) throw new java.nio.file.NoSuchFileException(fileId);
-        return store.open(entity.getStorageKey());
+        return store.open(entity.getStorageVolumeId() == null ? 0L : entity.getStorageVolumeId(), entity.getStorageKey());
     }
 
     private Set<String> allowedExtensions() {

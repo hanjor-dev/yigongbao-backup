@@ -3,6 +3,8 @@ package com.yigongbao.backup.backup;
 import com.baomidou.mybatisplus.core.toolkit.Wrappers;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.yigongbao.backup.order.*;
+import com.yigongbao.backup.storage.location.ArtifactCopyEntity;
+import com.yigongbao.backup.storage.location.ArtifactCopyMapper;
 import lombok.RequiredArgsConstructor;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
@@ -19,6 +21,7 @@ public class BackupEvidenceService {
     private final AssetMapper assets;
     private final AssetRelationMapper relations;
     private final OrderPackageMapper packages;
+    private final ArtifactCopyMapper artifactCopies;
     private final ObjectMapper mapper;
 
     /** 幂等覆盖同一订单的当前备份证据；外部文件已完整提交后才调用。 */
@@ -102,7 +105,27 @@ public class BackupEvidenceService {
         pkg.setVerifiedAt(LocalDateTime.now());
         if (pkg.getVersion() == null) pkg.setVersion(0);
         if (pkg.getId() == null) packages.insert(pkg); else packages.updateById(pkg);
+        if (pkg.getStorageVolumeId() != null && pkg.getStorageVolumeId() > 0) {
+            upsertHotCopy(pkg);
+        }
         return snapshot;
+    }
+
+    /** 订单包主记录保存后，同步登记物理副本，供后续冷热副本选择器统一读取。 */
+    private void upsertHotCopy(OrderPackageEntity pkg) {
+        ArtifactCopyEntity copy = artifactCopies.selectOne(Wrappers.<ArtifactCopyEntity>lambdaQuery()
+                .eq(ArtifactCopyEntity::getArtifactType, "ORDER_PACKAGE")
+                .eq(ArtifactCopyEntity::getArtifactId, pkg.getId())
+                .eq(ArtifactCopyEntity::getStorageVolumeId, pkg.getStorageVolumeId())
+                .eq(ArtifactCopyEntity::getStorageKey, pkg.getStorageKey())
+                .eq(ArtifactCopyEntity::getIsDeleted, 0).last("limit 1"));
+        if (copy == null) copy = new ArtifactCopyEntity();
+        copy.setArtifactType("ORDER_PACKAGE"); copy.setArtifactId(pkg.getId());
+        copy.setLocationType("HOT_NAS"); copy.setLocationRefId(pkg.getId());
+        copy.setStorageVolumeId(pkg.getStorageVolumeId()); copy.setStorageKey(pkg.getStorageKey());
+        copy.setState("VERIFIED"); copy.setLifecycle("ACTIVE"); copy.setSize(pkg.getPackageSize());
+        copy.setSha256(pkg.getPackageSha256()); copy.setLastVerifiedAt(LocalDateTime.now());
+        if (copy.getId() == null) artifactCopies.insert(copy); else artifactCopies.updateById(copy);
     }
 
     /** 发布模拟快照供订单文件页查询下载；该状态不会被恢复流程接受。 */
