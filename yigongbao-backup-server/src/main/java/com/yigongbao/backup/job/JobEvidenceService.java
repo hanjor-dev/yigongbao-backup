@@ -55,6 +55,19 @@ public class JobEvidenceService {
         file(jobId, sourceId, identity, step, status, done, total, null, failure);
     }
 
+    /** 写入文件处理证据及不可变的卷定位快照。 */
+    public void fileAtVolume(long jobId, Long sourceId, String identity, String step, String status,
+                             long done, long total, String objectKey, Long volumeId, String storageKey,
+                             String volumeName, String tier, Throwable failure) {
+        file(jobId, sourceId, identity, step, status, done, total, objectKey, failure);
+        JobFileEntity row = files.selectOne(Wrappers.<JobFileEntity>lambdaQuery().eq(JobFileEntity::getJobId, jobId)
+                .eq(JobFileEntity::getAssetIdentity, identity).eq(JobFileEntity::getStep, step).last("limit 1"));
+        if (row != null && volumeId != null) {
+            row.setStorageVolumeId(volumeId); row.setStorageKey(storageKey); row.setStorageVolumeName(volumeName); row.setStorageTier(tier);
+            files.updateById(row);
+        }
+    }
+
     /** 固化恢复任务选定的包副本；任务重试不得重新按当前活动卷推导路径。 */
     public void restoreSource(long jobId, long sourceId, long snapshotId, long packageId,
                               long storageVolumeId, String storageKey, String sha256) {

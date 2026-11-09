@@ -15,6 +15,15 @@ import java.util.zip.ZipEntry;
 import java.util.zip.ZipInputStream;
 import java.util.zip.ZipFile;
 import com.yigongbao.backup.config.RuntimeConfigService;
+import com.yigongbao.backup.storage.api.VolumeArtifactStore;
+import com.yigongbao.backup.storage.volume.ActiveVolumeSelectionService;
+import com.yigongbao.backup.storage.volume.StorageVolumeEntity;
+import com.yigongbao.backup.storage.volume.StorageVolumeMapper;
+import com.yigongbao.backup.storage.location.ArtifactCopyEntity;
+import com.yigongbao.backup.storage.location.ArtifactCopyMapper;
+import com.yigongbao.backup.order.OrderPackageEntity;
+import com.yigongbao.backup.order.OrderPackageMapper;
+import com.baomidou.mybatisplus.core.toolkit.Wrappers;
 
 /** 扫描管理员复制到导入区的冷备压缩包，按订单选择性恢复到热备目录。 */
 public final class ColdImportService {
@@ -25,6 +34,11 @@ public final class ColdImportService {
     private final ArtifactStore hot;
     private final long maxImportBytes;
     private final RuntimeConfigService runtimeConfig;
+    private final StorageVolumeMapper volumeMapper;
+    private final ActiveVolumeSelectionService activeVolumes;
+    private final VolumeArtifactStore volumeStore;
+    private final ArtifactCopyMapper copies;
+    private final OrderPackageMapper packages;
 
     public ColdImportService(Path importRoot, ArtifactStore hot) {
         this(importRoot, hot, DEFAULT_MAX_IMPORT_BYTES, null);
@@ -47,14 +61,29 @@ public final class ColdImportService {
         this.hot = hot;
         this.maxImportBytes = maxImportBytes;
         this.runtimeConfig = runtimeConfig;
+        this.volumeMapper = null;
+        this.activeVolumes = null;
+        this.volumeStore = null;
+        this.copies = null;
+        this.packages = null;
+    }
+
+    /** Production constructor: IMPORT and HOT roots come from managed volume records. */
+    public ColdImportService(StorageVolumeMapper volumeMapper, ActiveVolumeSelectionService activeVolumes,
+                             VolumeArtifactStore volumeStore, ArtifactCopyMapper copies, OrderPackageMapper packages,
+                             long maxImportBytes, RuntimeConfigService runtimeConfig) {
+        this.importRoot = null; this.hot = null; this.maxImportBytes = maxImportBytes;
+        this.runtimeConfig = runtimeConfig; this.volumeMapper = volumeMapper; this.activeVolumes = activeVolumes; this.volumeStore = volumeStore;
+        this.copies = copies; this.packages = packages;
     }
 
     /** 扫描管理员放入冷备导入区的压缩包。 */
     public List<Path> scan() throws IOException {
-        if (!Files.exists(importRoot)) {
+        Path root = importRoot();
+        if (!Files.exists(root)) {
             return List.of();
         }
-        try (var paths = Files.list(importRoot)) {
+        try (var paths = Files.list(root)) {
             return paths.filter(Files::isRegularFile)
                     .filter(path -> path.getFileName().toString().toLowerCase().endsWith(".zip"))
                     .sorted()
@@ -76,12 +105,16 @@ public final class ColdImportService {
                 }
             }
         }
-        Path archive = importRoot.resolve(batchZipName).normalize();
-        if (!archive.startsWith(importRoot) || !Files.isRegularFile(archive)) {
+        Path root = importRoot();
+        Path archive = root.resolve(batchZipName).normalize();
+        if (!archive.startsWith(root) || !Files.isRegularFile(archive)) {
             throw new IllegalArgumentException("导入包不存在");
         }
 
-        Path staging = hot.root().resolve(".cold-import-staging").resolve(UUID.randomUUID().toString());
+        StorageVolumeEntity destinationVolume = activeVolumes == null ? null : activeVolumes.selectActiveForNewBackup(estimateRestoreBytes(batchZipName, orderIds));
+        Path hotRoot = hotRoot();
+        Path staging = volumeStore == null ? hotRoot.resolve(".cold-import-staging").resolve(UUID.randomUUID().toString())
+                : Files.createTempDirectory("yigongbao-cold-import-");
         List<PendingImport> pending = new ArrayList<>();
         long totalBytes = 0;
         int entries = 0;
@@ -116,8 +149,8 @@ public final class ColdImportService {
                         throw new IOException("冷备导入解压总量超过配置限制");
                     }
                     String fileName = Path.of(name).getFileName().toString();
-                    Path target = hot.root().resolve(targetPath(name, order, fileName)).normalize();
-                    if (!target.startsWith(hot.root())) {
+                    Path target = hotRoot.resolve(targetPath(name, order, fileName)).normalize();
+                    if (!target.startsWith(hotRoot)) {
                         throw new IOException("目标路径非法");
                     }
                     pending.add(new PendingImport(staged, target));
@@ -127,12 +160,20 @@ public final class ColdImportService {
                 throw new IOException("冷备归档缺少 _COMPLETE 完成标记");
             }
             for (PendingImport item : pending) {
-                Files.createDirectories(item.target().getParent());
-                try {
-                    Files.move(item.staged(), item.target(), StandardCopyOption.ATOMIC_MOVE,
-                            StandardCopyOption.REPLACE_EXISTING);
-                } catch (java.nio.file.AtomicMoveNotSupportedException exception) {
-                    Files.move(item.staged(), item.target(), StandardCopyOption.REPLACE_EXISTING);
+                if (volumeStore != null) {
+                    String storageKey = hotRoot.relativize(item.target()).toString().replace('\\', '/');
+                    try (var input = Files.newInputStream(item.staged())) {
+                        volumeStore.put(destinationVolume.getId(), storageKey, input);
+                    }
+                    recordRestoredCopy(destinationVolume.getId(), storageKey, Files.size(item.staged()));
+                } else {
+                    Files.createDirectories(item.target().getParent());
+                    try {
+                        Files.move(item.staged(), item.target(), StandardCopyOption.ATOMIC_MOVE,
+                                StandardCopyOption.REPLACE_EXISTING);
+                    } catch (java.nio.file.AtomicMoveNotSupportedException exception) {
+                        Files.move(item.staged(), item.target(), StandardCopyOption.REPLACE_EXISTING);
+                    }
                 }
             }
             return pending.size();
@@ -167,9 +208,29 @@ public final class ColdImportService {
                 || Path.of(batchZipName).getNameCount() != 1
                 || !batchZipName.toLowerCase().endsWith(".zip")) throw new IllegalArgumentException("导入包名称非法");
         if (orderIds != null) for (String orderId : orderIds) if (orderId == null || !orderId.matches("[A-Za-z0-9_-]{1,64}")) throw new IllegalArgumentException("订单号非法");
-        Path archive = importRoot.resolve(batchZipName).normalize();
-        if (!archive.startsWith(importRoot) || !Files.isRegularFile(archive)) throw new IllegalArgumentException("导入包不存在");
+        Path root = importRoot();
+        Path archive = root.resolve(batchZipName).normalize();
+        if (!archive.startsWith(root) || !Files.isRegularFile(archive)) throw new IllegalArgumentException("导入包不存在");
         return archive;
+    }
+
+    private Path importRoot() {
+        if (importRoot != null) return importRoot;
+        StorageVolumeEntity volume = volumeMapper.selectOne(Wrappers.<StorageVolumeEntity>lambdaQuery()
+                .eq(StorageVolumeEntity::getTier, "IMPORT").eq(StorageVolumeEntity::getMountStatus, "ONLINE")
+                .eq(StorageVolumeEntity::getIsDeleted, 0).last("LIMIT 1"));
+        if (volume == null) throw new IllegalStateException("没有在线 IMPORT 存储卷");
+        return Path.of(volume.getRootPath()).toAbsolutePath().normalize();
+    }
+
+    private Path hotRoot() {
+        return hot != null ? hot.root() : Path.of(activeVolumes.requireActiveHotVolume().getRootPath()).toAbsolutePath().normalize();
+    }
+
+    /** Import job pins the same currently active destination volume for its reservation. */
+    public long activeHotVolumeId() {
+        if (activeVolumes == null) throw new IllegalStateException("历史导入适配器不支持按卷预留");
+        return activeVolumes.requireActiveHotVolume().getId();
     }
 
     private static String safeEntryName(ZipEntry entry) throws IOException {
@@ -204,6 +265,24 @@ public final class ColdImportService {
 
     private long maxImportBytes() {
         return runtimeConfig == null ? maxImportBytes : runtimeConfig.getLong("cold.max-import-bytes", maxImportBytes, 1L);
+    }
+
+    /** 仅为已知订单制品补齐热备副本台账，避免为无法关联业务的数据制造孤儿记录。 */
+    private void recordRestoredCopy(long volumeId, String storageKey, long size) {
+        if (copies == null || packages == null) return;
+        OrderPackageEntity pkg = packages.selectOne(Wrappers.<OrderPackageEntity>lambdaQuery()
+                .eq(OrderPackageEntity::getStorageKey, storageKey).last("LIMIT 1"));
+        if (pkg == null) return;
+        ArtifactCopyEntity copy = copies.selectOne(Wrappers.<ArtifactCopyEntity>lambdaQuery()
+                .eq(ArtifactCopyEntity::getArtifactType, "ORDER_PACKAGE").eq(ArtifactCopyEntity::getArtifactId, pkg.getId())
+                .eq(ArtifactCopyEntity::getStorageVolumeId, volumeId).last("LIMIT 1"));
+        if (copy == null) {
+            copy = new ArtifactCopyEntity(); copy.setArtifactType("ORDER_PACKAGE"); copy.setArtifactId(pkg.getId());
+            copy.setStorageVolumeId(volumeId); copy.setStorageKey(storageKey);
+            copy.setState("PRESENT"); copy.setLifecycle("ACTIVE"); copy.setSize(size); copies.insert(copy);
+            return;
+        }
+        copy.setState("PRESENT"); copy.setLifecycle("ACTIVE"); copy.setSize(size); copies.updateById(copy);
     }
 
     /** 从标准化压缩路径提取订单号。 */

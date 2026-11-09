@@ -3,6 +3,8 @@ package com.yigongbao.backup.storage.volume;
 import com.baomidou.mybatisplus.core.toolkit.Wrappers;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.yigongbao.backup.audit.AuditLogService;
+import com.yigongbao.backup.job.JobEntity;
+import com.yigongbao.backup.job.JobMapper;
 import lombok.RequiredArgsConstructor;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
@@ -28,6 +30,7 @@ public class StorageVolumeLifecycleService {
     private final StorageVolumeHealthService healthService;
     private final AuditLogService auditLogService;
     private final ObjectMapper objectMapper;
+    private final JobMapper jobMapper;
 
     /** 返回只读候选卷，调用方必须显式执行 register 才会创建目录或台账。 */
     public List<DiscoveredStorageVolume> scan() {
@@ -62,7 +65,7 @@ public class StorageVolumeLifecycleService {
         entity.setUpdateBy(operatorId);
         volumeMapper.insert(entity);
 
-        UUID markerId = markerId(entity.getId());
+        UUID markerId = UUID.randomUUID();
         try {
             markerService.initialize(candidate.rootPath(), markerId);
             StorageVolumeHealthService.HealthSnapshot health = healthService.probe(entity);
@@ -83,7 +86,7 @@ public class StorageVolumeLifecycleService {
     @Transactional
     public StorageVolumeEntity confirmMounted(long volumeId, long operatorId) {
         StorageVolumeEntity entity = required(volumeId);
-        StorageVolumeMarkerService.VerificationResult verification = markerService.verify(Path.of(entity.getRootPath()), markerId(volumeId));
+        StorageVolumeMarkerService.VerificationResult verification = markerService.verify(Path.of(entity.getRootPath()), markerId(entity));
         if (!verification.valid()) {
             throw new StorageVolumeOperationException("卷挂载确认失败：" + verification.reason());
         }
@@ -106,10 +109,12 @@ public class StorageVolumeLifecycleService {
         if (tier == null || writeStatus == null) {
             throw new StorageVolumeOperationException("存储卷目标状态不能为空");
         }
-        if (writeStatus == StorageVolumeStatus.Write.ACTIVE
-                && (!StorageVolumeStatus.Tier.HOT.name().equals(tier.name())
-                || !StorageVolumeStatus.Mount.ONLINE.name().equals(entity.getMountStatus()))) {
-            throw new StorageVolumeOperationException("仅在线 HOT 卷可以设为 ACTIVE");
+        if (writeStatus == StorageVolumeStatus.Write.ACTIVE) {
+            // ACTIVE 切换还需要检查正在写入的任务并降级旧卷，不能由通用状态接口绕过。
+            throw new StorageVolumeOperationException("ACTIVE 状态必须通过 setActive 受控切换");
+        }
+        if (StorageVolumeStatus.Write.ACTIVE.name().equals(entity.getWriteStatus())) {
+            throw new StorageVolumeOperationException("当前 ACTIVE 卷必须先受控切换到其他 HOT 卷");
         }
         entity.setTier(tier.name());
         entity.setWriteStatus(writeStatus.name());
@@ -119,7 +124,10 @@ public class StorageVolumeLifecycleService {
         return entity;
     }
 
-    /** 显式激活一个在线热备卷；已有活动卷必须由管理员先转为只读，避免隐式切换。 */
+    /**
+     * 显式切换唯一活动热备卷。
+     * 任何仍向原 ACTIVE 卷写入的任务都会阻止切换，已创建任务因已固化目标卷而不受影响。
+     */
     @Transactional
     public StorageVolumeEntity setActive(long volumeId, long operatorId) {
         StorageVolumeEntity entity = required(volumeId);
@@ -127,14 +135,27 @@ public class StorageVolumeLifecycleService {
                 || !StorageVolumeStatus.Mount.ONLINE.name().equals(entity.getMountStatus())) {
             throw new StorageVolumeOperationException("只有在线 HOT 卷可设为活动卷");
         }
-        long activeCount = volumeMapper.selectCount(Wrappers.<StorageVolumeEntity>lambdaQuery()
+        List<StorageVolumeEntity> activeVolumes = volumeMapper.selectList(Wrappers.<StorageVolumeEntity>lambdaQuery()
                 .eq(StorageVolumeEntity::getTier, StorageVolumeStatus.Tier.HOT.name())
                 .eq(StorageVolumeEntity::getWriteStatus, StorageVolumeStatus.Write.ACTIVE.name())
                 .ne(StorageVolumeEntity::getId, volumeId).eq(StorageVolumeEntity::getIsDeleted, 0));
-        if (activeCount > 0) {
-            throw new StorageVolumeOperationException("已有活动热备卷，请先完成受控切换");
+        for (StorageVolumeEntity active : activeVolumes) {
+            long runningWrites = jobMapper.selectCount(Wrappers.<JobEntity>lambdaQuery()
+                    .eq(JobEntity::getTargetStorageVolumeId, active.getId())
+                    .in(JobEntity::getStatus, "RUNNING", "RETRYING_FAILED_ORDERS"));
+            if (runningWrites > 0) {
+                throw new StorageVolumeOperationException("原活动卷仍有运行中的写入任务，禁止切换");
+            }
+            active.setWriteStatus(StorageVolumeStatus.Write.READ_ONLY.name());
+            active.setUpdateBy(operatorId);
+            volumeMapper.updateById(active);
         }
-        return changeTier(volumeId, StorageVolumeStatus.Tier.HOT, StorageVolumeStatus.Write.ACTIVE, operatorId);
+        entity.setTier(StorageVolumeStatus.Tier.HOT.name());
+        entity.setWriteStatus(StorageVolumeStatus.Write.ACTIVE.name());
+        entity.setUpdateBy(operatorId);
+        volumeMapper.updateById(entity);
+        audit(operatorId, "SET_ACTIVE", entity, "SUCCESS", null);
+        return entity;
     }
 
     /** 按主键读取逻辑卷。 */
@@ -146,14 +167,24 @@ public class StorageVolumeLifecycleService {
         return entity;
     }
 
+    /** 供后台探测使用：只有已登记标记的介质才能被重新标记为在线。 */
+    public boolean hasValidMarker(StorageVolumeEntity entity) {
+        return markerService.verify(Path.of(entity.getRootPath()), markerId(entity)).valid();
+    }
+
     private void audit(long operatorId, String action, StorageVolumeEntity volume, String result, String failureReason) {
         auditLogService.append(new AuditLogService.Event(AuditLogService.DEFAULT_CHAIN, operatorId, "ADMIN", null,
                 "STORAGE_VOLUME_" + action, "STORAGE_VOLUME", String.valueOf(volume.getId()), null, null,
                 result, failureReason, LocalDateTime.now()));
     }
 
-    private UUID markerId(long volumeId) {
-        return UUID.nameUUIDFromBytes(("yigongbao-storage-volume:" + volumeId).getBytes(StandardCharsets.UTF_8));
+    private UUID markerId(StorageVolumeEntity entity) {
+        try {
+            return UUID.fromString(objectMapper.readTree(entity.getMarkerJson()).path("volumeId").asText());
+        } catch (Exception ignored) {
+            // 兼容早期尚未记录随机标记的卷；新纳管卷始终走 markerJson。
+            return UUID.nameUUIDFromBytes(("yigongbao-storage-volume:" + entity.getId()).getBytes(StandardCharsets.UTF_8));
+        }
     }
 
     public record RegisterCommand(Path mountPath, String volumeCode, String displayName,

@@ -13,9 +13,9 @@ import com.yigongbao.backup.common.BusinessLogFormatter;
 import com.yigongbao.backup.config.RuntimeConfigService;
 import com.yigongbao.backup.job.PartialJobFailureException;
 import com.yigongbao.backup.remote.RemoteCallException;
-import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.ObjectProvider;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Component;
 
 import java.util.List;
@@ -24,7 +24,6 @@ import java.time.format.DateTimeFormatter;
 
 /** 执行自动订单热备任务；任一文件失败时当前订单整体失败。 */
 @Component
-@RequiredArgsConstructor
 @Slf4j
 public class ManualBackupJobHandler implements JobHandler {
     private final ObjectProvider<OnlineManifestClient> manifests;
@@ -35,6 +34,17 @@ public class ManualBackupJobHandler implements JobHandler {
     private final BackupEvidenceService backupEvidence;
     private final RuntimeConfigService configs;
     private final BackupExecutionModeProvider executionModes;
+
+    /** 生产注入构造器显式标注，避免兼容构造器存在时 Spring 误判为无参创建。 */
+    @Autowired
+    public ManualBackupJobHandler(ObjectProvider<OnlineManifestClient> manifests, ObjectProvider<CosObjectClient> cosClients,
+                                  VolumeArtifactStore store, ObjectMapper mapper, SpaceReservationService reservations,
+                                  BackupEvidenceService backupEvidence, RuntimeConfigService configs,
+                                  BackupExecutionModeProvider executionModes) {
+        this.manifests = manifests; this.cosClients = cosClients; this.store = store; this.mapper = mapper;
+        this.reservations = reservations; this.backupEvidence = backupEvidence; this.configs = configs;
+        this.executionModes = executionModes;
+    }
 
     /** 保留旧单根目录构造器，供历史单元测试和未迁移任务兼容；生产容器注入多卷接口。 */
     public ManualBackupJobHandler(ObjectProvider<OnlineManifestClient> manifests, ObjectProvider<CosObjectClient> cosClients,

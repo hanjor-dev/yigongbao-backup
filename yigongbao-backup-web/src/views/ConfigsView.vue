@@ -21,7 +21,6 @@ const dependencyWarning = computed(() => {
   return '';
 });
 function effectiveText(item) {
-  if (['storage.hot-root', 'storage.managed-roots', 'cold.import-root'].includes(item?.key)) return '重启后生效';
   if (item?.key?.startsWith('online.')) return '下次线上请求';
   if (item?.key?.includes('schedule') || item?.key?.startsWith('job.')) return '下一调度周期';
   return '保存后生效';

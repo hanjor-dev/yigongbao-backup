@@ -16,8 +16,6 @@ import com.yigongbao.backup.order.OrderPackageEntity;
 import com.yigongbao.backup.order.OrderPackageMapper;
 import com.yigongbao.backup.storage.api.VolumeArtifactStore;
 import com.yigongbao.backup.storage.location.ArtifactReplicaResolver;
-import com.yigongbao.backup.storage.api.SpacePlanner.SpaceReservation;
-import com.yigongbao.backup.storage.api.SpaceReservationService;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.ObjectProvider;
@@ -44,7 +42,6 @@ public class RestoreJobHandler implements JobHandler {
     private final ArtifactReplicaResolver replicas;
     private final ObjectProvider<OnlineRestoreClient> clients;
     private final ObjectMapper mapper;
-    private final SpaceReservationService reservations;
     private final PersistentJobService jobService;
     private final RuntimeConfigService configs;
 
@@ -137,7 +134,6 @@ public class RestoreJobHandler implements JobHandler {
                 context.safePoint("RESTORE_ORDER_COMPLETED", done);
                 continue;
             }
-            SpaceReservation reservation = null;
             try {
                 // 本地包、容量等前置检查失败时也必须落订单失败明细。
                 context.orderStarted(snapshot.getSourceOrderId(), snapshot.getId());
@@ -180,7 +176,8 @@ public class RestoreJobHandler implements JobHandler {
                     context.safePoint("RESTORE_ORDER_COMPLETED", done);
                     continue;
                 }
-                reservation = reservations.reserve("hot", Files.size(path), job.getId());
+                // 恢复只从已固化源卷读取并解压到受控临时目录，不向热备卷写入，
+                // 因此不能复用“热备写入”的容量预留入口。
                 context.fileStarted(snapshot.getSourceOrderId(), snapshot.getOrderCode(), "RESTORE_UPLOAD", Files.size(path));
                 log.info("线上恢复订单开始｜任务ID={}｜订单ID={}｜订单号={}｜包大小={}字节", job.getId(), snapshot.getSourceOrderId(), snapshot.getOrderCode(), Files.size(path));
                 service.restore(path, snapshot.getSourceOrderId().toString(), new LocalOrderRestoreService.RestoreAssetListener() {
@@ -250,8 +247,6 @@ public class RestoreJobHandler implements JobHandler {
                         Map.of("sourceOrderId", snapshot.getSourceOrderId(), "snapshotId", snapshot.getId(),
                                 "retryPhase", phase, "reason", safe(failure), "nonRetryable", nonRetryable));
                 log.warn("线上恢复订单失败，继续后续订单｜任务ID={}｜订单ID={}｜原因={}", job.getId(), snapshot.getSourceOrderId(), failure.getMessage(), failure);
-            } finally {
-                if (reservation != null) reservations.release(reservation);
             }
             done++;
             context.safePoint("RESTORE_ORDER_COMPLETED", done);

@@ -10,7 +10,7 @@
    - `backup.schedule.interval-days=1`
    - `backup.schedule.start-time=<当前时间后1分钟>`
    - `backup.collection.days-before=7`（按自然日备份7天前及更早创建的正式订单）
-   - `storage.hot-root=D:/yigongbao-backup/data`
+   - 已在“存储卷管理”中纳管一个 ONLINE、ACTIVE 的 HOT 卷
    - `storage.managed-roots=D:/yigongbao-backup/data,D:/yigongbao-backup/cold-disks,D:/yigongbao-backup/cold-import`
 3. 本地与模拟服务仍需配置相同的 `BACKUP_SHARED_HMAC_SECRET`；模拟服务不会校验签名，但本地HTTP客户端要求该值存在。
 4. 在本地备份后端 `.env` 设置 `BACKUP_DEV_CANDIDATE_LIMIT=5`（仅开发联调，生产必须删除或设为0）；线上候选接口仍使用内部技术分页，但不会限制正式环境单个任务的订单总数。然后启动模拟服务：`node tools/mock-online-backup-server.mjs`。

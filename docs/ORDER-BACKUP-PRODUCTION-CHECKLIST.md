@@ -78,8 +78,7 @@ BACKUP_MAX_UPLOAD_SIZE=2GB
 
 | Key | 作用 | 检查要求 |
 | --- | --- | --- |
-| `storage.hot-root` | 订单 ZIP、暂存目录和热备证据使用的根目录 | 服务账号必须可读写；Windows 环境建议使用绝对路径 |
-| `storage.managed-roots` | 受控路径白名单 | 必须包含 `storage.hot-root`，并包含后续冷备/导入目录（如启用） |
+| 存储卷管理 | 订单 ZIP、暂存目录和热备证据的受控卷台账 | 服务账号对纳管 HOT 卷可读写；通过管理页面扫描、登记和切换 |
 | `storage.backup-reservation-percent` | 下载、压缩和发布过程的容量预留比例 | 应根据文件大小和并发量预留，默认较保守 |
 
 服务启动时会创建并检查热备根目录。真实备份过程还会创建 `.staging` 临时目录；临时文件完成后会自动删除。
@@ -87,7 +86,7 @@ BACKUP_MAX_UPLOAD_SIZE=2GB
 订单 ZIP 存储结构为：
 
 ```text
-{storage.hot-root}/orders/{yyyyMMdd}/{订单号}-{订单ID}.zip
+{HOT 卷根目录}/orders/{yyyyMMdd}/{订单号}-{订单ID}.zip
 ```
 
 ### 3.4 清理和恢复安全开关
@@ -153,7 +152,7 @@ Manifest 必须包含：
 1. 保持 `cleanup.schedule.enabled=false`、`cleanup.enabled=false`、`restore.enabled=false`。
 2. 配置本地 `.env`，确认 `BACKUP_EXECUTION_MODE=REAL`、数据库连接和 HMAC 密钥。
 3. 在数据库配置页确认 `online.enabled=true` 和 `online.base-url`。
-4. 确认 `storage.hot-root` 已创建或服务账号可创建，并检查磁盘剩余容量。
+4. 确认至少一个 HOT 卷处于 ONLINE、ACTIVE 状态，并检查其剩余容量。
 5. 使用一个小订单调用候选查询接口，确认订单进入候选范围。
 6. 调用订单 Manifest 接口，确认完整业务字段、文件关系和预签名 URL。
 7. 手动创建单订单备份任务，观察日志中的清单读取、文件下载、校验、压缩、回执和状态发布过程。
@@ -207,4 +206,3 @@ Manifest 必须包含：
 - 清理和恢复开关仍处于安全状态；
 - 修改 `.env` 后已重启服务；
 - 使用新建的真实模式任务进行验证。
-

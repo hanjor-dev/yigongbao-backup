@@ -18,17 +18,18 @@ class ColdImportJobHandlerTest {
         ColdImportService imports = mock(ColdImportService.class);
         ObjectMapper mapper = new ObjectMapper();
         SpaceReservationService reservations = mock(SpaceReservationService.class);
-        SpaceReservation reservation = new SpaceReservation("hot", 80L, "r1");
+        SpaceReservation reservation = new SpaceReservation("volume:5", 80L, "r1");
+        when(imports.activeHotVolumeId()).thenReturn(5L);
         when(imports.estimateRestoreBytes("batch.zip", Set.of("O1"))).thenReturn(80L);
         when(imports.restore("batch.zip", Set.of("O1"))).thenReturn(1);
-        when(reservations.reserve(eq("hot"), eq(80L), eq(91L))).thenReturn(reservation);
+        when(reservations.reserve(eq(5L), eq(80L), eq(91L))).thenReturn(reservation);
         JobEntity job = new JobEntity();
         job.setId(91L);
         job.setConfigSnapshotJson(mapper.writeValueAsString(new ColdImportJobHandler.Payload("batch.zip", Set.of("O1"))));
 
         new ColdImportJobHandler(imports, mapper, reservations).execute(mock(JobExecutionContext.class), job);
 
-        verify(reservations).reserve("hot", 80L, 91L);
+        verify(reservations).reserve(5L, 80L, 91L);
         verify(reservations).release(reservation);
     }
 
@@ -37,9 +38,10 @@ class ColdImportJobHandlerTest {
         ColdImportService imports = mock(ColdImportService.class);
         ObjectMapper mapper = new ObjectMapper();
         SpaceReservationService reservations = mock(SpaceReservationService.class);
-        SpaceReservation reservation = new SpaceReservation("hot", 1L, "r1");
+        SpaceReservation reservation = new SpaceReservation("volume:5", 1L, "r1");
+        when(imports.activeHotVolumeId()).thenReturn(5L);
         when(imports.estimateRestoreBytes(anyString(), anySet())).thenReturn(1L);
-        when(reservations.reserve(eq("hot"), eq(1L), eq(92L))).thenReturn(reservation);
+        when(reservations.reserve(eq(5L), eq(1L), eq(92L))).thenReturn(reservation);
         when(imports.restore(anyString(), anySet())).thenThrow(new java.io.IOException("disk"));
         JobEntity job = new JobEntity();
         job.setId(92L);

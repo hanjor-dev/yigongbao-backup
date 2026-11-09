@@ -44,6 +44,8 @@ export function useBackupConsole() {
     const orderFilterOptions = ref({ orderStatuses: [], businessTypes: [], physicalDeliveries: [], storageStates: [] });
     const storagePath = ref('');
     const storage = ref(null);
+    const storageVolumes = ref([]);
+    const storageCandidates = ref([]);
     const days = ref(180);
     const cleanupResult = ref(null);
     const jobs = ref([]);
@@ -235,12 +237,13 @@ export function useBackupConsole() {
       const id = encodeURIComponent(selectedOrder.value.id);
       const key = encodeURIComponent(selectedOrderKey());
       try {
-        const [assetResult, supplementResult] = await Promise.all([
+        const [assetResult, supplementResult, locationResult] = await Promise.all([
           api('/orders/' + id + '/assets'),
-          api('/orders/' + key + '/supplements')
+          api('/orders/' + key + '/supplements'), api('/orders/' + id + '/package-location')
         ]);
         assets.value = assetResult.data || [];
         supplements.value = supplementResult.data || [];
+        selectedOrder.value = { ...selectedOrder.value, storageLocation: locationResult.data || null };
       } catch (error) {
         notice.value = error.message || '订单文件加载失败';
       }
@@ -420,6 +423,32 @@ export function useBackupConsole() {
       } finally {
         jobLoading.value = false;
       }
+    }
+
+    /** 获取已纳管卷；页面不得再由浏览器提交任意服务端物理路径。 */
+    async function loadStorageVolumes() {
+      try { storageVolumes.value = (await api('/admin/storage-volumes')).data || []; }
+      catch (error) { notice.value = error.message || '加载存储卷失败'; }
+    }
+    async function scanStorageVolumes() {
+      try { storageCandidates.value = (await api('/admin/storage-volumes/scan', { method: 'POST', body: '{}' })).data || []; }
+      catch (error) { notice.value = error.message || '扫描存储卷失败'; }
+    }
+    async function registerStorageVolume(candidate, displayName = candidate?.mountPath) {
+      try {
+        await api('/admin/storage-volumes', { method: 'POST', body: JSON.stringify({
+          mountPath: candidate?.mountPath, displayName, tier: 'HOT', priority: 0
+        }) });
+        await loadStorageVolumes();
+      } catch (error) { notice.value = error.message || '纳管存储卷失败'; }
+    }
+    async function changeStorageVolumeState(id, action, body = null) {
+      try {
+        const knownAction = ['set-active', 'set-standby', 'to-cold', 'to-hot', 'disable', 'probe', 'confirm-mounted'];
+        const suffix = knownAction.includes(action) ? `/${action}` : '/state';
+        await api(`/admin/storage-volumes/${id}${suffix}`, { method: 'POST', body: suffix === '/state' ? JSON.stringify(body) : undefined });
+        await loadStorageVolumes();
+      } catch (error) { notice.value = error.message || '更新存储卷状态失败'; }
     }
 
     /** 管理员主动执行一次候选扫描；服务端仍复用自动备份的筛选、排重与任务幂等规则。 */
@@ -831,6 +860,7 @@ export function useBackupConsole() {
       if (target === 'accounts') loadAccounts();
       if (target === 'cold') { loadCold(); scanColdImports(); }
       if (target === 'configs') loadConfigs();
+      if (target === 'storage' || target === 'storage-volumes') { loadStorageVolumes(); return; }
     }
 
     /** 浏览器刷新或直接访问 hash 路由时，加载当前页面而不是固定加载订单。 */
@@ -846,6 +876,7 @@ export function useBackupConsole() {
         case 'audit': await loadAudit(); break;
         case 'cold': await Promise.all([loadCold(), scanColdImports()]); break;
         case 'configs': await loadConfigs(); break;
+        case 'storage': case 'storage-volumes': await loadStorageVolumes(); break;
         default: await Promise.all([loadOrderFilterOptions(), loadOrders()]);
       }
     }
@@ -853,7 +884,7 @@ export function useBackupConsole() {
     return {
       token, role, isAdmin, page, username, password, orders, selectedOrder, selectedIds, assets, supplements, supplementUpload, notice,
       keyword, createdFrom, createdTo, businessType, status, needsPhysicalDelivery, cloudRollup, hotRollup, coldRollup, orderFilterOptions,
-      orderPage, orderSize, orderTotal, orderPages, storagePath, storage, days, cleanupResult, jobs, jobPage, jobSize, jobTotal,
+      orderPage, orderSize, orderTotal, orderPages, storagePath, storage, storageVolumes, storageCandidates, days, cleanupResult, jobs, jobPage, jobSize, jobTotal,
       selectedJobId, selectedJob, jobOrders, jobOrderPage, jobOrderSize, jobOrderTotal, jobFiles, jobLoading, jobProgress, overview, auditRows,
       jobLogVisible, jobLogTitle, jobLogRecords, jobLogCurrent, jobLogSize, jobLogTotal, jobLogLoading,
       scheduledBackupRunning,
@@ -861,7 +892,7 @@ export function useBackupConsole() {
       createColdBatch, registerColdDisk,
       loadAccounts, changeAccountPage, changeAccountSize, syncAccountsNow, toggleAccount, resetAccountPassword, selfPassword, changeSelfPassword,
       login, loadOrders, loadOrderFilterOptions, resetOrderFilters, changeOrderPage, changeOrderSize, selectOrder, toggleSelected, downloadOrder, uploadSupplement, downloadSupplement, restoreSelectedOrder, restoreBatch,
-      probeStorage, loadOverview, loadAudit, dryCleanup, executeCleanup, loadJobs, runScheduledBackupNow, changeJobPage, changeJobSize, loadJobDetails, changeJobOrderPage, changeJobOrderSize, openBackupTaskLogs, openBackupOrderLogs, changeBackupLogPage, changeBackupLogSize, selectJob, cancelJob, retryJob, loadCold, selectColdBatch, verifyColdBatch, cleanupColdBatch, writeCold, scanColdImports, restoreColdImport, loadConfigs, editConfig,
+      probeStorage, loadStorageVolumes, scanStorageVolumes, registerStorageVolume, changeStorageVolumeState, loadOverview, loadAudit, dryCleanup, executeCleanup, loadJobs, runScheduledBackupNow, changeJobPage, changeJobSize, loadJobDetails, changeJobOrderPage, changeJobOrderSize, openBackupTaskLogs, openBackupOrderLogs, changeBackupLogPage, changeBackupLogSize, selectJob, cancelJob, retryJob, loadCold, selectColdBatch, verifyColdBatch, cleanupColdBatch, writeCold, scanColdImports, restoreColdImport, loadConfigs, editConfig,
       saveConfig, logout, navigate, storageState, taskFailureSummary
     };
 

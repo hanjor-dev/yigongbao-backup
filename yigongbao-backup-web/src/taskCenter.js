@@ -56,6 +56,10 @@ export function normalizePage(value) {
 
 /** 计算订单热备是否可下载，并给出冷备缺失时的运维提示。 */
 export function storageState(order) {
+  const location = order?.storageLocation;
+  if (location) return location.accessible
+    ? { canDownload: true, message: '' }
+    : { canDownload: false, message: location.unavailableReason || `订单包所在${location.storageTier || ''}卷未挂载` };
   const hot = String(order?.hotRollup || '').toUpperCase();
   const cold = String(order?.coldRollup || '').toUpperCase();
   const canDownload = ['PRESENT', 'AVAILABLE', 'EXISTS'].includes(hot);

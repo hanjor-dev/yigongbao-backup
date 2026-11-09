@@ -5,6 +5,7 @@ import com.yigongbao.backup.storage.reservation.InMemorySpaceReservationService;
 import org.junit.jupiter.api.Test;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.nio.file.FileSystemException;
 import java.util.concurrent.*;
 import static org.assertj.core.api.Assertions.*;
 
@@ -14,6 +15,19 @@ class StorageContractTest {
         store.put("orders/a.txt", new java.io.ByteArrayInputStream("ok".getBytes()));
         assertThat(Files.readString(root.resolve("orders/a.txt"))).isEqualTo("ok");
         assertThatThrownBy(() -> store.open("../escape")).isInstanceOf(IllegalArgumentException.class);
+    }
+    @Test void rejectsSymbolicLinkEscape() throws Exception {
+        Path root = Files.createTempDirectory("store-root");
+        Path outside = Files.createTempDirectory("store-outside");
+        Path link = root.resolve("linked");
+        try {
+            Files.createSymbolicLink(link, outside);
+        } catch (UnsupportedOperationException | FileSystemException denied) {
+            return; // Windows developer mode/CI may disallow symlink creation.
+        }
+        var store = new LocalDirectoryArtifactStore(root);
+        assertThatThrownBy(() -> store.put("linked/escape.txt", new java.io.ByteArrayInputStream("no".getBytes())))
+                .isInstanceOf(IllegalArgumentException.class);
     }
     @Test void concurrentReservationsCannotOversell() throws Exception {
         var service = new InMemorySpaceReservationService(); service.register("nas-a", 100);

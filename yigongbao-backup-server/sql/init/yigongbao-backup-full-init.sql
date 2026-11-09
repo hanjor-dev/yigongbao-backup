@@ -460,12 +460,12 @@ FROM (
     UNION ALL SELECT 'backup.retry.delays-seconds','订单重试等待秒数','BACKUP_COLLECTION','备份采集策略','STRING','60,300,900',NULL,'订单失败后各次重试前的等待秒数，逗号分隔。',NULL
     UNION ALL SELECT 'backup.schedule.reconcile-enabled','候选对账开关','BACKUP_COLLECTION','备份采集策略','BOOLEAN','true','[{"label":"启用","value":"true"},{"label":"停用","value":"false"}]','控制是否定期对账候选订单；自动备份总开关关闭时本开关也不执行。',NULL
     UNION ALL SELECT 'backup.schedule.reconcile-interval-hours','候选对账周期（小时）','BACKUP_COLLECTION','备份采集策略','INTEGER','24',NULL,'漏单、取消和删除事件的对账周期。',NULL
-    UNION ALL SELECT 'storage.hot-root','热备存储根目录','STORAGE_MANAGEMENT','存储与容量','PATH','D:/yigongbao-backup/data',NULL,'开发阶段使用Windows本地目录；后续可改为NAS挂载路径，服务账号必须可读写。',NULL
-    UNION ALL SELECT 'storage.managed-roots','受控存储根目录','STORAGE_MANAGEMENT','存储与容量','PATH_LIST','D:/yigongbao-backup/data,D:/yigongbao-backup/cold-disks,D:/yigongbao-backup/cold-import',NULL,'允许系统访问的Windows目录白名单，逗号分隔。',NULL
     UNION ALL SELECT 'storage.backup-reservation-percent','备份工作空间预留比例（%）','STORAGE_MANAGEMENT','存储与容量','INTEGER','300',NULL,'按源文件总量预留下载原文件、压缩包和原子发布临时副本的峰值空间，范围100至500。',NULL
     UNION ALL SELECT 'storage.threshold.hot.percent','热备容量告警阈值（%）','STORAGE_MANAGEMENT','存储与容量','INTEGER','85',NULL,'热备或NAS使用率达到该值时告警。',NULL
     UNION ALL SELECT 'storage.threshold.cold.percent','冷备容量告警阈值（%）','STORAGE_MANAGEMENT','存储与容量','INTEGER','90',NULL,'冷备目标盘使用率达到该值时告警。',NULL
-    UNION ALL SELECT 'cold.import-root','冷备导入区目录','COLD_ARCHIVE','冷备归档与导入','PATH','D:/yigongbao-backup/cold-import',NULL,'管理员复制冷备大压缩包后的受控扫描目录。',NULL
+    UNION ALL SELECT 'storage.volume-switch.enabled','存储卷自动切换开关','STORAGE_MANAGEMENT','存储与容量','BOOLEAN','false','[{"label":"启用","value":"true"},{"label":"停用","value":"false"}]','仅从已纳管 HOT STANDBY 卷中自动切换。',NULL
+    UNION ALL SELECT 'storage.volume-switch.threshold-percent','存储卷切换阈值（%）','STORAGE_MANAGEMENT','存储与容量','INTEGER','90',NULL,'当前 ACTIVE 卷使用率达到该值时建议切换。',NULL
+    UNION ALL SELECT 'storage.volume-health.interval-minutes','存储卷健康检查周期（分钟）','STORAGE_MANAGEMENT','存储与容量','INTEGER','5',NULL,'定期探测已纳管卷的可访问性和容量。',NULL
     UNION ALL SELECT 'cold.max-import-bytes','最大导入解压量（字节）','COLD_ARCHIVE','冷备归档与导入','LONG','4398046511104',NULL,'单个冷备导入任务允许解压的总量，默认4TiB。',NULL
     UNION ALL SELECT 'restore.enabled','线上恢复开关','ONLINE_RESTORE','线上恢复策略','BOOLEAN','true','[{"label":"启用","value":"true"},{"label":"停用","value":"false"}]','控制管理员能否创建线上恢复任务。',NULL
     UNION ALL SELECT 'restore.conflict-policy','恢复冲突策略','ONLINE_RESTORE','线上恢复策略','ENUM','REJECT','[{"label":"拒绝覆盖（推荐）","value":"REJECT"},{"label":"管理员确认后覆盖","value":"CONFIRM_OVERWRITE"},{"label":"直接强制覆盖","value":"FORCE_OVERWRITE"}]','线上订单文件或关联关系已变化时的处理方式。默认拒绝覆盖；强制覆盖可能回填历史文件记录，需由管理员审慎使用。',NULL

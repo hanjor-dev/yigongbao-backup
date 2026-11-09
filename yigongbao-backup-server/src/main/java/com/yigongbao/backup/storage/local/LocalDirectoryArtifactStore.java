@@ -40,8 +40,17 @@ public final class LocalDirectoryArtifactStore implements ArtifactStore {
     }
     private Path safe(String value) {
         Objects.requireNonNull(value, "relativePath");
-        Path resolved = root.resolve(value).normalize();
+        Path relative = Path.of(value).normalize();
+        if (relative.isAbsolute() || relative.startsWith("..")) throw new IllegalArgumentException("路径超出存储根目录");
+        Path resolved = root.resolve(relative).normalize();
         if (!resolved.startsWith(root)) throw new IllegalArgumentException("路径超出存储根目录");
+        Path current = root;
+        if (Files.isSymbolicLink(current)) throw new IllegalArgumentException("存储根目录不能是符号链接");
+        for (Path segment : relative) {
+            current = current.resolve(segment);
+            // Existing links are rejected before any API can follow them outside this volume.
+            if (Files.isSymbolicLink(current)) throw new IllegalArgumentException("存储路径不能包含符号链接");
+        }
         return resolved;
     }
 }

@@ -9,12 +9,17 @@ import com.yigongbao.backup.cold.ColdBatchArtifactMapper;
 import com.yigongbao.backup.cold.ColdBatchService;
 import com.yigongbao.backup.cold.ColdImportService;
 import com.yigongbao.backup.cold.HotCleanupService;
+import com.yigongbao.backup.order.OrderPackageMapper;
+import com.yigongbao.backup.storage.location.ArtifactCopyMapper;
 import com.yigongbao.backup.order.BkSupplementFileMapper;
 import com.yigongbao.backup.order.SupplementService;
 import com.yigongbao.backup.storage.api.ArtifactStore;
 import com.yigongbao.backup.storage.api.VolumeArtifactStore;
 import com.yigongbao.backup.storage.api.StorageProbe;
 import com.yigongbao.backup.storage.local.LocalDirectoryArtifactStore;
+import com.yigongbao.backup.storage.volume.ActiveVolumeArtifactStore;
+import com.yigongbao.backup.storage.volume.StorageVolumeMapper;
+import com.yigongbao.backup.storage.volume.ActiveVolumeSelectionService;
 import com.yigongbao.backup.storage.probe.DefaultStorageProbe;
 import com.yigongbao.backup.storage.validation.ManagedStoragePathPolicy;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnMissingBean;
@@ -36,23 +41,13 @@ public class InfrastructureConfig {
         return new DefaultStorageProbe();
     }
 
-    /** 热备/NAS根目录以数据库为唯一来源；配置缺失时拒绝启动相关基础设施。 */
+    /**
+     * 兼容仍依赖 ArtifactStore 的组件；每次调用解析当前 ACTIVE 卷，禁止启动时绑定配置路径。
+     */
     @Bean
     @ConditionalOnMissingBean
-    ArtifactStore artifactStore(RuntimeConfigService configs) {
-        Path root = ensureDirectory(Path.of(configs.require("storage.hot-root")), "热备存储根目录");
-        return new LocalDirectoryArtifactStore(root);
-    }
-
-    /** 受控路径白名单从数据库读取，避免YAML与管理页面配置不一致。 */
-    @Bean
-    @ConditionalOnMissingBean
-    ManagedStoragePathPolicy managedStoragePathPolicy(RuntimeConfigService configs) {
-        List<Path> roots = Arrays.stream(configs.require("storage.managed-roots").split(","))
-                .map(String::trim).filter(value -> !value.isBlank()).map(Path::of)
-                .map(path -> ensureDirectory(path, "受控存储根目录")).toList();
-        if (roots.isEmpty()) throw new IllegalStateException("受控存储根目录不能为空");
-        return new ManagedStoragePathPolicy(roots);
+    ArtifactStore artifactStore(ActiveVolumeSelectionService selection, VolumeArtifactStore volumes) {
+        return new ActiveVolumeArtifactStore(selection, volumes);
     }
 
     @Bean
@@ -63,8 +58,9 @@ public class InfrastructureConfig {
 
     @Bean
     @ConditionalOnMissingBean
-    HotCleanupService hotCleanupService(ArtifactStore store, ColdBatchArtifactMapper artifacts) {
-        return new HotCleanupService(store, artifacts);
+    HotCleanupService hotCleanupService(VolumeArtifactStore store, ColdBatchArtifactMapper artifacts,
+                                        OrderPackageMapper packages, ArtifactCopyMapper copies, StorageVolumeMapper volumeMapper) {
+        return new HotCleanupService(store, artifacts, packages, copies, volumeMapper);
     }
 
     @Bean
@@ -76,9 +72,10 @@ public class InfrastructureConfig {
 
     @Bean
     @ConditionalOnMissingBean
-    ColdImportService coldImportService(ArtifactStore store, RuntimeConfigService configs) {
-        Path importRoot = ensureDirectory(Path.of(configs.require("cold.import-root")), "冷备导入区目录");
-        return new ColdImportService(importRoot, store, configs);
+    ColdImportService coldImportService(com.yigongbao.backup.storage.volume.StorageVolumeMapper volumes,
+                                        ActiveVolumeSelectionService activeVolumes, VolumeArtifactStore volumeStore,
+                                        ArtifactCopyMapper copies, OrderPackageMapper packages, RuntimeConfigService configs) {
+        return new ColdImportService(volumes, activeVolumes, volumeStore, copies, packages, 4L * 1024 * 1024 * 1024 * 1024, configs);
     }
 
     @Bean

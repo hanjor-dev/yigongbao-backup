@@ -24,6 +24,7 @@ const pageViews = {
   audit: AuditView,
   orders: OrdersView,
   storage: StorageView,
+  'storage-volumes': StorageView,
   accounts: AccountsView,
   cleanup: CleanupView,
   cold: ColdView,

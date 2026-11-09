@@ -10,9 +10,10 @@ public final class ConfigValueValidator {
             "backup.schedule.reconcile-enabled", "backup.schedule.reconcile-interval-hours",
             "backup.collection.days-before",
             "backup.retry.max-retries", "backup.retry.delays-seconds",
-            "storage.hot-root", "storage.managed-roots", "storage.backup-reservation-percent",
+            "storage.backup-reservation-percent", "storage.volume-switch.enabled",
+            "storage.volume-switch.threshold-percent", "storage.volume-health.interval-minutes",
             "storage.threshold.hot.percent", "storage.threshold.cold.percent",
-            "cold.import-root", "cold.max-import-bytes",
+            "cold.max-import-bytes",
             "restore.enabled", "restore.conflict-policy", "restore.retry-count",
             "cleanup.schedule.enabled", "cleanup.schedule.interval-hours", "cleanup.retention-days",
             "cleanup.batch-size", "supplement.allowed-extensions", "supplement.max-file-size-bytes",
@@ -116,11 +117,6 @@ public final class ConfigValueValidator {
         }
         if (key.endsWith(".bytes") || key.equals("cold.max-import-bytes")) {
             if (longValue(key, normalized) < 0) throw new IllegalArgumentException("字节数不能为负数");
-            return;
-        }
-        if (key.endsWith(".root") || key.endsWith(".path") || key.endsWith("-root")
-                || key.equals("storage.managed-roots")) {
-            if (normalized.isBlank()) throw new IllegalArgumentException("存储路径不能为空");
             return;
         }
         if (key.endsWith(".mode")) {

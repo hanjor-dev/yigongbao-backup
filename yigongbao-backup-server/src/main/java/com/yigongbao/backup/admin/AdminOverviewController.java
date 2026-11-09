@@ -9,6 +9,8 @@ import com.yigongbao.backup.config.ConfigService;
 import com.yigongbao.backup.config.PersistentConfigService;
 import com.yigongbao.backup.config.RuntimeConfigService;
 import com.yigongbao.backup.storage.api.StorageProbe;
+import com.yigongbao.backup.storage.volume.StorageVolumeEntity;
+import com.yigongbao.backup.storage.volume.StorageVolumeMapper;
 import lombok.RequiredArgsConstructor;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.RequestMapping;
@@ -17,7 +19,6 @@ import org.springframework.web.bind.annotation.RestController;
 
 import java.nio.file.Path;
 import java.time.LocalDateTime;
-import java.util.Arrays;
 import java.util.List;
 import java.util.UUID;
 
@@ -29,14 +30,14 @@ public class AdminOverviewController {
     private final StorageProbe probe;
     private final AuditLogMapper auditLogMapper;
     private final PersistentConfigService configs;
-    private final RuntimeConfigService runtimeConfig;
+    private final StorageVolumeMapper volumes;
 
     @GetMapping("/overview")
     public ApiResponse<Overview> overview() {
         admin();
-        String managedRoots = runtimeConfig.require("storage.managed-roots");
-        List<StorageMetric> storage = Arrays.stream(managedRoots.split(","))
-                .map(String::trim).filter(item -> !item.isBlank()).map(this::metric).toList();
+        List<StorageMetric> storage = volumes.selectList(Wrappers.<StorageVolumeEntity>lambdaQuery()
+                        .eq(StorageVolumeEntity::getIsDeleted, 0))
+                .stream().map(this::metric).toList();
         return ApiResponse.ok(new Overview(LocalDateTime.now(), storage, configs.list()), requestId());
     }
 
@@ -49,17 +50,17 @@ public class AdminOverviewController {
         return ApiResponse.ok(rows, requestId());
     }
 
-    private StorageMetric metric(String root) {
-        StorageProbe.StorageSnapshot snapshot = probe.probe(Path.of(root));
-        long threshold = thresholdFor(root);
+    private StorageMetric metric(StorageVolumeEntity volume) {
+        StorageProbe.StorageSnapshot snapshot = probe.probe(Path.of(volume.getRootPath()));
+        long threshold = thresholdFor(volume.getTier());
         String status = !snapshot.capacityKnown() ? "UNKNOWN" :
                 snapshot.totalBytes() == 0 || snapshot.usedBytes() * 100 >= snapshot.totalBytes() * threshold ? "WARN" : "OK";
-        return new StorageMetric(root, snapshot.totalBytes(), snapshot.usedBytes(), snapshot.usableBytes(),
+        return new StorageMetric(volume.getDisplayName(), snapshot.totalBytes(), snapshot.usedBytes(), snapshot.usableBytes(),
                 threshold, status, snapshot.capacityKnown());
     }
 
-    private long thresholdFor(String root) {
-        String key = root.toLowerCase().contains("cold") ? "storage.threshold.cold.percent" : "storage.threshold.hot.percent";
+    private long thresholdFor(String tier) {
+        String key = "COLD".equals(tier) ? "storage.threshold.cold.percent" : "storage.threshold.hot.percent";
         ConfigService.Entry entry = configs.get(key);
         if (entry == null) return 85;
         try { return Long.parseLong(entry.value()); } catch (NumberFormatException ignored) { return 85; }

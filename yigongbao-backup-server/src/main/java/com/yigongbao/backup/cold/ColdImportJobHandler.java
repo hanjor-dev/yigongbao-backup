@@ -24,7 +24,7 @@ public class ColdImportJobHandler implements JobHandler {
         Payload payload = mapper.readValue(job.getConfigSnapshotJson(), Payload.class);
         Set<String> orderIds = payload.orderIds() == null ? Set.of() : payload.orderIds();
         long estimatedBytes = imports.estimateRestoreBytes(payload.batchId(), orderIds);
-        SpaceReservation reservation = reservations.reserve("hot", estimatedBytes, job.getId());
+        SpaceReservation reservation = reservations.reserve(imports.activeHotVolumeId(), estimatedBytes, job.getId());
         try {
             context.fileStarted(null, payload.batchId(), "COLD_IMPORT", estimatedBytes);
             context.safePoint("COLD_IMPORT_VALIDATE", 0);

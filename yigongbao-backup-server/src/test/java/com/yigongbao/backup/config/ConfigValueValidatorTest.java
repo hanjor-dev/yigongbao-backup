@@ -35,7 +35,8 @@ class ConfigValueValidatorTest {
     void validatesKnownStructuredValues() {
         assertThatCode(() -> ConfigValueValidator.validate("storage.threshold.hot.percent", "85")).doesNotThrowAnyException();
         assertThatCode(() -> ConfigValueValidator.validate("backup.schedule.interval-days", "1")).doesNotThrowAnyException();
-        assertThatCode(() -> ConfigValueValidator.validate("storage.hot-root", "D:/backup")).doesNotThrowAnyException();
+        assertThatCode(() -> ConfigValueValidator.validate("storage.volume-switch.enabled", "false")).doesNotThrowAnyException();
+        assertThatCode(() -> ConfigValueValidator.validate("storage.volume-switch.threshold-percent", "90")).doesNotThrowAnyException();
     }
 
     @Test
@@ -44,7 +45,7 @@ class ConfigValueValidatorTest {
                 .isInstanceOf(IllegalArgumentException.class);
         assertThatThrownBy(() -> ConfigValueValidator.validate("backup.schedule.interval-minutes", "0"))
                 .isInstanceOf(IllegalArgumentException.class);
-        assertThatThrownBy(() -> ConfigValueValidator.validate("storage.hot-root", ""))
+        assertThatThrownBy(() -> ConfigValueValidator.validate("storage.hot-root", "D:/backup"))
                 .isInstanceOf(IllegalArgumentException.class);
     }
 

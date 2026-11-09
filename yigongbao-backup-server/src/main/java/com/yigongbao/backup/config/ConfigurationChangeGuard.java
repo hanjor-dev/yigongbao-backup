@@ -5,9 +5,6 @@ import org.springframework.core.env.Environment;
 import org.springframework.stereotype.Component;
 import org.springframework.util.unit.DataSize;
 
-import java.nio.file.Files;
-import java.nio.file.Path;
-import java.util.Arrays;
 
 /** 保存配置前执行跨配置依赖和现场资源校验。 */
 @Component
@@ -18,13 +15,6 @@ public class ConfigurationChangeGuard {
 
     public void validate(String key, String proposedValue) {
         if (key.startsWith("online.")) validateOnline(key, proposedValue);
-        if (key.equals("storage.hot-root") || key.equals("cold.import-root")) {
-            validateDirectory(Path.of(proposedValue), key);
-        }
-        if (key.equals("storage.managed-roots")) {
-            Arrays.stream(proposedValue.split(",")).map(String::trim).filter(value -> !value.isBlank())
-                    .map(Path::of).forEach(path -> validateDirectory(path, key));
-        }
         if (key.equals("supplement.max-file-size-bytes")) {
             long businessLimit = Long.parseLong(proposedValue);
             DataSize hardLimit = DataSize.parse(environment.getProperty("BACKUP_MAX_UPLOAD_SIZE", "2GB"));
@@ -55,10 +45,4 @@ public class ConfigurationChangeGuard {
         if (value.length() < 32) throw new IllegalArgumentException(name + "长度不能小于32位");
     }
 
-    private static void validateDirectory(Path path, String key) {
-        Path normalized = path.toAbsolutePath().normalize();
-        if (!Files.isDirectory(normalized) || !Files.isReadable(normalized) || !Files.isWritable(normalized)) {
-            throw new IllegalArgumentException(key + "对应目录不存在或不可读写: " + normalized);
-        }
-    }
 }
