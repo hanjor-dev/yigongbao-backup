@@ -11,9 +11,14 @@ import com.yigongbao.backup.job.JobExecutionLogQueryService;
 import com.yigongbao.backup.config.RuntimeConfigService;
 import com.yigongbao.backup.order.OrderSnapshotEntity;
 import com.yigongbao.backup.order.OrderSnapshotMapper;
+import com.yigongbao.backup.order.OrderPackageEntity;
+import com.yigongbao.backup.order.OrderPackageMapper;
+import com.yigongbao.backup.job.JobEvidenceService;
+import com.yigongbao.backup.storage.location.ArtifactReplicaResolver;
 import com.baomidou.mybatisplus.core.toolkit.Wrappers;
 import lombok.RequiredArgsConstructor;
 import org.springframework.web.bind.annotation.*;
+import org.springframework.transaction.annotation.Transactional;
 import java.time.LocalDateTime;
 import java.util.List;
 import java.util.UUID;
@@ -21,7 +26,7 @@ import java.util.UUID;
 /** 线上恢复入口：只持久化创建任务，文件上传和提交由后台执行器处理。 */
 @RestController @RequestMapping("/api/v1/admin/restores") @RequiredArgsConstructor
 public class AdminRestoreController {
- private final PersistentJobCoordinator jobs; private final PersistentJobService jobService; private final JobExecutionLogQueryService executionLogs; private final ObjectMapper mapper; private final RuntimeConfigService configs; private final OrderSnapshotMapper snapshots;
+ private final PersistentJobCoordinator jobs; private final PersistentJobService jobService; private final JobExecutionLogQueryService executionLogs; private final ObjectMapper mapper; private final RuntimeConfigService configs; private final OrderSnapshotMapper snapshots; private final OrderPackageMapper packages; private final ArtifactReplicaResolver replicas; private final JobEvidenceService evidence;
  /** 分页查询线上恢复任务；仅管理员可读取恢复执行证据。 */
  @GetMapping("/jobs") public ApiResponse<PersistentJobService.JobPage> listJobs(
          @RequestParam(value="current", defaultValue="1") long current,
@@ -82,7 +87,9 @@ public class AdminRestoreController {
  @PostMapping("/batch") public ApiResponse<RestoreTask> restoreBatch(@RequestBody BatchRestoreCommand command, @RequestHeader(value="Idempotency-Key",required=false) String requestKey) throws Exception {StpUtil.checkRole("ADMIN");enabled();if(command==null||(command.orderSnapshotIds()==null||command.orderSnapshotIds().isEmpty())&&command.createdFrom()==null&&command.createdTo()==null)throw new IllegalArgumentException("必须指定订单或创建时间范围");List<Long> ids=command.orderSnapshotIds()==null?List.of():command.orderSnapshotIds();rejectSimulation(ids,command.createdFrom(),command.createdTo());return created(new RestorePayload(ids,command.createdFrom(),command.createdTo(),configs.get("restore.conflict-policy","REJECT")),requestKey);}
  private ApiResponse<RestoreTask> created(RestorePayload payload) throws Exception { return created(payload, null); }
  /** 同一次 HTTP 请求重发使用相同键；每次用户主动操作默认生成新键，不能复用历史失败任务。 */
- private ApiResponse<RestoreTask> created(RestorePayload payload, String requestKey) throws Exception {List<Long> ids=payload.orderSnapshotIds()==null?List.of():payload.orderSnapshotIds().stream().distinct().sorted().toList();RestorePayload normalized=new RestorePayload(ids,payload.createdFrom(),payload.createdTo(),payload.conflictPolicy());long actor=StpUtil.getLoginIdAsLong();String json=mapper.writeValueAsString(normalized);JobEntity job=jobs.create("RESTORE",JobIdempotency.key("RESTORE",actor,restoreRequestKey(requestKey)+"\n"+json),actor,json);return ApiResponse.ok(new RestoreTask(job.getId(),job.getJobNo(),job.getStatus()),rid());}
+ @Transactional(rollbackFor = Exception.class)
+ private ApiResponse<RestoreTask> created(RestorePayload payload, String requestKey) throws Exception {List<OrderSnapshotEntity> selected=selectTargets(payload);List<Long> ids=selected.stream().map(OrderSnapshotEntity::getId).distinct().sorted().toList();RestorePayload normalized=new RestorePayload(ids,null,null,payload.conflictPolicy());long actor=StpUtil.getLoginIdAsLong();String json=mapper.writeValueAsString(normalized);JobEntity job=jobs.create("RESTORE",JobIdempotency.key("RESTORE",actor,restoreRequestKey(requestKey)+"\n"+json),actor,json);for(OrderSnapshotEntity snapshot:selected){OrderPackageEntity pkg=packages.selectOne(Wrappers.<OrderPackageEntity>lambdaQuery().eq(OrderPackageEntity::getSnapshotId,snapshot.getId()).eq(OrderPackageEntity::getStatus,"AVAILABLE").last("limit 1"));if(pkg==null||pkg.getId()==null)throw new IllegalStateException("订单不存在可恢复压缩包: "+snapshot.getId());var replica=replicas.resolveReadable("ORDER_PACKAGE",pkg.getId());evidence.restoreSource(job.getId(),snapshot.getSourceOrderId(),snapshot.getId(),pkg.getId(),replica.storageVolumeId(),replica.storageKey(),replica.sha256());}return ApiResponse.ok(new RestoreTask(job.getId(),job.getJobNo(),job.getStatus()),rid());}
+ private List<OrderSnapshotEntity> selectTargets(RestorePayload payload){if(payload.orderSnapshotIds()!=null&&!payload.orderSnapshotIds().isEmpty())return snapshots.selectBatchIds(payload.orderSnapshotIds());return snapshots.selectList(Wrappers.<OrderSnapshotEntity>lambdaQuery().ge(payload.createdFrom()!=null,OrderSnapshotEntity::getOrderCreatedAt,payload.createdFrom()).le(payload.createdTo()!=null,OrderSnapshotEntity::getOrderCreatedAt,payload.createdTo()).orderByAsc(OrderSnapshotEntity::getOrderCreatedAt));}
  static String restoreRequestKey(String supplied) { return supplied == null || supplied.isBlank() ? UUID.randomUUID().toString() : supplied.trim(); }
  private void enabled(){if(!configs.getBoolean("online.enabled",false))throw new IllegalStateException("线上通信已禁用");if(!configs.getBoolean("restore.enabled",true))throw new IllegalStateException("线上恢复功能已禁用");}
  /** 任务入队前拒绝零字节占位包，避免生成注定失败的恢复任务。 */

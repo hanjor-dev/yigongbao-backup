@@ -8,6 +8,7 @@ import com.yigongbao.backup.storage.api.VolumeArtifactStore;
 import com.yigongbao.backup.storage.api.ArtifactStore;
 import com.yigongbao.backup.storage.api.LegacyArtifactStoreVolumeAdapter;
 import com.yigongbao.backup.storage.volume.StorageVolumeUnavailableException;
+import com.yigongbao.backup.storage.location.ArtifactReplicaResolver;
 import org.springframework.core.io.InputStreamResource;
 import org.springframework.http.HttpHeaders;
 import org.springframework.http.ContentDisposition;
@@ -18,6 +19,7 @@ import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
+import org.springframework.beans.factory.annotation.Autowired;
 
 import java.io.FileNotFoundException;
 import java.io.IOException;
@@ -42,14 +44,17 @@ public class OrderController {
     private final AssetMapper assets;
     private final OrderPackageMapper packages;
     private final VolumeArtifactStore store;
+    private final ArtifactReplicaResolver replicas;
 
     /** 显式声明唯一注入构造器，避免多构造器导致 Spring 回退查找无参构造器。 */
+    @Autowired
     public OrderController(OrderSnapshotMapper snapshots, AssetMapper assets,
-                           OrderPackageMapper packages, VolumeArtifactStore store) {
+                           OrderPackageMapper packages, VolumeArtifactStore store, ArtifactReplicaResolver replicas) {
         this.snapshots = snapshots;
         this.assets = assets;
         this.packages = packages;
         this.store = store;
+        this.replicas = replicas;
     }
 
     private static String rid() {
@@ -59,7 +64,7 @@ public class OrderController {
     /** 兼容既有列表查询测试；实际下载链路通过多卷构造器注入。 */
     public OrderController(OrderSnapshotMapper snapshots, AssetMapper assets,
                            OrderPackageMapper packages, ArtifactStore store) {
-        this(snapshots, assets, packages, new LegacyArtifactStoreVolumeAdapter(store));
+        this(snapshots, assets, packages, new LegacyArtifactStoreVolumeAdapter(store), null);
     }
 
     /**
@@ -216,10 +221,16 @@ public class OrderController {
         String code = snapshot.getOrderCode() == null ? String.valueOf(snapshot.getSourceOrderId()) : snapshot.getOrderCode();
         String key = orderPackage.getStorageKey();
         try {
-            Path packagePath = store.resolve(orderPackage.getStorageVolumeId(), key);
+            long volumeId = orderPackage.getStorageVolumeId();
+            if (replicas != null) {
+                ArtifactReplicaResolver.ReadableArtifactReplica replica = replicas.resolveReadable("ORDER_PACKAGE", orderPackage.getId());
+                volumeId = replica.storageVolumeId();
+                key = replica.storageKey();
+            }
+            Path packagePath = store.resolve(volumeId, key);
             if (!Files.isRegularFile(packagePath)) return ResponseEntity.notFound().build();
             long size = Files.size(packagePath);
-            InputStreamResource body = new InputStreamResource(store.open(orderPackage.getStorageVolumeId(), key));
+            InputStreamResource body = new InputStreamResource(store.open(volumeId, key));
             return ResponseEntity.ok()
                     .contentType(MediaType.APPLICATION_OCTET_STREAM)
                     .contentLength(size)

@@ -55,6 +55,16 @@ public class JobEvidenceService {
         file(jobId, sourceId, identity, step, status, done, total, null, failure);
     }
 
+    /** 固化恢复任务选定的包副本；任务重试不得重新按当前活动卷推导路径。 */
+    public void restoreSource(long jobId, long sourceId, long snapshotId, long packageId,
+                              long storageVolumeId, String storageKey, String sha256) {
+        JobOrderEntity row = findOrder(jobId, sourceId);
+        if (row == null) { row = new JobOrderEntity(); row.setJobId(jobId); row.setSourceOrderId(sourceId); row.setStatus("PENDING"); }
+        row.setSnapshotId(snapshotId); row.setSourcePackageId(packageId); row.setSourceStorageVolumeId(storageVolumeId);
+        row.setSourceStorageKey(storageKey); row.setSourcePackageSha256(sha256);
+        if (row.getId() == null) orders.insert(row); else orders.updateById(row);
+    }
+
     /** 保存恢复 ZIP 内资产的上传状态；对象键首次写入后随成功/失败状态更新保留。 */
     public void file(long jobId, Long sourceId, String identity, String step, String status,
                      long done, long total, String objectKey, Throwable failure) {

@@ -14,7 +14,8 @@ import com.yigongbao.backup.order.OrderSnapshotEntity;
 import com.yigongbao.backup.order.OrderSnapshotMapper;
 import com.yigongbao.backup.order.OrderPackageEntity;
 import com.yigongbao.backup.order.OrderPackageMapper;
-import com.yigongbao.backup.storage.api.ArtifactStore;
+import com.yigongbao.backup.storage.api.VolumeArtifactStore;
+import com.yigongbao.backup.storage.location.ArtifactReplicaResolver;
 import com.yigongbao.backup.storage.api.SpacePlanner.SpaceReservation;
 import com.yigongbao.backup.storage.api.SpaceReservationService;
 import lombok.RequiredArgsConstructor;
@@ -24,6 +25,9 @@ import org.springframework.stereotype.Component;
 
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.io.InputStream;
+import java.security.MessageDigest;
+import java.util.HexFormat;
 import java.util.List;
 import java.util.Set;
 import java.util.ArrayList;
@@ -36,7 +40,8 @@ import java.util.Map;
 public class RestoreJobHandler implements JobHandler {
     private final OrderSnapshotMapper snapshots;
     private final OrderPackageMapper packages;
-    private final ArtifactStore store;
+    private final VolumeArtifactStore store;
+    private final ArtifactReplicaResolver replicas;
     private final ObjectProvider<OnlineRestoreClient> clients;
     private final ObjectMapper mapper;
     private final SpaceReservationService reservations;
@@ -136,7 +141,7 @@ public class RestoreJobHandler implements JobHandler {
             try {
                 // 本地包、容量等前置检查失败时也必须落订单失败明细。
                 context.orderStarted(snapshot.getSourceOrderId(), snapshot.getId());
-                Path path = packagePath(snapshot);
+                Path path = packagePath(job.getId(), snapshot);
                 LocalOrderRestoreService.RestorePackageInventory inventory = service.inspect(path, snapshot.getSourceOrderId().toString());
                 List<Map<String, Object>> packageAssets = inventory.assets().stream().map(asset -> Map.<String, Object>of(
                         "assetId", asset.assetIdentity(), "fileName", asset.fileName() == null ? "-" : asset.fileName(),
@@ -279,7 +284,7 @@ public class RestoreJobHandler implements JobHandler {
         log.info("线上恢复任务完成｜任务ID={}｜成功订单数={}｜跳过订单数={}", job.getId(), succeeded, skipped);
     }
 
-    private Path packagePath(OrderSnapshotEntity snapshot) {
+    private Path packagePath(long jobId, OrderSnapshotEntity snapshot) {
         if (snapshot == null || snapshot.getSourceOrderId() == null) {
             throw new IllegalArgumentException("恢复订单快照不完整");
         }
@@ -287,30 +292,52 @@ public class RestoreJobHandler implements JobHandler {
         if ("METADATA_SIMULATION".equalsIgnoreCase(snapshot.getBackupMode())) {
             throw new IllegalArgumentException("模拟备份包仅供流程验证和下载查看，禁止用于线上恢复");
         }
+        com.yigongbao.backup.job.JobOrderEntity frozen = jobService.listAllRestoreOrders(jobId).stream()
+                .filter(row -> java.util.Objects.equals(row.getSnapshotId(), snapshot.getId())).findFirst().orElse(null);
+        if (frozen != null && frozen.getSourceStorageVolumeId() != null && frozen.getSourceStorageKey() != null) {
+            try {
+                Path path = store.resolve(frozen.getSourceStorageVolumeId(), frozen.getSourceStorageKey());
+                if (!Files.isRegularFile(path)) throw new IllegalArgumentException("已固化恢复源压缩包不存在");
+                verifyFrozenSource(path, frozen.getSourcePackageSha256());
+                return path;
+            } catch (java.io.IOException exception) { throw new IllegalStateException("读取已固化恢复源失败", exception); }
+        }
         OrderPackageEntity pkg = packages.selectOne(Wrappers.<OrderPackageEntity>lambdaQuery()
                 .eq(OrderPackageEntity::getSnapshotId, snapshot.getId()).last("limit 1"));
-        String storageKey = pkg == null ? null : pkg.getStorageKey();
-        // 新目录由数据库 storage_key 唯一决定；仅对历史未迁移记录保留旧路径兼容。
-        Path path = storageKey == null || storageKey.isBlank()
-                ? legacyPackagePath(snapshot) : store.root().resolve(storageKey).normalize();
-        if (!path.startsWith(store.root()) || !Files.isRegularFile(path)) {
-            throw new IllegalArgumentException("订单热备包不存在，请先从冷备导入");
+        if (pkg == null || pkg.getId() == null) throw new IllegalArgumentException("订单备份包不存在");
+        ArtifactReplicaResolver.ReadableArtifactReplica replica = replicas.resolveReadable("ORDER_PACKAGE", pkg.getId());
+        try {
+            Path path = store.resolve(replica.storageVolumeId(), replica.storageKey());
+            if (!Files.isRegularFile(path)) throw new IllegalArgumentException("订单备份包不存在");
+            return path;
+        } catch (java.io.IOException exception) {
+            throw new IllegalStateException("读取订单备份卷失败", exception);
         }
-        return path;
-    }
-
-    private Path legacyPackagePath(OrderSnapshotEntity snapshot) {
-        String orderCode = snapshot.getOrderCode();
-        if (orderCode != null && orderCode.matches("[A-Za-z0-9_-]{1,64}")) {
-            Path byCode = store.root().resolve("orders").resolve(orderCode).resolve(orderCode + ".zip").normalize();
-            if (Files.isRegularFile(byCode)) return byCode;
-        }
-        String id = String.valueOf(snapshot.getSourceOrderId());
-        return store.root().resolve("orders").resolve(id).resolve(id + ".zip").normalize();
     }
 
     private static boolean isDeleted(String status) {
         return status != null && ("DELETED".equalsIgnoreCase(status) || "DELETE".equalsIgnoreCase(status));
+    }
+
+    /**
+     * 恢复任务创建时已固化源包摘要；执行前重新核验，避免卷被替换或文件静默损坏后仍回写线上。
+     */
+    private static void verifyFrozenSource(Path path, String expectedSha256) throws java.io.IOException {
+        if (expectedSha256 == null || expectedSha256.isBlank()) return;
+        try (InputStream input = Files.newInputStream(path)) {
+            MessageDigest digest = MessageDigest.getInstance("SHA-256");
+            byte[] buffer = new byte[8192];
+            int read;
+            while ((read = input.read(buffer)) >= 0) {
+                if (read > 0) digest.update(buffer, 0, read);
+            }
+            String actual = HexFormat.of().formatHex(digest.digest());
+            if (!expectedSha256.equalsIgnoreCase(actual)) {
+                throw new IllegalStateException("已固化恢复源压缩包校验失败");
+            }
+        } catch (java.security.NoSuchAlgorithmException exception) {
+            throw new IllegalStateException("SHA-256不可用", exception);
+        }
     }
 
     /** 将备份时固化的业务字段复用到恢复任务明细，避免恢复页面只能显示内部 ID。 */
