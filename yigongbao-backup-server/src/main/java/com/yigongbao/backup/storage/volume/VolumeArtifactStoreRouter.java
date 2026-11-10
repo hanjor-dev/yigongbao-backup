@@ -2,7 +2,7 @@ package com.yigongbao.backup.storage.volume;
 
 import com.yigongbao.backup.storage.api.VolumeArtifactStore;
 import com.yigongbao.backup.storage.local.LocalDirectoryArtifactStore;
-import lombok.RequiredArgsConstructor;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Service;
 
 import java.io.IOException;
@@ -16,9 +16,20 @@ import java.util.stream.Stream;
  * <p>不缓存启动时的热备根目录，因此 A/B/C 卷切换不会改变历史文件的读取位置。</p>
  */
 @Service
-@RequiredArgsConstructor
 public class VolumeArtifactStoreRouter implements VolumeArtifactStore {
     private final StorageVolumeMapper volumeMapper;
+    private final StorageVolumeMarkerService markerService;
+
+    @Autowired
+    public VolumeArtifactStoreRouter(StorageVolumeMapper volumeMapper, StorageVolumeMarkerService markerService) {
+        this.volumeMapper = volumeMapper;
+        this.markerService = markerService;
+    }
+
+    /** 保持不启动 Spring 容器的历史单元测试兼容。 */
+    VolumeArtifactStoreRouter(StorageVolumeMapper volumeMapper) {
+        this(volumeMapper, new StorageVolumeMarkerService());
+    }
 
     @Override
     public Path put(long storageVolumeId, String storageKey, InputStream content) throws IOException {
@@ -57,6 +68,7 @@ public class VolumeArtifactStoreRouter implements VolumeArtifactStore {
         if (!StorageVolumeStatus.Mount.ONLINE.name().equals(volume.getMountStatus())) {
             throw new StorageVolumeUnavailableException("STORAGE_VOLUME_OFFLINE：存储卷未挂载或不可访问");
         }
+        verifyMountedMedium(volume);
         return new LocalDirectoryArtifactStore(Path.of(volume.getRootPath()));
     }
 
@@ -65,11 +77,20 @@ public class VolumeArtifactStoreRouter implements VolumeArtifactStore {
         if (!StorageVolumeStatus.Mount.ONLINE.name().equals(volume.getMountStatus())) {
             throw new StorageVolumeUnavailableException("STORAGE_VOLUME_OFFLINE：存储卷未挂载或不可访问");
         }
+        verifyMountedMedium(volume);
         if (!StorageVolumeStatus.Write.ACTIVE.name().equals(volume.getWriteStatus())
                 && !StorageVolumeStatus.Write.STANDBY.name().equals(volume.getWriteStatus())) {
             throw new StorageVolumeOperationException("存储卷为只读或已停用，禁止写入");
         }
         return new LocalDirectoryArtifactStore(Path.of(volume.getRootPath()));
+    }
+
+    private void verifyMountedMedium(StorageVolumeEntity volume) {
+        StorageVolumeMarkerService.VerificationResult result = markerService.verify(
+                Path.of(volume.getRootPath()), markerService.expectedVolumeId(volume));
+        if (!result.valid()) {
+            throw new StorageVolumeUnavailableException("STORAGE_VOLUME_MARKER_MISMATCH：卷标记校验失败：" + result.reason());
+        }
     }
 
     private StorageVolumeEntity required(long storageVolumeId) {

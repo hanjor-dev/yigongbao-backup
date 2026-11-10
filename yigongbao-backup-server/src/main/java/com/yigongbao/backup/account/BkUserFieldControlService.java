@@ -13,6 +13,23 @@ public class BkUserFieldControlService {
     public static final String STATUS_FIELD = "enabledStatus";
     private final BkUserFieldControlMapper mapper;
 
+    public void ensureRemote(Long userId, String fieldName) {
+        if (userId == null || fieldName == null || fieldName.isBlank()) return;
+        BkUserFieldControlEntity row = mapper.find(userId, fieldName);
+        if (row == null) {
+            row = new BkUserFieldControlEntity();
+            row.setUserId(userId);
+            row.setFieldName(fieldName);
+            row.setOwnership("REMOTE");
+            mapper.insert(row);
+        }
+    }
+
+    public boolean isRemote(Long userId, String fieldName) {
+        BkUserFieldControlEntity row = mapper.find(userId, fieldName);
+        return row == null || "REMOTE".equals(row.getOwnership());
+    }
+
     public void ensureLocal(Long userId, String fieldName, Long actorId) {
         if (userId == null || fieldName == null || fieldName.isBlank()) return;
         BkUserFieldControlEntity row = mapper.find(userId, fieldName);

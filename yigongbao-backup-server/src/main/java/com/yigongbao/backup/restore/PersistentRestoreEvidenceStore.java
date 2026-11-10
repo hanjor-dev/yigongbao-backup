@@ -4,6 +4,7 @@ import com.baomidou.mybatisplus.core.toolkit.Wrappers;
 import lombok.RequiredArgsConstructor;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
+import org.springframework.dao.DuplicateKeyException;
 
 import java.nio.charset.StandardCharsets;
 import java.security.MessageDigest;
@@ -35,16 +36,23 @@ public class PersistentRestoreEvidenceStore implements RestoreEvidenceStore {
         if (session == null) session = sessionMapper.findByLocalIdempotencyKey(localKey);
         boolean remoteSessionChanged = session != null && !prepared.sessionId().equals(session.getRemoteSessionId());
         if (session == null) {
-            session = new RestoreSessionEntity();
-            session.setLocalJobId(0L);
-            session.setLocalIdempotencyKey(localKey);
-            session.setRemoteSessionId(prepared.sessionId());
-            session.setSourceOrderId(parseId(prepared.orderId()));
-            session.setSnapshotId(0L);
+            RestoreSessionEntity created = new RestoreSessionEntity();
+            created.setLocalJobId(0L);
+            created.setLocalIdempotencyKey(localKey);
+            created.setRemoteSessionId(prepared.sessionId());
+            created.setSourceOrderId(parseId(prepared.orderId()));
+            created.setSnapshotId(0L);
             // conflict_policy 是恢复会话的非空审计字段，必须在首次 insert 前固化。
-            session.setConflictPolicy(value(prepared.conflictPolicy(), "REJECT"));
-            session.setStatus("PREPARED");
-            sessionMapper.insert(session);
+            created.setConflictPolicy(value(prepared.conflictPolicy(), "REJECT"));
+            created.setStatus("PREPARED");
+            try {
+                sessionMapper.insert(created);
+                session = created;
+            } catch (DuplicateKeyException raced) {
+                session = sessionMapper.findByRemoteSessionId(prepared.sessionId());
+                if (session == null) session = sessionMapper.findByLocalIdempotencyKey(localKey);
+                if (session == null) throw raced;
+            }
         }
         // 线上重试可能返回新的远程会话标识，本地仍沿用同一幂等记录并更新映射。
         session.setRemoteSessionId(prepared.sessionId());

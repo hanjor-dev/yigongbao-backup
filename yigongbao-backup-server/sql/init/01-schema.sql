@@ -14,22 +14,7 @@ CREATE TABLE IF NOT EXISTS bk_user (
  create_by BIGINT NULL COMMENT '创建人ID', update_by BIGINT NULL COMMENT '更新人ID', is_deleted TINYINT NOT NULL DEFAULT 0 COMMENT '逻辑删除', PRIMARY KEY(id)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci COMMENT='本地账号';
 
--- 首次联调管理员（仅当 admin1 账号不存在时创建，不覆盖已有账号）。
--- 初始账号：admin1；密码使用预置 BCrypt 哈希，首次登录后建议立即修改密码。
--- 密码为 BCrypt 哈希，和 PersistentAccountSyncService/AuthController 使用同一校验算法。
-INSERT INTO bk_user (source_user_id, username, password_hash, real_name, role_code,
-                     enabled_status, login_fail_count, emergency_admin)
-SELECT NULL,
-       'admin1',
-       '$2a$10$N.zmdr9k7uOCQb376NoUnuTJ8iAt6Z5EHsM8lE9lBOsl7iKTVKIUi',
-       '系统管理员',
-       'ADMIN',
-       'ENABLED',
-       0,
-       1
-WHERE NOT EXISTS (
-    SELECT 1 FROM bk_user WHERE username = 'admin1' AND is_deleted = 0
-);
+-- 应急管理员由应用首次启动时使用 BACKUP_BOOTSTRAP_ADMIN_PASSWORD 安全创建。
 
 CREATE TABLE IF NOT EXISTS bk_user_field_control (
  id BIGINT NOT NULL AUTO_INCREMENT COMMENT '主键ID', user_id BIGINT NOT NULL COMMENT '本地用户ID', field_name VARCHAR(64) NOT NULL COMMENT '托管字段', ownership VARCHAR(16) NOT NULL COMMENT 'REMOTE/LOCAL',
@@ -44,7 +29,7 @@ CREATE TABLE IF NOT EXISTS bk_backup_candidate (
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci COMMENT='本地备份候选投影';
 
 CREATE TABLE IF NOT EXISTS bk_order_snapshot (
- id BIGINT NOT NULL AUTO_INCREMENT COMMENT '主键ID', backup_mode VARCHAR(32) NOT NULL DEFAULT 'REAL' COMMENT 'REAL/METADATA_SIMULATION', source_order_id BIGINT NOT NULL COMMENT '线上订单ID', order_code VARCHAR(64) NULL COMMENT '订单号', public_order_code VARCHAR(64) NULL COMMENT '对外展示单号', order_created_at DATETIME(3) NULL COMMENT '订单创建时间',
+ id BIGINT NOT NULL AUTO_INCREMENT COMMENT '主键ID', backup_mode VARCHAR(32) NOT NULL DEFAULT 'REAL' COMMENT 'REAL/METADATA_SIMULATION', backup_completeness VARCHAR(32) NOT NULL DEFAULT 'COMPLETE' COMMENT 'COMPLETE/INCOMPLETE/NOT_APPLICABLE', source_order_id BIGINT NOT NULL COMMENT '线上订单ID', order_code VARCHAR(64) NULL COMMENT '订单号', public_order_code VARCHAR(64) NULL COMMENT '对外展示单号', order_created_at DATETIME(3) NULL COMMENT '订单创建时间',
  order_type INT NULL COMMENT '订单类型', order_type_name VARCHAR(64) NULL COMMENT '订单类型名称', needs_physical_delivery INT NULL COMMENT '实体交付类型', needs_physical_delivery_name VARCHAR(64) NULL COMMENT '实体交付名称', business_type VARCHAR(32) NULL COMMENT '业务类型编码', business_type_name VARCHAR(128) NULL COMMENT '业务类型名称',
  org_id BIGINT NULL COMMENT '提单机构ID', org_name VARCHAR(255) NULL COMMENT '提单机构名称', operator_id BIGINT NULL COMMENT '操作员ID', operator_name VARCHAR(128) NULL COMMENT '操作员姓名', operator_phone VARCHAR(64) NULL COMMENT '操作员电话', operator_dept_id BIGINT NULL COMMENT '操作员部门ID', operator_dept_name VARCHAR(255) NULL COMMENT '操作员部门名称',
  hospital_id BIGINT NULL COMMENT '医院ID', hospital_name VARCHAR(255) NULL COMMENT '医院名称', area_id BIGINT NULL COMMENT '地区ID', area_name VARCHAR(255) NULL COMMENT '地区名称', full_area_name VARCHAR(512) NULL COMMENT '完整地区名称', hospital_dept_id BIGINT NULL COMMENT '医院科室ID', hospital_dept_name VARCHAR(255) NULL COMMENT '医院科室名称',
@@ -53,9 +38,21 @@ CREATE TABLE IF NOT EXISTS bk_order_snapshot (
  designer_id BIGINT NULL COMMENT '设计师ID', designer_name VARCHAR(128) NULL COMMENT '设计师姓名', expected_delivery_date DATETIME(3) NULL COMMENT '期望交付时间', estimated_cost DECIMAL(18,2) NULL COMMENT '预估费用', data_evaluation_opinion TEXT NULL COMMENT '影像数据评估意见', designer_remark TEXT NULL COMMENT '设计师备注',
  phase INT NULL COMMENT '订单阶段', phase_name VARCHAR(64) NULL COMMENT '订单阶段名称', status INT NULL COMMENT '订单状态', status_name VARCHAR(128) NULL COMMENT '订单状态名称', status_color_json JSON NULL COMMENT '状态颜色对象', regional_audit_json JSON NULL COMMENT '区域审核对象', design_audit_json JSON NULL COMMENT '设计审核对象',
  design_start_time DATETIME(3) NULL COMMENT '设计开始时间', design_submit_time DATETIME(3) NULL COMMENT '设计提交时间', production_start_time DATETIME(3) NULL COMMENT '生产开始时间', production_end_time DATETIME(3) NULL COMMENT '生产结束时间', source_version INT NULL COMMENT '线上订单版本', rebuild_project_list_json JSON NULL COMMENT '重建项目列表', rebuild_project_names TEXT NULL COMMENT '重建项目名称检索文本',
- order_raw_json JSON NOT NULL COMMENT 'order_main全列原始快照', display_json JSON NOT NULL COMMENT '列表非操作列展示快照', related_business_json JSON NOT NULL COMMENT '关联业务快照', manifest_revision VARCHAR(128) NOT NULL COMMENT '清单修订号', manifest_sha256 CHAR(64) NOT NULL COMMENT 'JCS清单哈希', snapshot_status VARCHAR(32) NOT NULL COMMENT 'PENDING_RECEIPT/AVAILABLE/RECEIPT_SUSPENDED/CORRUPT', backup_completed_at DATETIME(3) NOT NULL COMMENT '本地订单包写入时间', latest_verified_at DATETIME(3) NULL COMMENT '最近校验时间', cloud_rollup VARCHAR(32) NOT NULL COMMENT '云端聚合状态', hot_rollup VARCHAR(32) NOT NULL COMMENT '热备聚合状态', cold_rollup VARCHAR(32) NOT NULL COMMENT '冷备聚合状态',
+ order_raw_json JSON NOT NULL COMMENT 'order_main全列原始快照', display_json JSON NOT NULL COMMENT '列表非操作列展示快照', related_business_json JSON NOT NULL COMMENT '关联业务快照', manifest_revision VARCHAR(128) NOT NULL COMMENT '清单修订号', manifest_sha256 CHAR(64) NOT NULL COMMENT 'JCS清单哈希', manifest_schema_version INT NOT NULL DEFAULT 1 COMMENT '清单协议版本', relation_gap_count INT NOT NULL DEFAULT 0 COMMENT '关系缺口数量', relation_gap_hash CHAR(64) NULL COMMENT '关系缺口摘要', relationship_state_hash CHAR(64) NULL COMMENT '资产与缺口联合关系状态摘要', snapshot_status VARCHAR(32) NOT NULL COMMENT 'PENDING_RECEIPT/AVAILABLE/RECEIPT_SUSPENDED/CORRUPT', backup_completed_at DATETIME(3) NOT NULL COMMENT '本地订单包写入时间', latest_verified_at DATETIME(3) NULL COMMENT '最近校验时间', cloud_rollup VARCHAR(32) NOT NULL COMMENT '云端聚合状态', hot_rollup VARCHAR(32) NOT NULL COMMENT '热备聚合状态', cold_rollup VARCHAR(32) NOT NULL COMMENT '冷备聚合状态',
  create_time DATETIME(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3) COMMENT '创建时间', update_time DATETIME(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3) ON UPDATE CURRENT_TIMESTAMP(3) COMMENT '更新时间', create_by BIGINT NULL COMMENT '创建人ID', update_by BIGINT NULL COMMENT '更新人ID', is_deleted TINYINT NOT NULL DEFAULT 0 COMMENT '逻辑删除', PRIMARY KEY(id)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci COMMENT='不可变订单快照';
+
+CREATE TABLE IF NOT EXISTS bk_relation_gap (
+ id BIGINT NOT NULL AUTO_INCREMENT COMMENT '主键ID', snapshot_id BIGINT NOT NULL COMMENT '订单快照ID', relation_kind VARCHAR(64) NOT NULL COMMENT '关系类型', source_record_id VARCHAR(64) NOT NULL COMMENT '来源记录ID', relation_owner_key CHAR(64) NOT NULL COMMENT '关系拥有者摘要', relation_value VARCHAR(1024) NULL COMMENT '原始关系值', original_file_id VARCHAR(64) NULL COMMENT '原始文件ID', reason_code VARCHAR(64) NOT NULL COMMENT '稳定缺口原因码', reason VARCHAR(1024) NOT NULL COMMENT '缺口原因', relation_hash CHAR(64) NOT NULL COMMENT '关系摘要', version INT NOT NULL DEFAULT 0 COMMENT '乐观锁版本',
+ create_time DATETIME(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3), update_time DATETIME(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3) ON UPDATE CURRENT_TIMESTAMP(3), create_by BIGINT NULL, update_by BIGINT NULL, is_deleted TINYINT NOT NULL DEFAULT 0, PRIMARY KEY(id),
+ UNIQUE KEY uk_bk_relation_gap_owner (snapshot_id, relation_owner_key), KEY idx_bk_relation_gap_reason (reason_code), KEY idx_bk_relation_gap_hash (relation_hash)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci COMMENT='降级备份关系缺口证据';
+
+CREATE TABLE IF NOT EXISTS bk_backup_stage (
+ id BIGINT NOT NULL AUTO_INCREMENT COMMENT '主键ID', job_id BIGINT NOT NULL COMMENT '本地任务ID', source_order_id BIGINT NOT NULL COMMENT '线上订单ID', idempotency_key VARCHAR(255) NOT NULL COMMENT '线上回执幂等键', manifest_json JSON NOT NULL COMMENT '待发布清单', result_json JSON NOT NULL COMMENT '待发布订单包结果', manifest_sha256 CHAR(64) NOT NULL COMMENT '清单摘要', package_sha256 CHAR(64) NOT NULL COMMENT '包摘要', package_size BIGINT NOT NULL COMMENT '包大小', storage_volume_id BIGINT NULL COMMENT '存储卷ID', storage_key VARCHAR(1024) NOT NULL COMMENT '卷内相对键', backup_completeness VARCHAR(32) NOT NULL COMMENT 'COMPLETE/INCOMPLETE', stage_status VARCHAR(32) NOT NULL COMMENT 'STAGED/RECEIPT_ACCEPTED/AVAILABLE/SUPERSEDED', published_snapshot_id BIGINT NULL COMMENT '已发布快照ID', receipt_completed_at DATETIME(3) NOT NULL COMMENT '首次回执请求的稳定完成时间', receipt_accepted_at DATETIME(3) NULL, published_at DATETIME(3) NULL, superseded_at DATETIME(3) NULL, version INT NOT NULL DEFAULT 0,
+ create_time DATETIME(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3), update_time DATETIME(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3) ON UPDATE CURRENT_TIMESTAMP(3), create_by BIGINT NULL, update_by BIGINT NULL, is_deleted TINYINT NOT NULL DEFAULT 0, PRIMARY KEY(id),
+ UNIQUE KEY uk_bk_backup_stage_idempotency (idempotency_key), UNIQUE KEY uk_bk_backup_stage_job_order (job_id, source_order_id), KEY idx_bk_backup_stage_order_status (source_order_id, stage_status)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci COMMENT='订单备份回执前暂存状态';
 
 CREATE TABLE IF NOT EXISTS bk_asset (
  id BIGINT NOT NULL AUTO_INCREMENT COMMENT '主键ID', snapshot_id BIGINT NOT NULL COMMENT '订单快照ID', asset_identity VARCHAR(255) NOT NULL COMMENT '稳定资产身份', source_file_id BIGINT NULL COMMENT '线上文件ID', asset_type VARCHAR(64) NOT NULL COMMENT '资产类型', original_filename VARCHAR(512) NOT NULL COMMENT '原始文件名', content_type VARCHAR(128) NULL COMMENT '内容类型', extension VARCHAR(32) NULL COMMENT '扩展名', source_size BIGINT NOT NULL COMMENT '源字节数', source_sha256 CHAR(64) NULL COMMENT '源SHA-256', download_sha256 CHAR(64) NOT NULL COMMENT '下载SHA-256', source_platform VARCHAR(64) NULL COMMENT '源平台', source_url TEXT NULL COMMENT '源URL', source_object_key VARCHAR(1024) NULL COMMENT '源对象键', source_etag VARCHAR(255) NULL COMMENT '源ETag', source_version_id VARCHAR(255) NULL COMMENT '源VersionId', source_last_modified DATETIME(3) NULL COMMENT '源修改时间', package_entry_name VARCHAR(1024) NOT NULL COMMENT '包内路径', backup_status VARCHAR(32) NOT NULL COMMENT '备份状态', failure_code VARCHAR(64) NULL COMMENT '失败码', failure_message VARCHAR(1024) NULL COMMENT '失败信息',

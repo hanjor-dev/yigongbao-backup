@@ -9,7 +9,7 @@ public class PersistentAccountSyncService {
     private final BkUserMapper mapper;
     private final BkUserFieldControlService fieldControl;
     private final BCryptPasswordEncoder encoder = new BCryptPasswordEncoder();
-    /** 合并一条线上账号；密码和状态只在首次建档时取线上值。 */
+    /** 合并一条线上账号；本地接管前，密码和状态持续跟随线上值。 */
     public BkUserEntity merge(RemoteAccount remote) {
         validate(remote);
         BkUserEntity local = mapper.findBySourceUserId(remote.id());
@@ -27,6 +27,15 @@ public class PersistentAccountSyncService {
                 && !remote.updateTime().isAfter(local.getSourceUpdatedAt())) {
             return local;
         }
+        if (!first) {
+            if (fieldControl.isRemote(local.getId(), BkUserFieldControlService.PASSWORD_FIELD)) {
+                local.setPasswordHash(remote.passwordHash());
+            }
+            if (fieldControl.isRemote(local.getId(), BkUserFieldControlService.STATUS_FIELD)) {
+                local.setEnabledStatus(remote.deleted() || remote.status() == null || remote.status() != 1
+                        ? "DISABLED" : "ENABLED");
+            }
+        }
         local.setUsername(remote.username());
         local.setRealName(remote.realName());
         local.setPhone(remote.phone());
@@ -35,8 +44,8 @@ public class PersistentAccountSyncService {
         local.setLastSyncedAt(LocalDateTime.now());
         if (first) {
             mapper.insert(local);
-            fieldControl.ensureLocal(local.getId(), BkUserFieldControlService.PASSWORD_FIELD, null);
-            fieldControl.ensureLocal(local.getId(), BkUserFieldControlService.STATUS_FIELD, null);
+            fieldControl.ensureRemote(local.getId(), BkUserFieldControlService.PASSWORD_FIELD);
+            fieldControl.ensureRemote(local.getId(), BkUserFieldControlService.STATUS_FIELD);
         } else {
             mapper.updateById(local);
         }
@@ -53,5 +62,5 @@ public class PersistentAccountSyncService {
             throw new IllegalArgumentException("线上账号密码哈希格式非法");
         }
     }
-    public boolean verify(String username,String raw){BkUserEntity u=mapper.findByUsername(username); if(u==null||!"ENABLED".equals(u.getEnabledStatus())||u.getLockUntil()!=null&&u.getLockUntil().isAfter(LocalDateTime.now())) return false; boolean ok=encoder.matches(raw,u.getPasswordHash()); if(ok){u.setLoginFailCount(0);u.setLockUntil(null);}else{int n=(u.getLoginFailCount()==null?0:u.getLoginFailCount())+1;u.setLoginFailCount(n);if(n>=5)u.setLockUntil(LocalDateTime.now().plusMinutes(15));} mapper.updateById(u); return ok;}
+    public boolean verify(String username,String raw){BkUserEntity u=mapper.findByUsername(username); if(u==null||!"ENABLED".equals(u.getEnabledStatus())||u.getLockUntil()!=null&&u.getLockUntil().isAfter(LocalDateTime.now())) return false; boolean ok=encoder.matches(raw,u.getPasswordHash()); if(ok) mapper.clearLoginFailures(u.getId()); else mapper.recordLoginFailure(u.getId()); return ok;}
 }

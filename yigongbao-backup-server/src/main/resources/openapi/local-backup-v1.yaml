@@ -107,28 +107,34 @@ paths:
     get:
       operationId: listOrders
       parameters:
-        - {$ref: '#/components/parameters/Cursor'}
-        - {$ref: '#/components/parameters/PageSize'}
-        - {$ref: '#/components/parameters/HighWatermark'}
-        - {name: orderCode, in: query, schema: {type: string}}
-        - {name: createdFrom, in: query, schema: {$ref: '#/components/schemas/Rfc3339Time'}}
-        - {name: createdTo, in: query, schema: {$ref: '#/components/schemas/Rfc3339Time'}}
-        - {name: snapshotStatus, in: query, schema: {type: string}}
-        - {name: sourceStatus, in: query, schema: {type: string}}
-        - {name: orgName, in: query, schema: {type: string, maxLength: 128}}
-        - {name: hospitalName, in: query, schema: {type: string, maxLength: 128}}
-        - {name: patientName, in: query, schema: {type: string, maxLength: 128}}
-        - {name: doctorName, in: query, schema: {type: string, maxLength: 128}}
-        - {name: businessType, in: query, schema: {type: string, maxLength: 32}}
-        - {name: phase, in: query, schema: {type: integer}}
+        - {name: current, in: query, schema: {type: integer, format: int64, minimum: 1, default: 1}}
+        - {name: size, in: query, schema: {type: integer, format: int64, minimum: 1, maximum: 100, default: 20}}
+        - {name: keyword, in: query, schema: {type: string, maxLength: 128}}
+        - {name: createdFrom, in: query, schema: {$ref: '#/components/schemas/OrderDateBoundary'}}
+        - {name: createdTo, in: query, schema: {$ref: '#/components/schemas/OrderDateBoundary'}}
         - {name: status, in: query, schema: {type: integer}}
+        - {name: businessType, in: query, schema: {type: string, maxLength: 32}}
+        - {name: needsPhysicalDelivery, in: query, schema: {type: integer, enum: [0, 1, 2]}}
+        - {name: cloudRollup, in: query, schema: {$ref: '#/components/schemas/StorageRollupState'}}
+        - {name: hotRollup, in: query, schema: {$ref: '#/components/schemas/StorageRollupState'}}
+        - {name: coldRollup, in: query, schema: {$ref: '#/components/schemas/StorageRollupState'}}
       responses:
         '200':
-          description: 订单游标页
+          description: 订单页码分页结果
           content:
             application/json:
               schema: {$ref: '#/components/schemas/OrderPageEnvelope'}
         '400': {$ref: '#/components/responses/BadRequest'}
+  /api/v1/orders/filter-options:
+    get:
+      operationId: getOrderFilterOptions
+      responses:
+        '200':
+          description: 订单文件页固定筛选项
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/OrderFilterOptionsEnvelope'}
+        '401': {$ref: '#/components/responses/Unauthorized'}
   /api/v1/orders/{id}:
     get:
       operationId: getOrder
@@ -605,6 +611,14 @@ components:
     DecimalId: {type: string, pattern: '^[0-9]+$'}
     ByteCount: {type: string, pattern: '^[0-9]+$'}
     Rfc3339Time: {type: string, format: date-time}
+    OrderDateBoundary:
+      anyOf:
+        - {type: string, format: date}
+        - {type: string, format: date-time}
+        - {type: string, pattern: '^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d{1,9})?$'}
+    StorageRollupState:
+      type: string
+      enum: [PRESENT, CLEARED, RESTORING, AVAILABLE, PARTIAL, ABSENT, ERROR, UNKNOWN]
     Sha256: {type: string, pattern: '^[0-9a-f]{64}$'}
     Cursor: {type: string, pattern: '^[A-Za-z0-9_-]*$'}
     SuccessBase:
@@ -698,9 +712,9 @@ components:
       type: object
       required: [id, sourceOrderId, orderCode, orderCreatedAt, backupCompletedAt, snapshotStatus, cloudRollup, hotRollup, coldRollup]
       properties:
-        id: {$ref: '#/components/schemas/DecimalId'}
-        sourceOrderId: {$ref: '#/components/schemas/DecimalId'}
-        orderCode: {type: string}
+        id: {type: integer, format: int64}
+        sourceOrderId: {type: integer, format: int64}
+        orderCode: {type: string, nullable: true}
         publicOrderCode: {type: string, nullable: true}
         orderCreatedAt: {$ref: '#/components/schemas/Rfc3339Time'}
         orgName: {type: string, nullable: true}
@@ -714,7 +728,7 @@ components:
         status: {type: integer, nullable: true}
         statusName: {type: string, nullable: true}
         backupCompletedAt: {$ref: '#/components/schemas/Rfc3339Time'}
-        snapshotStatus: {type: string, enum: [AVAILABLE, SIMULATED, RECEIPT_SUSPENDED, CORRUPT]}
+        snapshotStatus: {type: string, enum: [PENDING_RECEIPT, AVAILABLE, SIMULATED, RECEIPT_SUSPENDED, CORRUPT]}
         backupMode: {type: string, enum: [REAL, METADATA_SIMULATION]}
         backupCompleteness: {type: string, enum: [COMPLETE, INCOMPLETE, NOT_APPLICABLE]}
         manifestSchemaVersion: {type: integer, minimum: 1}
@@ -724,29 +738,62 @@ components:
         cloudRollup: {type: string}
         hotRollup: {type: string}
         coldRollup: {type: string}
+    OrderSnapshot:
+      allOf:
+        - {$ref: '#/components/schemas/OrderSummary'}
+        - type: object
+          additionalProperties: true
+          properties:
+            orderRawJson: {type: string}
+            displayJson: {type: string}
+            relatedBusinessJson: {type: string}
+            manifestRevision: {type: string}
+            manifestSha256: {$ref: '#/components/schemas/Sha256'}
+            assetCount: {type: integer, format: int64}
+            totalBytes: {type: integer, format: int64}
+    OrderPageData:
+      type: object
+      additionalProperties: true
+      required: [records, total, size, current, pages]
+      properties:
+        records: {type: array, items: {$ref: '#/components/schemas/OrderSnapshot'}}
+        total: {type: integer, format: int64, minimum: 0}
+        size: {type: integer, format: int64, minimum: 1, maximum: 100}
+        current: {type: integer, format: int64, minimum: 1}
+        pages: {type: integer, format: int64, minimum: 0}
     OrderPageEnvelope:
       allOf:
         - {$ref: '#/components/schemas/SuccessBase'}
         - type: object
           properties:
-            data:
-              allOf:
-                - {$ref: '#/components/schemas/PageData'}
-                - type: object
-                  properties: {items: {type: array, items: {$ref: '#/components/schemas/OrderSummary'}}}
+            data: {$ref: '#/components/schemas/OrderPageData'}
     OrderEnvelope:
       allOf:
         - {$ref: '#/components/schemas/SuccessBase'}
         - type: object
           properties:
-            data:
-              type: object
-              required: [summary, raw, display, relatedBusiness]
-              properties:
-                summary: {$ref: '#/components/schemas/OrderSummary'}
-                raw: {type: object, additionalProperties: true}
-                display: {type: object, additionalProperties: true}
-                relatedBusiness: {type: object, additionalProperties: true}
+            data: {$ref: '#/components/schemas/OrderSnapshot'}
+    OrderFilterOption:
+      type: object
+      required: [value, label]
+      properties:
+        value:
+          oneOf: [{type: integer}, {type: string}]
+        label: {type: string}
+    OrderFilterOptions:
+      type: object
+      required: [orderStatuses, businessTypes, physicalDeliveries, storageStates]
+      properties:
+        orderStatuses: {type: array, items: {$ref: '#/components/schemas/OrderFilterOption'}}
+        businessTypes: {type: array, items: {$ref: '#/components/schemas/OrderFilterOption'}}
+        physicalDeliveries: {type: array, items: {$ref: '#/components/schemas/OrderFilterOption'}}
+        storageStates: {type: array, items: {$ref: '#/components/schemas/OrderFilterOption'}}
+    OrderFilterOptionsEnvelope:
+      allOf:
+        - {$ref: '#/components/schemas/SuccessBase'}
+        - type: object
+          properties:
+            data: {$ref: '#/components/schemas/OrderFilterOptions'}
     FieldOwnershipRequest:
       type: object
       additionalProperties: false

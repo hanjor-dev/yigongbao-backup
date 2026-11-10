@@ -1,6 +1,7 @@
 package com.yigongbao.backup.restore;
 
 import org.junit.jupiter.api.Test;
+import org.springframework.dao.DuplicateKeyException;
 
 import java.util.List;
 import java.util.concurrent.atomic.AtomicReference;
@@ -10,6 +11,30 @@ import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.Mockito.*;
 
 class PersistentRestoreEvidenceStoreTest {
+    @Test
+    void duplicatePreparedSessionRaceConvergesOnWinningRow() {
+        RestoreSessionMapper sessions = mock(RestoreSessionMapper.class);
+        RestoreFileMapper files = mock(RestoreFileMapper.class);
+        OrphanObjectMapper orphans = mock(OrphanObjectMapper.class);
+        RestoreSessionEntity winner = new RestoreSessionEntity();
+        winner.setId(19L);
+        winner.setRemoteSessionId("remote-race");
+        winner.setLocalIdempotencyKey("winner-key");
+        winner.setStatus("PREPARED");
+        when(sessions.findByRemoteSessionId("remote-race")).thenReturn(null, winner);
+        when(sessions.findByLocalIdempotencyKey(anyString())).thenReturn(null);
+        doThrow(new DuplicateKeyException("remote session won concurrently"))
+                .when(sessions).insert(any(RestoreSessionEntity.class));
+
+        new PersistentRestoreEvidenceStore(sessions, files, orphans)
+                .prepared(new RestoreEvidenceStore.PreparedSession(
+                        "remote-race", "1001", "r1", "digest", "rel", "REJECT"));
+
+        verify(sessions).updateById(winner);
+        assertThat(winner.getRemoteSessionId()).isEqualTo("remote-race");
+        assertThat(winner.getPreparedRevision()).isEqualTo("r1");
+    }
+
     @Test
     void persistsSessionAndUploadEvidenceIdempotently() {
         RestoreSessionMapper sessions = mock(RestoreSessionMapper.class);

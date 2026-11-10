@@ -6,6 +6,7 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import java.io.IOException;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.nio.charset.StandardCharsets;
 import java.time.Instant;
 import java.util.UUID;
 import org.springframework.stereotype.Service;
@@ -38,6 +39,16 @@ public class StorageVolumeMarkerService {
         boolean matched = identity.valid() && expectedVolumeId.equals(identity.volumeId());
         return new VerificationResult(true, matched, matched ? null
                 : identity.valid() ? "卷标记与登记卷不匹配" : identity.reason());
+    }
+
+    /** 从卷台账读取期望的介质身份；旧卷继续使用稳定派生标识。 */
+    public UUID expectedVolumeId(StorageVolumeEntity volume) {
+        try {
+            return UUID.fromString(objectMapper.readTree(volume.getMarkerJson()).path("volumeId").asText());
+        } catch (Exception ignored) {
+            return UUID.nameUUIDFromBytes(("yigongbao-storage-volume:" + volume.getId())
+                    .getBytes(StandardCharsets.UTF_8));
+        }
     }
 
     /** 读取目录中已有的卷身份；损坏标记必须显式返回无效，禁止静默覆盖。 */

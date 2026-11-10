@@ -5,7 +5,7 @@
  * 来源：sql/init/00-create-database.sql 至 04-functional-config-defaults.sql。
  * 约束：仅用于全新环境；已有数据库升级请使用 sql/migration 下的迁移脚本。
  * 默认数据库：yigongbao_backup。
- * 默认管理员：admin1（首次登录后必须修改密码）。
+ * 应急管理员由应用首次启动时使用一次性环境密钥创建。
  *
  * 推荐执行：mysql --default-character-set=utf8mb4 -u <迁移账号> -p < sql/init/yigongbao-backup-full-init.sql
  */
@@ -56,22 +56,7 @@ CREATE TABLE IF NOT EXISTS bk_user (
  create_by BIGINT NULL COMMENT '创建人ID', update_by BIGINT NULL COMMENT '更新人ID', is_deleted TINYINT NOT NULL DEFAULT 0 COMMENT '逻辑删除', PRIMARY KEY(id)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci COMMENT='本地账号';
 
--- 首次联调管理员（仅当 admin1 账号不存在时创建，不覆盖已有账号）。
--- 初始账号：admin1；密码使用预置 BCrypt 哈希，首次登录后建议立即修改密码。
--- 密码为 BCrypt 哈希，和 PersistentAccountSyncService/AuthController 使用同一校验算法。
-INSERT INTO bk_user (source_user_id, username, password_hash, real_name, role_code,
-                     enabled_status, login_fail_count, emergency_admin)
-SELECT NULL,
-       'admin1',
-       '$2a$10$N.zmdr9k7uOCQb376NoUnuTJ8iAt6Z5EHsM8lE9lBOsl7iKTVKIUi',
-       '系统管理员',
-       'ADMIN',
-       'ENABLED',
-       0,
-       1
-WHERE NOT EXISTS (
-    SELECT 1 FROM bk_user WHERE username = 'admin1' AND is_deleted = 0
-);
+-- 应急管理员由应用首次启动时使用 BACKUP_BOOTSTRAP_ADMIN_PASSWORD 安全创建。
 
 CREATE TABLE IF NOT EXISTS bk_user_field_control (
  id BIGINT NOT NULL AUTO_INCREMENT COMMENT '主键ID', user_id BIGINT NOT NULL COMMENT '本地用户ID', field_name VARCHAR(64) NOT NULL COMMENT '托管字段', ownership VARCHAR(16) NOT NULL COMMENT 'REMOTE/LOCAL',
@@ -599,4 +584,4 @@ FROM bk_config
 WHERE scope = 'GLOBAL' AND is_deleted = 0;
 SELECT username, role_code, enabled_status, emergency_admin
 FROM bk_user
-WHERE username = 'admin1' AND is_deleted = 0;
+WHERE emergency_admin = 1 AND is_deleted = 0;

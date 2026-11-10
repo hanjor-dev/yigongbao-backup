@@ -68,7 +68,7 @@ public class AdminAccountController {
         admin();
         BkUserEntity user = required(id);
         if (command == null || !command.enabledStatus().matches("ENABLED|DISABLED")) throw new IllegalArgumentException("账号状态非法");
-        long actor = StpUtil.getLoginIdAsLong(); user.setEnabledStatus(command.enabledStatus()); user.setUpdateBy(actor); mapper.updateById(user); fieldControl.markLocal(user.getId(), BkUserFieldControlService.STATUS_FIELD, actor); audit.append(new AuditLogService.Event("ACCOUNT_STATUS_CHANGE", "USER", String.valueOf(id), "OK"));
+        long actor = StpUtil.getLoginIdAsLong(); user.setEnabledStatus(command.enabledStatus()); user.setUpdateBy(actor); mapper.updateById(user); fieldControl.markLocal(user.getId(), BkUserFieldControlService.STATUS_FIELD, actor); if ("DISABLED".equals(command.enabledStatus())) StpUtil.kickout(id); audit.append(new AuditLogService.Event("ACCOUNT_STATUS_CHANGE", "USER", String.valueOf(id), "OK"));
         return ApiResponse.ok(view(user), rid());
     }
 
