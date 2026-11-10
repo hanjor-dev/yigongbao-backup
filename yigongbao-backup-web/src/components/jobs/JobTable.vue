@@ -1,5 +1,6 @@
 <script setup>
 import { useBackupContext } from '../../composables/useBackupContext.js';
+import { canRetryFailedOrders } from '../../taskCenter.js';
 const { jobs, jobPage, jobSize, jobTotal, jobProgress, selectJob, cancelJob, retryJob, changeJobPage, changeJobSize } = useBackupContext();
 const terminalStates = ['SUCCEEDED','FAILED','PARTIAL_FAILED','CANCELLED','CANCELED'];
 const jobState = (job) => job.state || job.status || '';
@@ -32,7 +33,7 @@ const capacitySummary = (job) => `源文件 ${bytes(job.expectedBytes)} / ZIP ${
     <el-table-column label="文件" min-width="250"><template #default="{ row }">{{ simulation(row) ? expectedSummary(row) : fileSummary(row) }}</template></el-table-column>
     <el-table-column label="容量（压缩前 / ZIP）" min-width="210"><template #default="{ row }">{{ capacitySummary(row) }}</template></el-table-column>
     <el-table-column label="失败原因" min-width="220" show-overflow-tooltip><template #default="{ row }"><span class="error-text">{{ row.failureCode || '-' }} {{ row.failureEvidence || '' }}</span></template></el-table-column>
-    <el-table-column label="操作" width="205" fixed="right"><template #default="{ row }"><el-button size="small" @click="selectJob(row)">详情</el-button><el-button v-if="!terminalStates.includes(jobState(row)) && !row.cancelRequested" size="small" type="warning" plain @click="cancelJob(row)">取消</el-button><el-button v-if="['FAILED','PARTIAL_FAILED'].includes(jobState(row)) && (row.orderFailed || 0) > 0" size="small" type="primary" plain @click="retryJob(row)">重试失败订单</el-button></template></el-table-column>
+    <el-table-column label="操作" width="205" fixed="right"><template #default="{ row }"><el-button size="small" @click="selectJob(row)">详情</el-button><el-button v-if="!terminalStates.includes(jobState(row)) && !row.cancelRequested" size="small" type="warning" plain @click="cancelJob(row)">取消</el-button><el-button v-if="canRetryFailedOrders(row)" size="small" type="primary" plain @click="retryJob(row)">重试失败订单</el-button></template></el-table-column>
     <template #empty><el-empty description="暂无备份任务" /></template>
   </el-table>
   <el-pagination v-if="jobTotal > 0" class="table-pagination" background layout="total, sizes, prev, pager, next"

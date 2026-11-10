@@ -6,6 +6,7 @@ import org.springframework.stereotype.Service;
 import com.yigongbao.backup.storage.volume.StorageVolumeEntity;
 import com.yigongbao.backup.storage.volume.StorageVolumeMapper;
 import java.util.List;
+import com.yigongbao.backup.remote.RemoteCallException;
 
 /** 持久化任务的订单级、文件级进度以及可展示的订单业务快照。 */
 @Service
@@ -131,7 +132,12 @@ public class JobEvidenceService {
         return orders.selectOne(Wrappers.<JobOrderEntity>lambdaQuery().eq(JobOrderEntity::getJobId,jobId)
                 .eq(JobOrderEntity::getSourceOrderId,sourceId).last("limit 1"));
     }
-    private static void evidence(JobOrderEntity row,Throwable e){row.setFailureCode(e==null?null:e.getClass().getSimpleName());row.setFailureMessage(e==null?null:safe(e));}
-    private static void evidence(JobFileEntity row,Throwable e){row.setFailureCode(e==null?null:e.getClass().getSimpleName());row.setFailureMessage(e==null?null:safe(e));}
+    private static void evidence(JobOrderEntity row,Throwable e){row.setFailureCode(failureCode(e));row.setFailureMessage(e==null?null:safe(e));}
+    private static void evidence(JobFileEntity row,Throwable e){row.setFailureCode(failureCode(e));row.setFailureMessage(e==null?null:safe(e));}
+    private static String failureCode(Throwable e){
+        if(e==null)return null;
+        if(e instanceof RemoteCallException remote&&remote.code()!=null&&!remote.code().isBlank())return remote.code();
+        return e.getClass().getSimpleName();
+    }
     private static String safe(Throwable e){String m=e.getMessage();return m==null?"任务项失败":m.substring(0,Math.min(1000,m.length()));}
 }

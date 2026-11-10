@@ -52,4 +52,7 @@ public class JobOrderEntity extends BaseEntity {
     private String status;
     private String failureCode;
     private String failureMessage;
+    /** 仅供任务详情展示；服务端创建降级任务时仍会重新校验全部条件。 */
+    @TableField(exist = false)
+    private Boolean degradedBackupEligible;
 }

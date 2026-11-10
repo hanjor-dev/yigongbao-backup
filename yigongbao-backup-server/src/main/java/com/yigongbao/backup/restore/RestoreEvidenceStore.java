@@ -37,7 +37,14 @@ public interface RestoreEvidenceStore {
     }
 
     record PreparedSession(String sessionId, String orderId, String manifestRevision,
-                           String signedPlanDigest, String relationSetHash, String conflictPolicy) {
+                           String signedPlanDigest, String relationSetHash, String conflictPolicy,
+                           int manifestSchemaVersion, String backupCompleteness,
+                           String relationshipStateHash) {
+        public PreparedSession(String sessionId, String orderId, String manifestRevision,
+                               String signedPlanDigest, String relationSetHash, String conflictPolicy) {
+            this(sessionId, orderId, manifestRevision, signedPlanDigest, relationSetHash, conflictPolicy,
+                    1, "COMPLETE", null);
+        }
     }
 
     record UploadEvidence(String assetIdentity, String objectKey, String versionId,

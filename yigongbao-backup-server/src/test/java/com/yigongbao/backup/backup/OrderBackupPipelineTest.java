@@ -8,9 +8,33 @@ import ch.qos.logback.core.read.ListAppender;
 import org.junit.jupiter.api.Test;
 import org.slf4j.LoggerFactory;
 import java.io.*; import java.nio.file.*; import java.util.*;
+import com.yigongbao.backup.remote.RemoteCallException;
 import static org.assertj.core.api.Assertions.*;
 
 class OrderBackupPipelineTest {
+    @Test void degradedPackageContainsOnlyRealAssetsAndManifest() throws Exception {
+        Path root=Files.createTempDirectory("backup"); var store=new LocalDirectoryArtifactStore(root);
+        var manifest=degradedManifest(List.of(new BackupManifest.Asset("a1","a.txt","DESIGN",2,"k1")));
+        var result=new OrderBackupPipeline(id->manifest,key->new ByteArrayInputStream("ok".getBytes()),store,new ObjectMapper())
+                .backupWithResult("O-DEG",manifest);
+
+        try(var zip=new java.util.zip.ZipFile(root.resolve(result.storageKey()).toFile())) {
+            assertThat(zip.stream().map(java.util.zip.ZipEntry::getName).toList())
+                    .containsExactlyInAnyOrder("files/a1-a.txt", "manifest.json");
+        }
+    }
+
+    @Test void allMissingDegradedPackageContainsOnlyManifestAndDoesNotDownloadPlaceholder() throws Exception {
+        Path root=Files.createTempDirectory("backup"); var store=new LocalDirectoryArtifactStore(root);
+        var manifest=degradedManifest(List.of());
+        var result=new OrderBackupPipeline(id->manifest,key->{throw new AssertionError("关系缺口不得下载占位文件");},store,new ObjectMapper())
+                .backupWithResult("O-ZERO",manifest);
+
+        try(var zip=new java.util.zip.ZipFile(root.resolve(result.storageKey()).toFile())) {
+            assertThat(zip.stream().map(java.util.zip.ZipEntry::getName).toList()).containsExactly("manifest.json");
+        }
+    }
+
     @Test void repeatedBackupOfSameManifestProducesTheSamePackageDigest() throws Exception {
         Path root=Files.createTempDirectory("backup"); var store=new LocalDirectoryArtifactStore(root);
         var m=new BackupManifest("O-IDEMPOTENT","2026-01-01T00:00:00Z",
@@ -89,7 +113,7 @@ class OrderBackupPipelineTest {
         var pipeline=new OrderBackupPipeline(id->m,key->new ByteArrayInputStream("ok".getBytes()),store,new ObjectMapper());
         assertThatThrownBy(() -> pipeline.backupWithResult("O4",m,OrderBackupPipeline.AssetProgressListener.NOOP,
                 () -> { throw new IllegalStateException("租约或 fencing token 无效"); }))
-                .hasMessageContaining("整单回滚");
+                .hasMessageContaining("fencing token 无效");
         assertThat(root.resolve("orders/" + java.time.LocalDate.now().format(java.time.format.DateTimeFormatter.BASIC_ISO_DATE) + "/O4-O4.zip")).doesNotExist();
     }
 
@@ -100,5 +124,41 @@ class OrderBackupPipelineTest {
                 .backupWithResult("42",m,"20261103","ORD/2026-001",OrderBackupPipeline.AssetProgressListener.NOOP,() -> {});
         assertThat(result.storageKey()).isEqualTo("orders/20261103/ORD_2026-001-42.zip");
         assertThat(root.resolve(result.storageKey())).exists();
+    }
+
+    @Test void differentTasksUseImmutablePackageKeysForTheSameOrder() throws Exception {
+        Path root=Files.createTempDirectory("backup"); var store=new LocalDirectoryArtifactStore(root);
+        var m=new BackupManifest("42","2026-01-01T00:00:00Z",List.of(new BackupManifest.Asset("a1","a.txt","DESIGN",2,"k1")));
+        var pipeline=new OrderBackupPipeline(id->m,key->new ByteArrayInputStream("ok".getBytes()),store,new ObjectMapper());
+
+        var first=pipeline.backupWithResult("42",m,"20261103","ORD-42",OrderBackupPipeline.AssetProgressListener.NOOP,() -> {},null,"job-10");
+        var second=pipeline.backupWithResult("42",m,"20261103","ORD-42",OrderBackupPipeline.AssetProgressListener.NOOP,() -> {},null,"job-11");
+
+        assertThat(first.storageKey()).isNotEqualTo(second.storageKey());
+        assertThat(root.resolve(first.storageKey())).exists();
+        assertThat(root.resolve(second.storageKey())).exists();
+    }
+
+    @Test void manifestConflictRemainsStructuredAndNonRetryable() throws Exception {
+        Path root=Files.createTempDirectory("backup"); var store=new LocalDirectoryArtifactStore(root);
+        var m=new BackupManifest("42","2026-01-01T00:00:00Z",List.of());
+        OnlineManifestClient client=new OnlineManifestClient() {
+            public BackupManifest fetch(String orderId){return m;}
+            public void confirm(String orderId, BackupManifest manifest){throw new RemoteCallException("changed",409,false,"MANIFEST_CHANGED","r","changed",null);}
+        };
+
+        assertThatThrownBy(() -> new OrderBackupPipeline(client,key->InputStream.nullInputStream(),store,new ObjectMapper())
+                .backupWithResult("42",m))
+                .isInstanceOf(RemoteCallException.class)
+                .extracting(error -> ((RemoteCallException) error).code())
+                .isEqualTo("MANIFEST_CHANGED");
+    }
+
+    private static BackupManifest degradedManifest(List<BackupManifest.Asset> assets) {
+        var gap=new BackupManifest.RelationGap("ORDER_FILE","100","a".repeat(64),"10.1","200",
+                "FILE_RECORD_NOT_FOUND","订单文件不存在: 200","b".repeat(64));
+        return new BackupManifest("O-DEG","2026-01-01T00:00:00Z",assets,"c".repeat(64),
+                "c".repeat(64),"d".repeat(64),2,"INCOMPLETE",List.of(gap),1,
+                "e".repeat(64),"f".repeat(64),Map.of("id",42),Map.of("id",42));
     }
 }

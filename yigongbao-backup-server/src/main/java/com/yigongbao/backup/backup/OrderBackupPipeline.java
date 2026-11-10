@@ -80,6 +80,17 @@ public final class OrderBackupPipeline {
     /** 按已固化的目标存储卷写入订单 ZIP，避免任务运行期间跟随默认热备目录漂移。 */
     public Result backupWithResult(String orderId, BackupManifest manifest, String backupDate, String orderNo,
                                    AssetProgressListener listener, Runnable beforeCommit, Long storageVolumeId) {
+        return backupWithResult(orderId, manifest, backupDate, orderNo, listener, beforeCommit,
+                storageVolumeId, null);
+    }
+
+    /**
+     * 使用任务级不可变作用域生成物理存储键。不同任务即使处理同一订单也不能覆盖彼此制品；
+     * 同一任务重试使用相同作用域，便于从暂存状态幂等恢复。
+     */
+    public Result backupWithResult(String orderId, BackupManifest manifest, String backupDate, String orderNo,
+                                   AssetProgressListener listener, Runnable beforeCommit, Long storageVolumeId,
+                                   String storageScope) {
         if (manifest == null || manifest.assets() == null) throw new IllegalStateException("订单清单不存在");
         if (volumeStore != null && (storageVolumeId == null || storageVolumeId < 1)
                 && !(volumeStore instanceof LegacyArtifactStoreVolumeAdapter)) {
@@ -160,7 +171,8 @@ public final class OrderBackupPipeline {
             long compressStartedAt = System.nanoTime();
             log.info("订单包压缩开始: orderId={}, assetCount={}", orderId, manifest.assets().size());
             try (ZipOutputStream out = new ZipOutputStream(Files.newOutputStream(zip))) {
-                zipTree(data, out, data);
+                // 与持久化的 packageEntryName 保持一致；关系缺口不进入 files/。
+                zipTree(data, out, staging);
                 add(out, meta, "manifest.json");
             }
             log.info("订单包压缩完成｜订单ID={}｜压缩包容量={}｜执行耗时={}",
@@ -172,8 +184,10 @@ public final class OrderBackupPipeline {
             beforeCommit.run();
             log.info("订单清单一致性确认完成: orderId={}", orderId);
 
+            String scopeSuffix = storageScope == null || storageScope.isBlank()
+                    ? "" : "-" + safeOrderPart(storageScope, "scope");
             String storageKey = "orders/" + normalizedDate + "/" + safeOrderNo + "-"
-                    + safeOrderPart(orderId, "order") + ".zip";
+                    + safeOrderPart(orderId, "order") + scopeSuffix + ".zip";
             String packageSha256 = sha256(zip);
             long packageSize = Files.size(zip);
             try (InputStream in = Files.newInputStream(zip)) {
@@ -189,6 +203,7 @@ public final class OrderBackupPipeline {
         } catch (Exception failure) {
             log.error("订单备份流水线失败并回滚: orderId={}, durationMs={}, errorType={}, error={}",
                     orderId, elapsedMillis(startedAt), failure.getClass().getSimpleName(), safeError(failure));
+            if (failure instanceof RuntimeException runtime) throw runtime;
             throw new IllegalStateException("订单备份失败，整单回滚: " + orderId, failure);
         } finally {
             deleteTree(staging);

@@ -4,12 +4,69 @@ import org.junit.jupiter.api.Test;
 
 import java.time.Duration;
 import java.util.List;
+import com.yigongbao.backup.order.OrderSnapshotMapper;
+import com.yigongbao.backup.backup.BackupStageMapper;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.Mockito.*;
 
 class PersistentJobServiceTest {
+    @Test
+    void degradedBackupEligibilityRequiresStrictRealRelationFailureWithoutAvailableSnapshot() {
+        JobMapper jobs = mock(JobMapper.class);
+        JobOrderMapper orders = mock(JobOrderMapper.class);
+        JobFileMapper files = mock(JobFileMapper.class);
+        OrderSnapshotMapper snapshots = mock(OrderSnapshotMapper.class);
+        BackupStageMapper stages = mock(BackupStageMapper.class);
+        JobEntity source = new JobEntity();
+        source.setId(20L); source.setJobType("ORDER_BACKUP"); source.setStatus("PARTIAL_FAILED");
+        source.setFencingToken(0L); source.setConfigSnapshotJson("{\"executionMode\":\"REAL\"}");
+        JobOrderEntity failed = new JobOrderEntity();
+        failed.setJobId(20L); failed.setSourceOrderId(7L); failed.setStatus("FAILED");
+        failed.setFailureCode("RELATION_BROKEN");
+        when(jobs.selectById(20L)).thenReturn(source);
+        when(orders.selectOne(any())).thenReturn(failed);
+        when(snapshots.selectCount(any())).thenReturn(0L);
+        PersistentJobService service = new PersistentJobService(
+                jobs, orders, files, null, null, snapshots, stages);
+
+        assertThat(service.requireDegradedBackupEligible(20L, 7L)).isSameAs(failed);
+        assertThat(failed.getDegradedBackupEligible()).isTrue();
+
+        source.setConfigSnapshotJson("{\"executionMode\":\"METADATA_SIMULATION\"}");
+        org.assertj.core.api.Assertions.assertThatThrownBy(
+                () -> service.requireDegradedBackupEligible(20L, 7L)).isInstanceOf(IllegalStateException.class);
+        source.setConfigSnapshotJson("{\"executionMode\":\"REAL\"}");
+        failed.setFailureCode("DEPENDENCY_UNAVAILABLE");
+        org.assertj.core.api.Assertions.assertThatThrownBy(
+                () -> service.requireDegradedBackupEligible(20L, 7L)).isInstanceOf(IllegalStateException.class);
+        failed.setFailureCode("RELATION_BROKEN");
+        when(snapshots.selectCount(any())).thenReturn(1L);
+        org.assertj.core.api.Assertions.assertThatThrownBy(
+                () -> service.requireDegradedBackupEligible(20L, 7L)).isInstanceOf(IllegalStateException.class);
+        when(snapshots.selectCount(any())).thenReturn(0L);
+        when(stages.selectCount(any())).thenReturn(1L);
+        org.assertj.core.api.Assertions.assertThatThrownBy(
+                () -> service.requireDegradedBackupEligible(20L, 7L))
+                .isInstanceOf(IllegalStateException.class)
+                .hasMessageContaining("已有可用备份");
+    }
+
+    @Test
+    void degradedTaskCannotUseNormalFailedOrderRetry() {
+        JobMapper jobs = mock(JobMapper.class);
+        JobEntity source = new JobEntity();
+        source.setId(21L); source.setJobType("DEGRADED_BACKUP"); source.setStatus("FAILED");
+        source.setFencingToken(0L); source.setConfigSnapshotJson("{\"executionMode\":\"REAL\"}");
+        when(jobs.selectById(21L)).thenReturn(source);
+        PersistentJobService service = new PersistentJobService(jobs);
+
+        org.assertj.core.api.Assertions.assertThatThrownBy(() -> service.requireRetryableStrictBackupJob(21L))
+                .isInstanceOf(IllegalStateException.class)
+                .hasMessageContaining("降级");
+    }
+
     @Test
     void createsAndClaimsDatabaseTaskWithLease() {
         JobMapper mapper = mock(JobMapper.class);

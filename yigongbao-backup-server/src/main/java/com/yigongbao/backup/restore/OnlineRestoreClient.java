@@ -45,14 +45,30 @@ public interface OnlineRestoreClient {
         }
     }
 
+    record RestoreRelationGap(String relationKind, String sourceRecordId, String relationOwnerKey,
+                              String relationValue, String originalFileId, String reasonCode,
+                              String reason, String relationHash) { }
+
     record RestoreRequest(String manifestRevision, String manifestSha256, String conflictPolicy,
                           String requestDigest, String assetSetDigest, String relationSetHash,
+                          int manifestSchemaVersion, String backupCompleteness,
+                          String relationshipStateHash, List<RestoreRelationGap> relationGaps,
                           List<RestoreAsset> assets) {
         public RestoreRequest(String manifestRevision, String manifestSha256, String conflictPolicy,
                               String requestDigest, String assetSetDigest, String relationSetHash) {
-            this(manifestRevision, manifestSha256, conflictPolicy, requestDigest, assetSetDigest, relationSetHash, List.of());
+            this(manifestRevision, manifestSha256, conflictPolicy, requestDigest, assetSetDigest, relationSetHash,
+                    1, "COMPLETE", null, List.of(), List.of());
+        }
+        public RestoreRequest(String manifestRevision, String manifestSha256, String conflictPolicy,
+                              String requestDigest, String assetSetDigest, String relationSetHash,
+                              List<RestoreAsset> assets) {
+            this(manifestRevision, manifestSha256, conflictPolicy, requestDigest, assetSetDigest, relationSetHash,
+                    1, "COMPLETE", null, List.of(), assets);
         }
         public RestoreRequest {
+            manifestSchemaVersion = manifestSchemaVersion <= 0 ? 1 : manifestSchemaVersion;
+            backupCompleteness = backupCompleteness == null ? "COMPLETE" : backupCompleteness;
+            relationGaps = relationGaps == null ? List.of() : List.copyOf(relationGaps);
             assets = assets == null ? List.of() : List.copyOf(assets);
         }
     }

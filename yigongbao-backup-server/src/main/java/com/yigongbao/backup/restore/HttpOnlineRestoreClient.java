@@ -40,7 +40,8 @@ public final class HttpOnlineRestoreClient implements OnlineRestoreClient {
     public Session prepare(String orderId) {
         // 旧抽象没有携带清单摘要，只能生成稳定的兼容请求；正式调用应使用带清单参数的重载。
         String digest = sha256(orderId);
-        return prepare(orderId, new PrepareRequest(digest, digest, "REJECT", digest, digest, digest, List.of()));
+        return prepare(orderId, new PrepareRequest(digest, digest, "REJECT", digest, digest, digest,
+                1, "COMPLETE", null, List.of(), List.of()));
     }
 
     /** 使用清单确认阶段生成的不可变摘要调用 YAML 定义的 prepare 请求。 */
@@ -48,7 +49,9 @@ public final class HttpOnlineRestoreClient implements OnlineRestoreClient {
     public Session prepare(String orderId, OnlineRestoreClient.RestoreRequest request) {
         if (request == null) throw new IllegalArgumentException("恢复准备参数不能为空");
         return prepare(orderId, new PrepareRequest(request.manifestRevision(), request.manifestSha256(),
-                request.conflictPolicy(), request.requestDigest(), request.assetSetDigest(), request.relationSetHash(), request.assets()));
+                request.conflictPolicy(), request.requestDigest(), request.assetSetDigest(), request.relationSetHash(),
+                request.manifestSchemaVersion(), request.backupCompleteness(), request.relationshipStateHash(),
+                request.relationGaps(), request.assets()));
     }
 
     /** 保留具体客户端的请求类型，方便需要显式配置冲突策略的调用方。 */
@@ -62,7 +65,8 @@ public final class HttpOnlineRestoreClient implements OnlineRestoreClient {
             try {
                 evidenceStore.prepared(new RestoreEvidenceStore.PreparedSession(session.id(), orderId,
                         request.manifestRevision(), session.signedPlanDigest(), request.relationSetHash(),
-                        request.conflictPolicy()));
+                        request.conflictPolicy(), request.manifestSchemaVersion(), request.backupCompleteness(),
+                        request.relationshipStateHash()));
             } catch (RuntimeException persistenceFailure) {
                 // 本地证据无法落库时不能继续上传；尽力终止线上会话，避免遗留可提交的半成品会话。
                 try {
@@ -337,6 +341,8 @@ public final class HttpOnlineRestoreClient implements OnlineRestoreClient {
 
     public record PrepareRequest(String manifestRevision, String manifestSha256, String conflictPolicy,
                                  String requestDigest, String assetSetDigest, String relationSetHash,
+                                 int manifestSchemaVersion, String backupCompleteness,
+                                 String relationshipStateHash, List<OnlineRestoreClient.RestoreRelationGap> relationGaps,
                                  List<OnlineRestoreClient.RestoreAsset> assets) {}
 
     private static final class CountingDigestInputStream extends InputStream {

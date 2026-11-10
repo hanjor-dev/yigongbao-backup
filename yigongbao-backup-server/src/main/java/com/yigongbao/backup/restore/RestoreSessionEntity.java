@@ -19,6 +19,9 @@ public class RestoreSessionEntity extends BaseEntity {
     private String preparedRevision;
     private String signedPlanDigest;
     private String relationSetHash;
+    private Integer manifestSchemaVersion;
+    private String backupCompleteness;
+    private String relationshipStateHash;
     private String status;
     private java.time.LocalDateTime protectionUntil;
 }

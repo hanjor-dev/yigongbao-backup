@@ -52,6 +52,9 @@ public class PersistentRestoreEvidenceStore implements RestoreEvidenceStore {
         session.setPreparedRevision(prepared.manifestRevision());
         session.setSignedPlanDigest(prepared.signedPlanDigest());
         session.setRelationSetHash(prepared.relationSetHash());
+        session.setManifestSchemaVersion(prepared.manifestSchemaVersion());
+        session.setBackupCompleteness(value(prepared.backupCompleteness(), "COMPLETE"));
+        session.setRelationshipStateHash(prepared.relationshipStateHash());
         if (remoteSessionChanged || (!"COMMITTED".equals(session.getStatus()) && !"ABORTED".equals(session.getStatus()))) {
             session.setStatus("PREPARED");
         }
@@ -164,7 +167,8 @@ public class PersistentRestoreEvidenceStore implements RestoreEvidenceStore {
 
     private static String idempotencyKey(PreparedSession session) {
         return sha256(String.join("\n", value(session.orderId(), ""), value(session.manifestRevision(), ""),
-                value(session.signedPlanDigest(), ""), value(session.relationSetHash(), "")));
+                value(session.signedPlanDigest(), ""), value(session.relationSetHash(), ""),
+                String.valueOf(session.manifestSchemaVersion()), value(session.relationshipStateHash(), "")));
     }
 
     private static Long parseId(String value) {

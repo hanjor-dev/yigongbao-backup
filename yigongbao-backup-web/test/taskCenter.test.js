@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { coldBatchCapabilities, coldImportDiagnostic, extractJobId, isTerminalJob, jobProgress, normalizePage, replaceJobById, storageState, supplementTaskState, taskFailureSummary } from '../src/taskCenter.js';
+import { canRetryFailedOrders, coldBatchCapabilities, coldImportDiagnostic, extractJobId, incompleteBackupLabel, isTerminalJob, jobProgress, normalizePage, replaceJobById, storageState, supplementTaskState, taskFailureSummary } from '../src/taskCenter.js';
 import { statusTone } from '../src/components/StatusBadge.js';
 
 test('extractJobId handles command response envelope', () => {
@@ -80,4 +80,11 @@ test('statusTone maps common operational states to stable visual tones', () => {
   assert.equal(statusTone('PARTIAL_FAILED'), 'danger');
   assert.equal(statusTone('RETRYING'), 'progress');
   assert.equal(statusTone('UNKNOWN'), 'neutral');
+});
+
+test('degraded backup remains separate from strict retry and exposes completeness label', () => {
+  assert.equal(canRetryFailedOrders({ jobType: 'ORDER_BACKUP', state: 'PARTIAL_FAILED', orderFailed: 1 }), true);
+  assert.equal(canRetryFailedOrders({ jobType: 'DEGRADED_BACKUP', state: 'FAILED', orderFailed: 1 }), false);
+  assert.equal(incompleteBackupLabel({ backupCompleteness: 'INCOMPLETE', relationGapCount: 2 }), '文件可能不完整 · 缺失关系 2');
+  assert.equal(incompleteBackupLabel({ backupCompleteness: 'COMPLETE' }), '');
 });

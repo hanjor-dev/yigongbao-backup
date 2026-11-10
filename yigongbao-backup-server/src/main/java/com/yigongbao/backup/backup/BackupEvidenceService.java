@@ -20,6 +20,7 @@ public class BackupEvidenceService {
     private final OrderSnapshotMapper snapshots;
     private final AssetMapper assets;
     private final AssetRelationMapper relations;
+    private final RelationGapMapper relationGaps;
     private final OrderPackageMapper packages;
     private final ArtifactCopyMapper artifactCopies;
     private final ObjectMapper mapper;
@@ -59,6 +60,13 @@ public class BackupEvidenceService {
         new OrderSnapshotFieldMapper(mapper).apply(snapshot, rawOrder, displayOrder);
         snapshot.setSourceOrderId(orderId);
         snapshot.setBackupMode(mode.name());
+        snapshot.setBackupCompleteness(mode == BackupExecutionMode.METADATA_SIMULATION
+                ? "NOT_APPLICABLE" : manifest.backupCompleteness());
+        snapshot.setManifestSchemaVersion(manifest.manifestSchemaVersion());
+        snapshot.setRelationGapCount(mode == BackupExecutionMode.METADATA_SIMULATION ? 0 : manifest.relationGapCount());
+        snapshot.setRelationGapHash(mode == BackupExecutionMode.METADATA_SIMULATION ? null : manifest.relationGapHash());
+        snapshot.setRelationshipStateHash(mode == BackupExecutionMode.METADATA_SIMULATION
+                ? null : manifest.relationshipStateHash());
         if (snapshot.getOrderCode() == null) {
             snapshot.setOrderCode(text(rawOrder, "orderCode", "orderNo", "code", "id"));
         }
@@ -86,6 +94,11 @@ public class BackupEvidenceService {
         }
         assets.delete(Wrappers.<AssetEntity>lambdaQuery().eq(AssetEntity::getSnapshotId, snapshot.getId()));
         for (BackupManifest.Asset item : manifest.assets()) saveAsset(snapshot.getId(), item, result, mode);
+        relationGaps.delete(Wrappers.<RelationGapEntity>lambdaQuery()
+                .eq(RelationGapEntity::getSnapshotId, snapshot.getId()));
+        if (mode == BackupExecutionMode.REAL) {
+            for (BackupManifest.RelationGap gap : manifest.relationGaps()) saveGap(snapshot.getId(), gap);
+        }
 
         OrderPackageEntity pkg = packages.selectOne(Wrappers.<OrderPackageEntity>lambdaQuery()
                 .eq(OrderPackageEntity::getSnapshotId, snapshot.getId()).last("limit 1"));
@@ -199,6 +212,20 @@ public class BackupEvidenceService {
             relation.setRelationPayloadJson(json(value));
             relations.insert(relation);
         }
+    }
+
+    private void saveGap(Long snapshotId, BackupManifest.RelationGap item) {
+        RelationGapEntity gap = new RelationGapEntity();
+        gap.setSnapshotId(snapshotId);
+        gap.setRelationKind(item.relationKind());
+        gap.setSourceRecordId(item.sourceRecordId());
+        gap.setRelationOwnerKey(item.relationOwnerKey());
+        gap.setRelationValue(item.relationValue());
+        gap.setOriginalFileId(item.originalFileId());
+        gap.setReasonCode(item.reasonCode());
+        gap.setReason(item.reason());
+        gap.setRelationHash(item.relationHash());
+        relationGaps.insert(gap);
     }
 
     /** 序列化本地证据中的 JSON 字段。 */

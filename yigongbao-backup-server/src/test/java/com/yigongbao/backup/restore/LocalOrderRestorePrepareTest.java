@@ -49,4 +49,35 @@ class LocalOrderRestorePrepareTest {
             Files.deleteIfExists(zip);
         }
     }
+
+    @Test
+    void v2PrepareKeepsGapsAsEvidenceWithoutAddingUploadTargets() throws Exception {
+        Path zip = Files.createTempFile("restore-v2-manifest", ".zip");
+        try (ZipOutputStream out = new ZipOutputStream(Files.newOutputStream(zip))) {
+            out.putNextEntry(new ZipEntry("manifest.json"));
+            out.write(("{\"manifestSchemaVersion\":2,\"backupCompleteness\":\"INCOMPLETE\"," +
+                    "\"manifestRevision\":\"rev-2\",\"manifestSha256\":\"" + "a".repeat(64) + "\"," +
+                    "\"relationSetHash\":\"" + "b".repeat(64) + "\",\"relationshipStateHash\":\"" + "c".repeat(64) + "\"," +
+                    "\"assets\":[{\"assetIdentity\":\"10\",\"fileName\":\"a.txt\",\"size\":1,\"platform\":\"COS\",\"relations\":[]}]," +
+                    "\"relationGaps\":[{\"relationKind\":\"ORDER_FILE\",\"sourceRecordId\":\"1\",\"relationOwnerKey\":\"" + "d".repeat(64) + "\",\"relationValue\":\"1\",\"originalFileId\":\"20\",\"reasonCode\":\"FILE_RECORD_NOT_FOUND\",\"reason\":\"missing\",\"relationHash\":\"" + "e".repeat(64) + "\"}]}" ).getBytes());
+            out.closeEntry();
+            out.putNextEntry(new ZipEntry("files/10-a.txt")); out.write(1); out.closeEntry();
+        }
+        AtomicReference<OnlineRestoreClient.RestoreRequest> captured = new AtomicReference<>();
+        OnlineRestoreClient client = new OnlineRestoreClient() {
+            public Session prepare(String orderId) { throw new AssertionError(); }
+            public Session prepare(String orderId, RestoreRequest request) { captured.set(request); return new Session("s", List.of("10")); }
+            public void upload(Session session, String assetName, InputStream data) { }
+            public void commit(Session session) { }
+            public void abort(Session session) { }
+        };
+        try {
+            new LocalOrderRestoreService(client).restore(zip, "42");
+            assertThat(captured.get().manifestSchemaVersion()).isEqualTo(2);
+            assertThat(captured.get().backupCompleteness()).isEqualTo("INCOMPLETE");
+            assertThat(captured.get().relationshipStateHash()).isEqualTo("c".repeat(64));
+            assertThat(captured.get().relationGaps()).hasSize(1);
+            assertThat(captured.get().assets()).extracting(OnlineRestoreClient.RestoreAsset::assetIdentity).containsExactly("10");
+        } finally { Files.deleteIfExists(zip); }
+    }
 }

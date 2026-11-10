@@ -73,6 +73,7 @@ public class AdminBackupController {
     @PostMapping("/jobs/{id}/retry-failed")
     public ApiResponse<JobEntity> retryFailed(@PathVariable("id") long id) throws Exception {
         StpUtil.checkRole("ADMIN");
+        jobs.requireRetryableStrictBackupJob(id);
         List<Long> failedOrderIds = jobs.listOrders(id).stream()
                 .filter(row -> "FAILED".equals(row.getStatus()) || "SIMULATION_FAILED".equals(row.getStatus()))
                 .map(row -> row.getSourceOrderId())
@@ -83,6 +84,19 @@ public class AdminBackupController {
         String payload = mapper.writeValueAsString(retryPayload(mapper, jobs.configJson(id), failedOrderIds));
         String key = JobIdempotency.key("ORDER_BACKUP_RETRY", actor, id + ":" + failedOrderIds);
         return ApiResponse.ok(jobCreation.createForOrders("ORDER_BACKUP", key, actor, payload, failedOrderIds.size()), requestId());
+    }
+
+    /** 对单个关系损坏订单创建独立降级任务；不会修改原任务或混入普通失败重试。 */
+    @PostMapping("/jobs/{id}/orders/{sourceOrderId}/degraded-backup")
+    public ApiResponse<JobEntity> degradedBackup(@PathVariable("id") long id,
+                                                  @PathVariable("sourceOrderId") long sourceOrderId) throws Exception {
+        StpUtil.checkRole("ADMIN");
+        jobs.requireDegradedBackupEligible(id, sourceOrderId);
+        long actor = StpUtil.getLoginIdAsLong();
+        String payload = mapper.writeValueAsString(new ManualBackupJobHandler.Payload(List.of(sourceOrderId)));
+        String key = JobIdempotency.key("DEGRADED_BACKUP", actor, id + ":" + sourceOrderId);
+        return ApiResponse.ok(jobCreation.createForOrders(
+                "DEGRADED_BACKUP", key, actor, payload, 1), requestId());
     }
 
     /** 重建失败订单任务参数，并保留原任务的模式和时间窗口，避免模拟重试意外变成真实下载。 */

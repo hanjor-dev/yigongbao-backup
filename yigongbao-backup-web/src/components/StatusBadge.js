@@ -15,7 +15,7 @@ const STATUS_LABELS = {
   RETRYING: '重试中', RETRY_PENDING: '等待重试', SIMULATED: '模拟完成', SIMULATION_FAILED: '模拟失败',
   AVAILABLE: '可用', PRESENT: '存在', ABSENT: '缺失', SKIPPED: '已跳过', UNKNOWN: '未知', ERROR: '异常',
   RESTORING: '恢复中', PARTIAL: '部分存在', CLEARED: '已清理', ENABLED: '已启用', DISABLED: '已禁用',
-  VERIFIED: '已核验', WRITING: '写入中', CLEANED: '已清理'
+  VERIFIED: '已核验', WRITING: '写入中', CLEANED: '已清理', INCOMPLETE: '文件可能不完整', COMPLETE: '文件完整'
 };
 
 export function statusLabel(value) {

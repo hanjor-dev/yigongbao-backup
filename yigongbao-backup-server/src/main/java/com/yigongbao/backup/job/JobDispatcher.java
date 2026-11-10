@@ -132,14 +132,16 @@ public final class JobDispatcher {
                 return true;
             }
             context.failure(failure);
-            coordinator.failOrRetry(job.getId(), owner, token, retries, failure);
+            int effectiveRetries = failure instanceof com.yigongbao.backup.remote.RemoteCallException remote && !remote.retryable()
+                    ? 0 : retries;
+            coordinator.failOrRetry(job.getId(), owner, token, effectiveRetries, failure);
             int nextRetry = value(job.getRetryCount()) + 1;
-            boolean willRetry = nextRetry <= retries && !Boolean.TRUE.equals(job.getCancelRequested());
+            boolean willRetry = nextRetry <= effectiveRetries && !Boolean.TRUE.equals(job.getCancelRequested());
             if (willRetry) {
                 context.taskWarn("TASK_RETRY_SCHEDULED", "任务重试", "任务执行失败，已进入任务级重试｜原因=" + safe(failure),
-                        Map.of("nextRetry", nextRetry, "retryLimit", retries, "reason", safe(failure)));
+                        Map.of("nextRetry", nextRetry, "retryLimit", effectiveRetries, "reason", safe(failure)));
                 log.warn("任务执行失败，已进入任务级重试｜任务ID={}｜任务编号={}｜任务类型={}｜重试进度={}/{}｜执行耗时={}｜异常类型={}｜异常原因={}",
-                        job.getId(), job.getJobNo(), jobType(job.getJobType()), nextRetry, retries,
+                        job.getId(), job.getJobNo(), jobType(job.getJobType()), nextRetry, effectiveRetries,
                         BusinessLogFormatter.duration(elapsedMillis(startedAt)),
                         failure.getClass().getSimpleName(), safe(failure), safeThrowable(failure));
             } else {
@@ -185,6 +187,7 @@ public final class JobDispatcher {
     private static String jobType(String type) {
         return switch (type == null ? "" : type) {
             case "ORDER_BACKUP", "MANUAL_BACKUP" -> type + "（订单备份）";
+            case "DEGRADED_BACKUP" -> type + "（降级订单备份）";
             case "RESTORE" -> type + "（线上恢复）";
             case "COLD_WRITE" -> type + "（写入冷备）";
             case "COLD_IMPORT" -> type + "（冷备导入）";

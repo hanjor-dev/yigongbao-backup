@@ -2,12 +2,26 @@ package com.yigongbao.backup.job;
 
 import com.yigongbao.backup.storage.volume.StorageVolumeEntity;
 import com.yigongbao.backup.storage.volume.StorageVolumeMapper;
+import com.yigongbao.backup.remote.RemoteCallException;
 import org.junit.jupiter.api.Test;
 import java.util.List;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.Mockito.*;
 
 class JobEvidenceServiceTest {
+    @Test void storesRemoteBusinessCodeInsteadOfJavaExceptionClass() {
+        JobOrderMapper orders = mock(JobOrderMapper.class);
+        when(orders.selectOne(any())).thenReturn(null);
+        JobEvidenceService service = new JobEvidenceService(
+                orders, mock(JobFileMapper.class), mock(StorageVolumeMapper.class));
+
+        service.order(99L, 5L, null, "FAILED", new RemoteCallException(
+                "关系损坏", 409, false, "RELATION_BROKEN", "req-1", "订单文件不存在", null));
+
+        verify(orders).insert(argThat((JobOrderEntity row) ->
+                "RELATION_BROKEN".equals(row.getFailureCode())));
+    }
+
     @Test void initializesEveryScheduledOrderBeforeRemoteWorkStarts() {
         JobOrderMapper orders = mock(JobOrderMapper.class);
         when(orders.selectOne(any())).thenReturn(null);

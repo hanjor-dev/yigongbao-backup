@@ -1,13 +1,15 @@
 <script setup>
 import { useBackupContext } from '../../composables/useBackupContext.js';
+import { incompleteBackupLabel } from '../../taskCenter.js';
 import OrderBusinessFields from './OrderBusinessFields.vue';
 const { isAdmin, selectedOrder, assets, supplements, supplementUpload, downloadOrder, uploadSupplement, downloadSupplement, restoreSelectedOrder, storageState } = useBackupContext();
 function uploadFile(file) { uploadSupplement({ target: { files: [file.raw] } }); }
 </script>
 <template>
   <el-card v-if="selectedOrder" class="order-detail" shadow="never">
-    <template #header><div class="detail-header"><div><div class="eyebrow">SELECTED ORDER</div><h3>{{ selectedOrder.orderCode || selectedOrder.sourceOrderId }} <el-tag v-if="selectedOrder.backupMode === 'METADATA_SIMULATION'" type="warning" effect="plain">模拟备份</el-tag></h3><span class="muted">创建于 {{ selectedOrder.orderCreatedAt || '-' }}</span></div><div class="toolbar-actions"><el-button :disabled="!storageState(selectedOrder).canDownload" @click="downloadOrder()"><el-icon><Download /></el-icon>下载订单包</el-button><el-button v-if="isAdmin" type="primary" :disabled="selectedOrder.backupMode === 'METADATA_SIMULATION' || !storageState(selectedOrder).canDownload" @click="restoreSelectedOrder"><el-icon><Upload /></el-icon>线上恢复</el-button></div></div></template>
+    <template #header><div class="detail-header"><div><div class="eyebrow">SELECTED ORDER</div><h3>{{ selectedOrder.orderCode || selectedOrder.sourceOrderId }} <el-tag v-if="selectedOrder.backupMode === 'METADATA_SIMULATION'" type="warning" effect="plain">模拟备份</el-tag> <el-tag v-if="incompleteBackupLabel(selectedOrder)" type="warning" effect="dark">文件可能不完整</el-tag></h3><span class="muted">创建于 {{ selectedOrder.orderCreatedAt || '-' }}</span></div><div class="toolbar-actions"><el-button :disabled="!storageState(selectedOrder).canDownload" @click="downloadOrder()"><el-icon><Download /></el-icon>下载订单包</el-button><el-button v-if="isAdmin" type="primary" :disabled="selectedOrder.backupMode === 'METADATA_SIMULATION' || !storageState(selectedOrder).canDownload" @click="restoreSelectedOrder"><el-icon><Upload /></el-icon>线上恢复</el-button></div></div></template>
     <el-alert v-if="selectedOrder.backupMode === 'METADATA_SIMULATION'" title="当前为模拟备份：ZIP 内保留 manifest 和零字节文件占位符，可下载验证，不可用于线上恢复。" type="warning" show-icon :closable="false" />
+    <el-alert v-else-if="incompleteBackupLabel(selectedOrder)" :title="`${incompleteBackupLabel(selectedOrder)}；已备份 ${selectedOrder.assetCount ?? assets.length} 个真实文件。`" type="warning" show-icon :closable="false" />
     <el-alert v-if="!storageState(selectedOrder).canDownload" :title="storageState(selectedOrder).message" type="warning" show-icon :closable="false" />
     <el-alert v-else-if="selectedOrder.storageLocation" :title="`订单包位置：${selectedOrder.storageLocation.storageVolumeName || '未命名卷'} · ${selectedOrder.storageLocation.storageTier || '-'} · ${selectedOrder.storageLocation.mountStatus}${selectedOrder.storageLocation.archiveNote ? ' · 封存：' + selectedOrder.storageLocation.archiveNote : ''}`" type="info" show-icon :closable="false" />
     <OrderBusinessFields :value="selectedOrder.displayJson || selectedOrder.orderRawJson" />

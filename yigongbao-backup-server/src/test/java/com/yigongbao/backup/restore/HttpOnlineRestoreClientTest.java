@@ -6,8 +6,12 @@ import com.yigongbao.backup.remote.RemoteHttpSupport;
 import org.junit.jupiter.api.Test;
 
 import java.net.URI;
+import java.net.http.HttpRequest;
+import java.nio.ByteBuffer;
+import java.io.ByteArrayOutputStream;
 import java.time.Duration;
 import java.util.List;
+import java.util.concurrent.Flow;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
@@ -56,6 +60,37 @@ class HttpOnlineRestoreClientTest {
                 "file-7", "drawing.pdf", 12L, "sha", "oss", "origin/key", List.of()))));
 
         assertThat(transport.requests).hasSize(1);
+    }
+
+    @Test
+    void prepareForwardsV2RelationshipStateAndGaps() throws Exception {
+        RecordingHttpClient transport = new RecordingHttpClient(request -> RecordingHttpClient.response(request, 200,
+                "{\"data\":{\"sessionId\":\"session-v2\",\"signedPlanDigest\":\"plan\",\"uploadTargets\":[]}}"));
+        RemoteHttpSupport support = new RemoteHttpSupport(transport, new ObjectMapper(), URI.create("http://online.example"),
+                Duration.ofSeconds(5), "shared-production-secret-32-bytes!");
+        HttpOnlineRestoreClient client = new HttpOnlineRestoreClient(support, new ObjectMapper());
+        var gap = new OnlineRestoreClient.RestoreRelationGap("ORDER_FILE", "1", "a".repeat(64), "1", "10",
+                "FILE_RECORD_NOT_FOUND", "missing", "b".repeat(64));
+
+        client.prepare("42", new OnlineRestoreClient.RestoreRequest("revision", "manifest", "REJECT",
+                "request", "assets", "relations", 2, "INCOMPLETE", "c".repeat(64), List.of(gap), List.of()));
+
+        String body = body(transport.requests.getFirst());
+        assertThat(body).contains("\"manifestSchemaVersion\":2", "\"backupCompleteness\":\"INCOMPLETE\"",
+                "\"relationshipStateHash\":\"" + "c".repeat(64) + "\"", "\"relationGaps\"");
+    }
+
+    private static String body(HttpRequest request) throws Exception {
+        ByteArrayOutputStream output = new ByteArrayOutputStream();
+        java.util.concurrent.CountDownLatch completed = new java.util.concurrent.CountDownLatch(1);
+        request.bodyPublisher().orElseThrow().subscribe(new Flow.Subscriber<>() {
+            public void onSubscribe(Flow.Subscription subscription) { subscription.request(Long.MAX_VALUE); }
+            public void onNext(ByteBuffer item) { byte[] bytes = new byte[item.remaining()]; item.get(bytes); output.writeBytes(bytes); }
+            public void onError(Throwable throwable) { completed.countDown(); }
+            public void onComplete() { completed.countDown(); }
+        });
+        completed.await();
+        return output.toString(java.nio.charset.StandardCharsets.UTF_8);
     }
 
     @Test

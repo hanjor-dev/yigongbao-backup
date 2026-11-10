@@ -239,6 +239,20 @@ paths:
         '200': {$ref: '#/components/responses/CommandSucceeded'}
         '403': {$ref: '#/components/responses/Forbidden'}
         '409': {$ref: '#/components/responses/Conflict'}
+  /api/v1/admin/backup/jobs/{id}/orders/{sourceOrderId}/degraded-backup:
+    post:
+      operationId: createDegradedBackup
+      description: 仅为真实严格备份中因 RELATION_BROKEN 失败且尚无可用快照的单个订单创建独立降级任务。
+      parameters:
+        - {$ref: '#/components/parameters/Id'}
+        - name: sourceOrderId
+          in: path
+          required: true
+          schema: {type: integer, format: int64, minimum: 1}
+      responses:
+        '200': {$ref: '#/components/responses/CommandSucceeded'}
+        '403': {$ref: '#/components/responses/Forbidden'}
+        '409': {$ref: '#/components/responses/Conflict'}
   /api/v1/admin/jobs/{id}:
     get:
       operationId: getJob
@@ -702,6 +716,11 @@ components:
         backupCompletedAt: {$ref: '#/components/schemas/Rfc3339Time'}
         snapshotStatus: {type: string, enum: [AVAILABLE, SIMULATED, RECEIPT_SUSPENDED, CORRUPT]}
         backupMode: {type: string, enum: [REAL, METADATA_SIMULATION]}
+        backupCompleteness: {type: string, enum: [COMPLETE, INCOMPLETE, NOT_APPLICABLE]}
+        manifestSchemaVersion: {type: integer, minimum: 1}
+        relationGapCount: {type: integer, minimum: 0}
+        relationGapHash: {type: string, nullable: true}
+        relationshipStateHash: {type: string, nullable: true}
         cloudRollup: {type: string}
         hotRollup: {type: string}
         coldRollup: {type: string}

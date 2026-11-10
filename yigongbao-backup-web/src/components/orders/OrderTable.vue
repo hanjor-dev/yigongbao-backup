@@ -1,5 +1,6 @@
 <script setup>
 import { useBackupContext } from '../../composables/useBackupContext.js';
+import { incompleteBackupLabel } from '../../taskCenter.js';
 import OrderBusinessFields from './OrderBusinessFields.vue';
 const { orders, selectedOrder, selectedIds, selectOrder, toggleSelected } = useBackupContext();
 const bytes = (value) => { const n = Number(value || 0); if (n < 1024) return `${n} B`; if (n < 1048576) return `${(n / 1024).toFixed(2)} KB`; if (n < 1073741824) return `${(n / 1048576).toFixed(2)} MB`; return `${(n / 1073741824).toFixed(2)} GB`; };
@@ -8,7 +9,7 @@ const bytes = (value) => { const n = Number(value || 0); if (n < 1024) return `$
   <el-table :data="orders" class="data-table" row-key="id" highlight-current-row @row-click="selectOrder">
     <el-table-column type="expand"><template #default="{ row }"><OrderBusinessFields :value="row.displayJson || row.orderRawJson" /></template></el-table-column>
     <el-table-column label="选择" width="62" align="center"><template #default="{ row }"><el-tooltip :disabled="row.backupMode !== 'METADATA_SIMULATION' && row.storageAccessible !== false" :content="row.storageAccessible === false ? (row.storageUnavailableReason || '存储卷不可访问') : '模拟备份不可用于线上恢复'"><el-checkbox :disabled="row.backupMode === 'METADATA_SIMULATION' || row.storageAccessible === false" :model-value="selectedIds.includes(row.id)" @click.stop @change="toggleSelected(row)" /></el-tooltip></template></el-table-column>
-    <el-table-column label="订单号" min-width="190"><template #default="{ row }"><div class="order-code">{{ row.orderCode || row.sourceOrderId }}</div><small class="muted">快照 #{{ row.id }}</small><el-tag v-if="row.backupMode === 'METADATA_SIMULATION'" size="small" type="warning" effect="plain" class="simulation-tag">模拟备份</el-tag></template></el-table-column>
+    <el-table-column label="订单号" min-width="210"><template #default="{ row }"><div class="order-code">{{ row.orderCode || row.sourceOrderId }}</div><small class="muted">快照 #{{ row.id }}</small><el-tag v-if="row.backupMode === 'METADATA_SIMULATION'" size="small" type="warning" effect="plain" class="simulation-tag">模拟备份</el-tag><el-tag v-if="incompleteBackupLabel(row)" size="small" type="warning" effect="dark">文件可能不完整</el-tag><small v-if="incompleteBackupLabel(row)" class="muted">缺失关系 {{ row.relationGapCount || 0 }}</small></template></el-table-column>
     <el-table-column prop="orderCreatedAt" label="创建时间" min-width="168" />
     <el-table-column label="机构 / 医院" min-width="220" show-overflow-tooltip><template #default="{ row }"><div>{{ row.orgName || '-' }}</div><small class="muted">{{ row.hospitalName || '-' }}</small></template></el-table-column>
     <el-table-column label="患者 / 医生" min-width="170" show-overflow-tooltip><template #default="{ row }"><div>{{ row.patientName || '-' }}</div><small class="muted">医生：{{ row.doctorName || '-' }}</small></template></el-table-column>
