@@ -22,6 +22,9 @@ class StorageVolumeDiscoveryServiceTest {
             assertThat(candidate.mountPath()).isEqualTo(mount.toAbsolutePath().normalize());
             assertThat(candidate.rootPath()).isEqualTo(mount.resolve("yigongbao-backup").toAbsolutePath().normalize());
             assertThat(candidate.accessType()).isEqualTo(StorageAccessType.LOCAL);
+            assertThat(candidate.totalBytes()).isPositive();
+            assertThat(candidate.usableBytes()).isNotNegative().isLessThanOrEqualTo(candidate.totalBytes());
+            assertThat(candidate.usedBytes()).isEqualTo(candidate.totalBytes() - candidate.usableBytes());
         });
         assertThat(Files.exists(mount.resolve("yigongbao-backup"))).isFalse();
     }

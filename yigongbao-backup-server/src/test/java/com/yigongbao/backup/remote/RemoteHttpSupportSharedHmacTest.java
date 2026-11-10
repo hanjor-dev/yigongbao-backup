@@ -5,6 +5,7 @@ import org.junit.jupiter.api.Test;
 
 import javax.crypto.Mac;
 import javax.crypto.spec.SecretKeySpec;
+import java.io.ByteArrayInputStream;
 import java.net.URI;
 import java.nio.charset.StandardCharsets;
 import java.time.Duration;
@@ -15,6 +16,22 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 /** 本地客户端的简化共享 HMAC 请求头契约。 */
 class RemoteHttpSupportSharedHmacTest {
+    @Test
+    void usesDedicatedLongTimeoutForPresignedObjectUploads() {
+        RecordingHttpClient transport = new RecordingHttpClient(request ->
+                RecordingHttpClient.response(request, 200, "{}"));
+        RemoteHttpSupport support = new RemoteHttpSupport(transport, new ObjectMapper(),
+                URI.create("http://online.example"), Duration.ofSeconds(60), Duration.ofHours(2),
+                "shared-production-secret-32-bytes!");
+
+        support.json("GET", "/internal/backup/v1/accounts", "");
+        support.stream(URI.create("https://cos.example/restore/object?signature=test"), "PUT",
+                "application/octet-stream", new ByteArrayInputStream(new byte[]{1, 2, 3}));
+
+        assertThat(transport.requests.get(0).timeout()).contains(Duration.ofSeconds(60));
+        assertThat(transport.requests.get(1).timeout()).contains(Duration.ofHours(2));
+    }
+
     @Test
     void reportsOnlyStructuredRemoteErrorFieldsForDiagnosis() {
         RecordingHttpClient transport = new RecordingHttpClient(request ->

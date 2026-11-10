@@ -60,7 +60,7 @@ public final class JobDispatcher {
                 : configs.getLong("job.lease-seconds", 60L, 10L);
         JobEntity job = coordinator.claimNext(owner, leaseSeconds);
         if (job == null) return false;
-        int retries = configs == null ? staticRetries : "RESTORE".equals(job.getJobType())
+        int retries = "VOLUME_ARCHIVE".equals(job.getJobType()) ? 0 : configs == null ? staticRetries : "RESTORE".equals(job.getJobType())
                 ? configs.getInt("restore.retry-count", 3, 0)
                 : configs.getInt("job.max-retry-count", 3, 0);
         long token = job.getFencingToken();
@@ -79,7 +79,8 @@ public final class JobDispatcher {
         try {
             log.info("任务执行开始｜任务ID={}｜任务编号={}｜任务类型={}｜最大任务级重试次数={}",
                     job.getId(), job.getJobNo(), jobType(job.getJobType()), retries);
-            context.safePoint("STARTED", 0);
+            // 封存取消必须先由 handler 原子释放源卷/保障卷占用，不能在进入 handler 前直接终结 job。
+            if (!"VOLUME_ARCHIVE".equals(job.getJobType())) context.safePoint("STARTED", 0);
             context.taskInfo("TASK_STARTED", "任务执行", "任务执行开始｜最大任务级重试次数=" + retries,
                     Map.of("retryLimit", retries));
             registry.required(job.getJobType()).execute(context, job);
@@ -95,12 +96,19 @@ public final class JobDispatcher {
                     BusinessLogFormatter.status("SUCCEEDED"),
                     BusinessLogFormatter.duration(elapsedMillis(startedAt)));
         } catch (JobCancelledException cancelled) {
-            context.taskWarn("TASK_CANCELLED", "任务取消", "任务在安全点取消｜原因=" + safe(cancelled),
-                    Map.of("reason", safe(cancelled)));
-            log.warn("任务已在安全点取消: jobId={}, jobNo={}, currentStep={}, durationMs={}, reason={}",
-                    job.getId(), job.getJobNo(), job.getCurrentStep(), elapsedMillis(startedAt), safe(cancelled));
+            // 自动续租通过 interrupt 唤醒阻塞 I/O；派发线程复用前必须清除中断标记。
+            Thread.interrupted();
+            coordinator.finishCancellationIfRunning(job.getId(), owner, token);
+            recordCancellation(context, job, startedAt, cancelled);
             return true;
         } catch (PartialJobFailureException partial) {
+            JobCancelledException cancelled = heartbeat.cancellation();
+            if (cancelled != null) {
+                Thread.interrupted();
+                coordinator.finishCancellationIfRunning(job.getId(), owner, token);
+                recordCancellation(context, job, startedAt, cancelled);
+                return true;
+            }
             if (partial.allItemsFailed()) {
                 coordinator.failOrRetry(job.getId(), owner, token, 0, partial);
                 context.taskError("TASK_ALL_ORDERS_FAILED", "任务完成", "任务全部订单失败｜原因=" + safe(partial),
@@ -115,6 +123,14 @@ public final class JobDispatcher {
                         job.getId(), job.getJobNo(), job.getJobType(), elapsedMillis(startedAt), safe(partial));
             }
         } catch (Throwable failure) {
+            JobCancelledException cancelled = heartbeat.cancellation();
+            if (cancelled != null) {
+                // HttpClient 等阻塞调用会将线程中断包装成业务异常；以心跳记录的取消原因为准。
+                Thread.interrupted();
+                coordinator.finishCancellationIfRunning(job.getId(), owner, token);
+                recordCancellation(context, job, startedAt, cancelled);
+                return true;
+            }
             context.failure(failure);
             coordinator.failOrRetry(job.getId(), owner, token, retries, failure);
             int nextRetry = value(job.getRetryCount()) + 1;
@@ -144,6 +160,14 @@ public final class JobDispatcher {
 
     private static int value(Integer number) { return number == null ? 0 : number; }
     private static long elapsedMillis(long startedAt) { return (System.nanoTime() - startedAt) / 1_000_000L; }
+
+    private static void recordCancellation(JobExecutionContext context, JobEntity job, long startedAt,
+                                           JobCancelledException cancelled) {
+        context.taskWarn("TASK_CANCELLED", "任务取消", "任务执行已取消｜原因=" + safe(cancelled),
+                Map.of("reason", safe(cancelled)));
+        log.warn("任务执行已取消: jobId={}, jobNo={}, currentStep={}, durationMs={}, reason={}",
+                job.getId(), job.getJobNo(), job.getCurrentStep(), elapsedMillis(startedAt), safe(cancelled));
+    }
 
     /** 日志仅保留可诊断文本，不输出远程 URL 或认证参数。 */
     private static String safe(Throwable error) {

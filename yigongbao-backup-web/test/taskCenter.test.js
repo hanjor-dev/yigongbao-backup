@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { coldBatchCapabilities, coldImportDiagnostic, extractJobId, isTerminalJob, jobProgress, normalizePage, storageState, supplementTaskState, taskFailureSummary } from '../src/taskCenter.js';
+import { coldBatchCapabilities, coldImportDiagnostic, extractJobId, isTerminalJob, jobProgress, normalizePage, replaceJobById, storageState, supplementTaskState, taskFailureSummary } from '../src/taskCenter.js';
 import { statusTone } from '../src/components/StatusBadge.js';
 
 test('extractJobId handles command response envelope', () => {
@@ -25,6 +25,13 @@ test('isTerminalJob recognizes terminal states', () => {
   assert.equal(isTerminalJob({ state: 'CANCELLED' }), true);
   assert.equal(isTerminalJob({ state: 'PARTIAL_FAILED' }), true);
   assert.equal(isTerminalJob({ state: 'RUNNING' }), false);
+});
+
+test('replaceJobById synchronizes refreshed cancellation state into task lists', () => {
+  const original = [{ id: '1', state: 'RUNNING', cancelRequested: false }, { id: '2', state: 'CREATED' }];
+  const refreshed = { id: 1, state: 'CANCELLED', cancelRequested: true };
+  assert.deepEqual(replaceJobById(original, refreshed), [refreshed, original[1]]);
+  assert.deepEqual(replaceJobById(original, { id: 3, state: 'RUNNING' }), original);
 });
 
 test('supplementTaskState separates browser upload and background processing states', () => {

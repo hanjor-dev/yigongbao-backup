@@ -3,6 +3,8 @@ package com.yigongbao.backup.job;
 import com.baomidou.mybatisplus.core.toolkit.Wrappers;
 import lombok.RequiredArgsConstructor;
 import org.springframework.stereotype.Service;
+import com.yigongbao.backup.storage.volume.StorageVolumeEntity;
+import com.yigongbao.backup.storage.volume.StorageVolumeMapper;
 import java.util.List;
 
 /** 持久化任务的订单级、文件级进度以及可展示的订单业务快照。 */
@@ -11,6 +13,7 @@ import java.util.List;
 public class JobEvidenceService {
     private final JobOrderMapper orders;
     private final JobFileMapper files;
+    private final StorageVolumeMapper volumes;
 
     /** 在任何远程调用前创建本批全部订单，保证总数、待处理数和取消行为可追踪。 */
     public void initializeOrders(long jobId, List<Long> sourceOrderIds) {
@@ -55,17 +58,39 @@ public class JobEvidenceService {
         file(jobId, sourceId, identity, step, status, done, total, null, failure);
     }
 
+    /** 固化订单级产物所在卷和卷内位置。 */
+    public void orderAtVolume(long jobId, long sourceId, long volumeId, String storageKey) {
+        JobOrderEntity row = findOrder(jobId, sourceId);
+        if (row == null) { row = new JobOrderEntity(); row.setJobId(jobId); row.setSourceOrderId(sourceId); row.setStatus("RUNNING"); }
+        StorageVolumeEntity volume = volumes.selectById(volumeId);
+        row.setStorageVolumeId(volumeId); row.setStorageKey(storageKey);
+        row.setStorageVolumeName(volume == null ? null : volume.getDisplayName());
+        row.setStorageTier(volume == null ? null : volume.getTier());
+        if (row.getId() == null) orders.insert(row); else orders.updateById(row);
+    }
+
     /** 写入文件处理证据及不可变的卷定位快照。 */
     public void fileAtVolume(long jobId, Long sourceId, String identity, String step, String status,
                              long done, long total, String objectKey, Long volumeId, String storageKey,
-                             String volumeName, String tier, Throwable failure) {
-        file(jobId, sourceId, identity, step, status, done, total, objectKey, failure);
+                             Throwable failure) {
         JobFileEntity row = files.selectOne(Wrappers.<JobFileEntity>lambdaQuery().eq(JobFileEntity::getJobId, jobId)
                 .eq(JobFileEntity::getAssetIdentity, identity).eq(JobFileEntity::getStep, step).last("limit 1"));
-        if (row != null && volumeId != null) {
-            row.setStorageVolumeId(volumeId); row.setStorageKey(storageKey); row.setStorageVolumeName(volumeName); row.setStorageTier(tier);
-            files.updateById(row);
+        boolean insert = row == null;
+        if (insert) {
+            row = new JobFileEntity(); row.setJobId(jobId); row.setSourceOrderId(sourceId);
+            row.setAssetIdentity(identity); row.setStep(step);
         }
+        row.setStatus(status); row.setBytesDone(done);
+        if (total > 0 || row.getBytesTotal() == null) row.setBytesTotal(total);
+        if (objectKey != null && !objectKey.isBlank()) row.setObjectKey(objectKey);
+        evidence(row, failure);
+        if (volumeId != null) {
+            StorageVolumeEntity volume = volumes.selectById(volumeId);
+            row.setStorageVolumeId(volumeId); row.setStorageKey(storageKey);
+            row.setStorageVolumeName(volume == null ? null : volume.getDisplayName());
+            row.setStorageTier(volume == null ? null : volume.getTier());
+        }
+        if (insert) files.insert(row); else files.updateById(row);
     }
 
     /** 固化恢复任务选定的包副本；任务重试不得重新按当前活动卷推导路径。 */
@@ -75,6 +100,10 @@ public class JobEvidenceService {
         if (row == null) { row = new JobOrderEntity(); row.setJobId(jobId); row.setSourceOrderId(sourceId); row.setStatus("PENDING"); }
         row.setSnapshotId(snapshotId); row.setSourcePackageId(packageId); row.setSourceStorageVolumeId(storageVolumeId);
         row.setSourceStorageKey(storageKey); row.setSourcePackageSha256(sha256);
+        StorageVolumeEntity volume = volumes.selectById(storageVolumeId);
+        row.setStorageVolumeId(storageVolumeId); row.setStorageKey(storageKey);
+        row.setStorageVolumeName(volume == null ? null : volume.getDisplayName());
+        row.setStorageTier(volume == null ? null : volume.getTier());
         if (row.getId() == null) orders.insert(row); else orders.updateById(row);
     }
 

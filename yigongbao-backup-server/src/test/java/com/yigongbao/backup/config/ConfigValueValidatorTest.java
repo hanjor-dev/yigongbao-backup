@@ -7,6 +7,12 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 class ConfigValueValidatorTest {
     @Test
+    void acceptsDedicatedOnlineFileTransferTimeout() {
+        assertThatCode(() -> ConfigValueValidator.validate("online.file-transfer-timeout-seconds", "7200"))
+                .doesNotThrowAnyException();
+    }
+
+    @Test
     void acceptsDayBasedBackupScheduleAndOrderRetryPolicy() {
         assertThatCode(() -> ConfigValueValidator.validate("backup.schedule.interval-days", "1")).doesNotThrowAnyException();
         assertThatCode(() -> ConfigValueValidator.validate("backup.schedule.start-time", "05:00")).doesNotThrowAnyException();

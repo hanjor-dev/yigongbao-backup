@@ -1,7 +1,7 @@
 import { ref } from 'vue';
 
 const ROUTE_KEY = 'backup-current-page';
-const ROUTES = new Set(['overview', 'audit', 'backup', 'restore', 'orders', 'accounts', 'storage', 'storage-volumes', 'cold', 'cleanup', 'configs']);
+const ROUTES = new Set(['overview', 'audit', 'backup', 'restore', 'orders', 'accounts', 'storage', 'storage-volumes', 'cold-storage', 'cleanup', 'configs']);
 
 /** 页面路由仓库：当前项目无需引入大型路由依赖，使用 hash 与 localStorage 保留刷新后的页面。 */
 export function createRouteStore() {

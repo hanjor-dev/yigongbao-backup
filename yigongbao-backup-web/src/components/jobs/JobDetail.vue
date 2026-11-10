@@ -49,7 +49,7 @@ const detail = value => { try { return JSON.stringify(typeof value === 'string' 
       <el-descriptions-item label="执行结果">{{ simulation && jobState(selectedJob) === 'SUCCEEDED' ? '模拟完成' : jobState(selectedJob) }}</el-descriptions-item>
       <el-descriptions-item label="源文件总容量（压缩前）">{{ bytes(selectedJob.expectedBytes) }}</el-descriptions-item>
       <el-descriptions-item label="ZIP实际占用容量">{{ bytes(selectedJob.packageBytes) }}</el-descriptions-item>
-      <el-descriptions-item label="目标存储卷">{{ selectedJob.targetStorageVolumeId || '历史任务未记录' }}</el-descriptions-item>
+        <el-descriptions-item label="目标存储卷">{{ selectedJob.storageVolumeName || selectedJob.targetStorageVolumeId || '历史任务未记录' }}<span v-if="selectedJob.storageTier"> · 任务时 {{ selectedJob.storageTier }}</span><span v-if="selectedJob.currentStorageTier"> · 当前 {{ selectedJob.currentStorageVolumeName }} / {{ selectedJob.currentStorageTier }} / {{ selectedJob.currentMountStatus }}</span></el-descriptions-item>
       <template v-if="simulation">
         <el-descriptions-item label="Manifest">成功 {{ selectedJob.manifestSucceeded || 0 }} / 失败 {{ selectedJob.manifestFailed || 0 }}</el-descriptions-item>
         <el-descriptions-item label="预计文件">{{ selectedJob.expectedFileTotal || 0 }}</el-descriptions-item>
@@ -68,7 +68,7 @@ const detail = value => { try { return JSON.stringify(typeof value === 'string' 
       <el-table-column label="地区" min-width="130"><template #default="{ row }">{{ business(row).areaName || '-' }}</template></el-table-column>
       <el-table-column label="业务状态" width="120"><template #default="{ row }"><status-badge :value="row.sourceStatus" /></template></el-table-column>
       <el-table-column label="状态" width="140"><template #default="{ row }"><status-badge :value="row.status" /></template></el-table-column>
-      <el-table-column label="存储卷 / 相对位置" min-width="220"><template #default="{ row }">{{ row.sourceStorageVolumeId || selectedJob.targetStorageVolumeId || '-' }}<span v-if="row.sourceStorageKey"> · {{ row.sourceStorageKey }}</span><span v-else-if="row.simulationPath"> · {{ row.simulationPath }}</span></template></el-table-column>
+      <el-table-column label="存储卷 / 相对位置" min-width="300"><template #default="{ row }">{{ row.storageVolumeName || row.storageVolumeId || row.sourceStorageVolumeId || selectedJob.targetStorageVolumeId || '-' }}<span v-if="row.storageTier">（任务时：{{ row.storageTier }}）</span><span v-if="row.currentStorageTier" class="table-muted"> · 当前：{{ row.currentStorageVolumeName || row.storageVolumeId }} / {{ row.currentStorageTier }} / {{ row.currentMountStatus }}</span><span v-if="row.storageKey"> · {{ row.storageKey }}</span><span v-else-if="row.sourceStorageKey"> · {{ row.sourceStorageKey }}</span><span v-else-if="row.simulationPath"> · {{ row.simulationPath }}</span></template></el-table-column>
       <el-table-column v-if="simulation" prop="expectedFileCount" label="预计文件" width="100" />
       <el-table-column v-if="simulation" label="源文件容量（压缩前）" width="160"><template #default="{ row }">{{ bytes(row.expectedBytes) }}</template></el-table-column>
       <el-table-column v-if="simulation" label="ZIP实际容量" width="130"><template #default="{ row }">{{ bytes(row.packageBytes) }}</template></el-table-column>
@@ -80,8 +80,8 @@ const detail = value => { try { return JSON.stringify(typeof value === 'string' 
       :current-page="jobOrderPage" :page-size="jobOrderSize" :total="jobOrderTotal" :page-sizes="[10, 20, 50, 100]"
       @current-change="changeJobOrderPage" @size-change="changeJobOrderSize" />
 
-    <h4 v-if="!simulation">文件明细</h4>
-    <el-table v-if="!simulation" :data="jobFiles" stripe border empty-text="暂无文件明细">
+    <h4>文件明细</h4>
+    <el-table :data="jobFiles" stripe border empty-text="暂无文件明细">
       <el-table-column prop="sourceOrderId" label="订单" min-width="160" />
       <el-table-column prop="assetIdentity" label="资产" min-width="220" />
       <el-table-column prop="step" label="步骤" width="140" />

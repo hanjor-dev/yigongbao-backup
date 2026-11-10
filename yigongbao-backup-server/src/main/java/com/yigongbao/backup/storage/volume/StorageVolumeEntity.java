@@ -23,8 +23,23 @@ public class StorageVolumeEntity extends BaseEntity {
     private String tier;
     private String mountStatus;
     private String writeStatus;
+    private String adminStatus;
+    private String operationStatus;
+    private Long operationRefId;
+    private String archiveNote;
+    private String offlineLabelNote;
+    private String physicalLocation;
+    private LocalDateTime archivedAt;
+    private LocalDateTime orderCreatedFrom;
+    private LocalDateTime orderCreatedTo;
+    private Long archivedOrderCount;
+    private Long archivedFileCount;
+    private Long archivedBytes;
+    private LocalDateTime lastVerifiedAt;
     private Integer priority;
     private LocalDateTime lastProbedAt;
     private String lastErrorCode;
     private String lastErrorMessage;
+    private Long totalBytes;
+    private Long usableBytes;
 }

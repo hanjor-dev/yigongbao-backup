@@ -10,4 +10,8 @@ public final class StorageVolumeStatus {
     public enum Mount { ONLINE, OFFLINE, UNAVAILABLE }
 
     public enum Write { ACTIVE, STANDBY, READ_ONLY, DISABLED }
+
+    public enum Admin { ENABLED, RETIRED }
+
+    public enum Operation { IDLE, SEALING, ARCHIVE_GUARD, GOING_OFFLINE, MOUNTING, REPAIR_REQUIRED }
 }

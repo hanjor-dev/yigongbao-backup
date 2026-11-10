@@ -41,6 +41,9 @@ FROM (
     UNION ALL SELECT 'online.base-url','线上系统地址','ONLINE_INTEGRATION','线上系统连接','URL','http://localhost:8081/api',NULL,'线上医工宝内部接口HTTP基础地址，必须包含服务 context-path，例如 http://localhost:8081/api；启用时必填。',NULL
     UNION ALL SELECT 'online.connect-timeout-seconds','线上连接超时（秒）','ONLINE_INTEGRATION','线上系统连接','INTEGER','10',NULL,'HTTP建连超时，范围1至300秒。',NULL
     UNION ALL SELECT 'online.request-timeout-seconds','线上请求超时（秒）','ONLINE_INTEGRATION','线上系统连接','INTEGER','60',NULL,'普通线上接口请求超时，范围1至3600秒。',NULL
+    UNION ALL SELECT 'online.file-transfer-timeout-seconds','线上文件传输超时（秒）','ONLINE_INTEGRATION','线上系统连接','INTEGER','7200',NULL,'备份下载和恢复上传等大文件流式传输超时，范围60至86400秒。',NULL
+    UNION ALL SELECT 'storage.read-lease.ttl-seconds','存储读取租约时长（秒）','STORAGE','存储管理','INTEGER','600',NULL,'下载和恢复读取卷时的租约时长，必须大于两倍心跳间隔。',NULL
+    UNION ALL SELECT 'storage.read-lease.heartbeat-seconds','存储读取租约心跳（秒）','STORAGE','存储管理','INTEGER','30',NULL,'长文件下载期间续租间隔。',NULL
     UNION ALL SELECT 'job.dispatch-interval-ms','任务派发间隔（毫秒）','JOB_EXECUTION','任务执行策略','INTEGER','1000',NULL,'扫描并领取待执行持久化任务的间隔，最小200毫秒。',NULL
     UNION ALL SELECT 'job.lease-seconds','任务租约时长（秒）','JOB_EXECUTION','任务执行策略','INTEGER','60',NULL,'执行器持有任务的租约时长，最小10秒。',NULL
     UNION ALL SELECT 'job.recovery-interval-ms','租约回收间隔（毫秒）','JOB_EXECUTION','任务执行策略','INTEGER','60000',NULL,'回收异常中断过期租约的间隔，最小1000毫秒。',NULL

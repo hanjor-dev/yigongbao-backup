@@ -25,6 +25,7 @@ public class ArtifactReplicaResolver {
                 .eq(ArtifactCopyEntity::getArtifactType, artifactType)
                 .eq(ArtifactCopyEntity::getArtifactId, artifactId)
                 .eq(ArtifactCopyEntity::getLifecycle, "ACTIVE")
+                .in(ArtifactCopyEntity::getState, "VERIFIED", "PRESENT")
                 .eq(ArtifactCopyEntity::getIsDeleted, 0));
         if (copies.isEmpty()) {
             throw new IllegalStateException("未找到可用文件副本");
@@ -33,8 +34,14 @@ public class ArtifactReplicaResolver {
                 .map(copy -> new Candidate(copy, volumeMapper.selectById(copy.getStorageVolumeId())))
                 .filter(candidate -> candidate.volume != null && Integer.valueOf(0).equals(candidate.volume.getIsDeleted()))
                 .filter(candidate -> "ONLINE".equals(candidate.volume.getMountStatus()))
+                .filter(candidate -> candidate.volume.getAdminStatus() == null || "ENABLED".equals(candidate.volume.getAdminStatus()))
+                .filter(candidate -> !"DISABLED".equals(candidate.volume.getWriteStatus()))
+                .filter(candidate -> "HOT".equals(candidate.volume.getTier()) || ("COLD".equals(candidate.volume.getTier())
+                        && "READ_ONLY".equals(candidate.volume.getWriteStatus())))
+                .filter(candidate -> candidate.volume.getOperationStatus() == null || "IDLE".equals(candidate.volume.getOperationStatus()))
                 .sorted(Comparator.comparing((Candidate candidate) -> tierRank(candidate.volume.getTier()))
-                        .thenComparing(candidate -> candidate.copy.getLastVerifiedAt(), Comparator.nullsLast(Comparator.reverseOrder())))
+                        .thenComparing(candidate -> candidate.copy.getLastVerifiedAt(), Comparator.nullsLast(Comparator.reverseOrder()))
+                        .thenComparing(candidate -> candidate.copy.getId(), Comparator.nullsLast(Comparator.naturalOrder())))
                 .map(candidate -> new ReadableArtifactReplica(candidate.copy.getId(), candidate.copy.getArtifactType(),
                         candidate.copy.getArtifactId(), candidate.copy.getStorageVolumeId(), candidate.copy.getStorageKey(),
                         candidate.copy.getSha256(), candidate.volume.getTier()))

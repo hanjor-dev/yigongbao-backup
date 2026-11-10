@@ -7,6 +7,7 @@ import com.baomidou.mybatisplus.core.conditions.update.UpdateWrapper;
 import com.baomidou.mybatisplus.extension.plugins.pagination.Page;
 import com.yigongbao.backup.order.OrderPackageEntity;
 import com.yigongbao.backup.order.OrderPackageMapper;
+import com.yigongbao.backup.storage.volume.StorageVolumeMapper;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
@@ -28,20 +29,27 @@ public class PersistentJobService {
     private final JobOrderMapper orderMapper;
     private final JobFileMapper fileMapper;
     private final OrderPackageMapper packageMapper;
+    private final StorageVolumeMapper volumeMapper;
 
     /** 调度批次统计值，避免将远端订单明细在创建任务前重复拉取。 */
     public record JobInputBatch(int orderTotal, int fileTotal) {}
 
-    public PersistentJobService(JobMapper mapper) { this(mapper, null, null, null); }
+    public PersistentJobService(JobMapper mapper) { this(mapper, null, null, null, null); }
 
     public PersistentJobService(JobMapper mapper, JobOrderMapper orderMapper, JobFileMapper fileMapper) {
-        this(mapper, orderMapper, fileMapper, null);
+        this(mapper, orderMapper, fileMapper, null, null);
+    }
+
+    public PersistentJobService(JobMapper mapper, JobOrderMapper orderMapper, JobFileMapper fileMapper,
+                                OrderPackageMapper packageMapper) {
+        this(mapper, orderMapper, fileMapper, packageMapper, null);
     }
 
     @Autowired
     public PersistentJobService(JobMapper mapper, JobOrderMapper orderMapper, JobFileMapper fileMapper,
-                                OrderPackageMapper packageMapper) {
-        this.mapper = mapper; this.orderMapper = orderMapper; this.fileMapper = fileMapper; this.packageMapper = packageMapper;
+                                OrderPackageMapper packageMapper, StorageVolumeMapper volumeMapper) {
+        this.mapper = mapper; this.orderMapper = orderMapper; this.fileMapper = fileMapper;
+        this.packageMapper = packageMapper; this.volumeMapper = volumeMapper;
     }
 
     public Job create(int orderTotal, int fileTotal, long actor) {
@@ -268,7 +276,14 @@ public class PersistentJobService {
     }
 
     private List<JobOrderEntity> enrichPackageBytes(List<JobOrderEntity> rows) {
-        if (packageMapper == null || rows == null || rows.isEmpty()) return rows;
+        if (rows == null || rows.isEmpty()) return rows;
+          // 历史名称/层级是审计快照；当前状态写入独立展示字段，禁止覆盖历史证据。
+        if (volumeMapper != null) rows.forEach(row -> {
+            if (row.getStorageVolumeId() == null) return;
+            var volume = volumeMapper.selectById(row.getStorageVolumeId());
+              if (volume != null) { row.setCurrentStorageTier(volume.getTier()); row.setCurrentStorageVolumeName(volume.getDisplayName()); row.setCurrentMountStatus(volume.getMountStatus()); row.setCurrentOperationStatus(volume.getOperationStatus()); }
+        });
+        if (packageMapper == null) return rows;
         List<Long> snapshotIds = rows.stream().map(JobOrderEntity::getSnapshotId)
                 .filter(java.util.Objects::nonNull).distinct().toList();
         if (snapshotIds.isEmpty()) return rows;
@@ -335,7 +350,16 @@ public class PersistentJobService {
         }
         orderRows.forEach(row -> row.setPackageBytes(row.getSnapshotId() == null ? null : packageBytes.get(row.getSnapshotId())));
         job.setPackageBytes(orderRows.stream().mapToLong(row -> row.getPackageBytes() == null ? 0L : row.getPackageBytes()).sum());
-        return job;
+        job.setTargetStorageVolumeId(entity.getTargetStorageVolumeId());
+        job.setStorageVolumeName(orderRows.stream().map(JobOrderEntity::getStorageVolumeName)
+                .filter(value -> value != null && !value.isBlank()).distinct().collect(java.util.stream.Collectors.joining("、")));
+          job.setStorageTier(orderRows.stream().map(JobOrderEntity::getStorageTier)
+                  .filter(value -> value != null && !value.isBlank()).distinct().collect(java.util.stream.Collectors.joining("、")));
+          job.setCurrentStorageVolumeName(orderRows.stream().map(JobOrderEntity::getCurrentStorageVolumeName).filter(value->value!=null&&!value.isBlank()).distinct().collect(java.util.stream.Collectors.joining("、")));
+          job.setCurrentStorageTier(orderRows.stream().map(JobOrderEntity::getCurrentStorageTier).filter(value->value!=null&&!value.isBlank()).distinct().collect(java.util.stream.Collectors.joining("、")));
+          job.setCurrentMountStatus(orderRows.stream().map(JobOrderEntity::getCurrentMountStatus).filter(value->value!=null&&!value.isBlank()).distinct().collect(java.util.stream.Collectors.joining("、")));
+          job.setCurrentOperationStatus(orderRows.stream().map(JobOrderEntity::getCurrentOperationStatus).filter(value->value!=null&&!value.isBlank()).distinct().collect(java.util.stream.Collectors.joining("、")));
+          return job;
     }
 
     private static Job view(JobEntity entity, int orderTotal, int fileTotal) {

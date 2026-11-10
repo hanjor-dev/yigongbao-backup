@@ -4,11 +4,11 @@ import cn.dev33.satoken.stp.StpUtil;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.yigongbao.backup.backup.ManualBackupJobHandler;
 import com.yigongbao.backup.backup.ScheduledBackupService;
+import com.yigongbao.backup.backup.BackupJobCreationService;
 import com.yigongbao.backup.common.ApiResponse;
 import com.yigongbao.backup.job.Job;
 import com.yigongbao.backup.job.JobEntity;
 import com.yigongbao.backup.job.JobIdempotency;
-import com.yigongbao.backup.job.PersistentJobCoordinator;
 import com.yigongbao.backup.job.PersistentJobService;
 import com.yigongbao.backup.job.JobExecutionLogQueryService;
 import lombok.RequiredArgsConstructor;
@@ -23,7 +23,7 @@ import java.util.UUID;
 @RequiredArgsConstructor
 public class AdminBackupController {
     private final PersistentJobService jobs;
-    private final PersistentJobCoordinator coordinator;
+    private final BackupJobCreationService jobCreation;
     private final JobExecutionLogQueryService executionLogs;
     private final ScheduledBackupService scheduledBackups;
     private final ObjectMapper mapper;
@@ -82,7 +82,7 @@ public class AdminBackupController {
         long actor = StpUtil.getLoginIdAsLong();
         String payload = mapper.writeValueAsString(retryPayload(mapper, jobs.configJson(id), failedOrderIds));
         String key = JobIdempotency.key("ORDER_BACKUP_RETRY", actor, id + ":" + failedOrderIds);
-        return ApiResponse.ok(coordinator.create("ORDER_BACKUP", key, actor, payload), requestId());
+        return ApiResponse.ok(jobCreation.createForOrders("ORDER_BACKUP", key, actor, payload, failedOrderIds.size()), requestId());
     }
 
     /** 重建失败订单任务参数，并保留原任务的模式和时间窗口，避免模拟重试意外变成真实下载。 */

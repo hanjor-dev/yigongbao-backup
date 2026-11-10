@@ -279,6 +279,15 @@ public class ManualBackupJobHandler implements JobHandler {
             backupEvidence.markSimulationAvailable(orderId);
             // simulationPath 字段保存最终热备 ZIP 的 storageKey，不保存已清理的临时解压目录。
             context.orderSimulationMetadata(result.expectedFileCount(), result.expectedBytes(), result.storageKey());
+            if (!isLegacyStore()) {
+                context.orderAtVolume(orderId, targetStorageVolumeId, result.storageKey());
+                for (BackupManifest.Asset asset : manifest.assets()) {
+                    String entry = result.packageEntryNames().get(asset.assetId());
+                    context.fileAtVolume(orderId, asset.assetId(), "BACKUP_SIMULATION", "SUCCEEDED",
+                            0L, asset.size(), null, targetStorageVolumeId,
+                            result.storageKey() + "!/" + (entry == null ? "files/" + asset.assetId() : entry), null);
+                }
+            }
             context.orderMetadata(orderId, snapshot.getId(), snapshot.getOrderCode(),
                     snapshot.getOrderCreatedAt() == null ? null : snapshot.getOrderCreatedAt().toString(),
                     snapshot.getSourceStatus(), json(manifest.order()));
@@ -346,6 +355,15 @@ public class ManualBackupJobHandler implements JobHandler {
             com.yigongbao.backup.order.OrderSnapshotEntity snapshot = isLegacyStore()
                     ? backupEvidence.save(orderId, manifest, result)
                     : backupEvidence.save(orderId, manifest, result, targetStorageVolumeId);
+            context.orderAtVolume(orderId, targetStorageVolumeId, result.storageKey());
+            if (!isLegacyStore()) {
+                for (BackupManifest.Asset asset : manifest.assets()) {
+                    String entry = result.packageEntryNames().get(asset.assetId());
+                    if (entry == null) entry = "files/" + asset.assetId() + "-" + java.nio.file.Paths.get(asset.fileName()).getFileName();
+                    context.fileAtVolume(orderId, asset.assetId(), "BACKUP_DOWNLOAD", "SUCCEEDED",
+                            asset.size(), asset.size(), null, targetStorageVolumeId, result.storageKey() + "!/" + entry, null);
+                }
+            }
             context.orderInfo(orderId, "BACKUP_PACKAGE_CREATED", "本地打包",
                     "订单压缩包生成完成｜ZIP实际容量=" + BusinessLogFormatter.bytes(result.packageSize()),
                     java.util.Map.of("storageKey", result.storageKey(), "packageBytes", result.packageSize(), "packageSha256", result.packageSha256(), "snapshotId", snapshot.getId()));

@@ -34,6 +34,13 @@ public class Job {
     private String executionMode = "REAL";
     /** 线上恢复任务提交时固化的冲突处理策略。 */
     private String conflictPolicy;
+    private Long targetStorageVolumeId;
+    private String storageVolumeName;
+    private String storageTier;
+    private String currentStorageVolumeName;
+    private String currentStorageTier;
+    private String currentMountStatus;
+    private String currentOperationStatus;
     private int manifestSucceeded;
     private int manifestFailed;
     private int expectedFileTotal;

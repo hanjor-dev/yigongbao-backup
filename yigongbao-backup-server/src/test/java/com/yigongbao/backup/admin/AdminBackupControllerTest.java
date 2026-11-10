@@ -7,9 +7,15 @@ import org.junit.jupiter.api.Test;
 import java.util.List;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import com.yigongbao.backup.backup.BackupJobCreationService;
 
 /** 失败订单补偿任务必须继承原任务的执行模式。 */
 class AdminBackupControllerTest {
+    @Test
+    void retryAlsoUsesAtomicVolumeAwareJobCreation() {
+        assertThat(java.util.Arrays.stream(AdminBackupController.class.getDeclaredFields())
+                .anyMatch(field -> field.getType().equals(BackupJobCreationService.class))).isTrue();
+    }
     @Test
     void retryPayloadPreservesSimulationMode() throws Exception {
         ObjectMapper mapper = new ObjectMapper();

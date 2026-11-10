@@ -9,6 +9,7 @@ import com.yigongbao.backup.storage.api.ArtifactStore;
 import com.yigongbao.backup.storage.api.LegacyArtifactStoreVolumeAdapter;
 import com.yigongbao.backup.storage.volume.StorageVolumeUnavailableException;
 import com.yigongbao.backup.storage.location.ArtifactReplicaResolver;
+import com.yigongbao.backup.storage.lease.StorageVolumeReadLeaseService;
 import org.springframework.core.io.InputStreamResource;
 import org.springframework.http.HttpHeaders;
 import org.springframework.http.ContentDisposition;
@@ -45,16 +46,21 @@ public class OrderController {
     private final OrderPackageMapper packages;
     private final VolumeArtifactStore store;
     private final ArtifactReplicaResolver replicas;
+    private final OrderStorageLocationService locations;
+    private final StorageVolumeReadLeaseService readLeases;
 
     /** 显式声明唯一注入构造器，避免多构造器导致 Spring 回退查找无参构造器。 */
     @Autowired
     public OrderController(OrderSnapshotMapper snapshots, AssetMapper assets,
-                           OrderPackageMapper packages, VolumeArtifactStore store, ArtifactReplicaResolver replicas) {
+                           OrderPackageMapper packages, VolumeArtifactStore store, ArtifactReplicaResolver replicas,
+                           OrderStorageLocationService locations, StorageVolumeReadLeaseService readLeases) {
         this.snapshots = snapshots;
         this.assets = assets;
         this.packages = packages;
         this.store = store;
         this.replicas = replicas;
+        this.locations = locations;
+        this.readLeases = readLeases;
     }
 
     private static String rid() {
@@ -64,7 +70,7 @@ public class OrderController {
     /** 兼容既有列表查询测试；实际下载链路通过多卷构造器注入。 */
     public OrderController(OrderSnapshotMapper snapshots, AssetMapper assets,
                            OrderPackageMapper packages, ArtifactStore store) {
-        this(snapshots, assets, packages, new LegacyArtifactStoreVolumeAdapter(store), null);
+        this(snapshots, assets, packages, new LegacyArtifactStoreVolumeAdapter(store), null, null, null);
     }
 
     /**
@@ -174,6 +180,7 @@ public class OrderController {
                 .orderByDesc(OrderSnapshotEntity::getId);
         Page<OrderSnapshotEntity> page = snapshots.selectPage(new Page<>(current, Math.min(size, 100)), query);
         enrichAssetScale(page.getRecords());
+        enrichStorageLocations(page.getRecords());
         return ApiResponse.ok(page, rid());
     }
 
@@ -188,6 +195,7 @@ public class OrderController {
         if (snapshot == null) {
             return ResponseEntity.notFound().build();
         }
+        enrichStorageLocations(List.of(snapshot));
         return ResponseEntity.ok(ApiResponse.ok(snapshot, rid()));
     }
 
@@ -202,6 +210,17 @@ public class OrderController {
                 com.baomidou.mybatisplus.core.toolkit.Wrappers.<AssetEntity>lambdaQuery()
                         .eq(AssetEntity::getSnapshotId, id)
                         .orderByAsc(AssetEntity::getId));
+        if (locations != null) {
+            OrderStorageLocationService.LocationView location = locations.locate(packageForSnapshot(id));
+            for (AssetEntity asset : result) {
+                asset.setStorageVolumeId(location.storageVolumeId()); asset.setStorageVolumeName(location.storageVolumeName());
+                asset.setStorageTier(location.storageTier()); asset.setStorageMountStatus(location.mountStatus());
+                asset.setStorageAccessible(location.accessible());
+                asset.setStorageArchiveNote(location.archiveNote()); asset.setStoragePhysicalLocation(location.physicalLocation());
+                asset.setStorageKey(location.storageKey() == null || asset.getPackageEntryName() == null ? null
+                        : location.storageKey() + "!/" + asset.getPackageEntryName());
+            }
+        }
         return ResponseEntity.ok(ApiResponse.ok(result, rid()));
     }
 
@@ -217,20 +236,42 @@ public class OrderController {
                 com.baomidou.mybatisplus.core.toolkit.Wrappers.<OrderPackageEntity>lambdaQuery()
                         .eq(OrderPackageEntity::getSnapshotId, id)
                         .eq(OrderPackageEntity::getStatus, "AVAILABLE").last("limit 1"));
-        if (orderPackage == null || orderPackage.getStorageKey() == null || orderPackage.getStorageVolumeId() == null) return ResponseEntity.notFound().build();
+        if (orderPackage == null) return ResponseEntity.notFound().build();
+        if (replicas == null && (orderPackage.getStorageKey() == null || orderPackage.getStorageVolumeId() == null)) return ResponseEntity.notFound().build();
         String code = snapshot.getOrderCode() == null ? String.valueOf(snapshot.getSourceOrderId()) : snapshot.getOrderCode();
         String key = orderPackage.getStorageKey();
+        StorageVolumeReadLeaseService.LeasedArtifact lease = null;
         try {
-            long volumeId = orderPackage.getStorageVolumeId();
-            if (replicas != null) {
+            Long volumeId = orderPackage.getStorageVolumeId();
+            if (readLeases != null) {
+                lease = readLeases.acquire("ORDER_PACKAGE", orderPackage.getId(), "DOWNLOAD",
+                        "user:" + StpUtil.getLoginIdAsLong() + ":" + UUID.randomUUID(), readLeases.defaultTtl());
+                ArtifactReplicaResolver.ReadableArtifactReplica replica = lease.replica();
+                volumeId = replica.storageVolumeId(); key = replica.storageKey();
+            } else if (replicas != null) {
                 ArtifactReplicaResolver.ReadableArtifactReplica replica = replicas.resolveReadable("ORDER_PACKAGE", orderPackage.getId());
                 volumeId = replica.storageVolumeId();
                 key = replica.storageKey();
             }
+            if (volumeId == null || key == null) return ResponseEntity.notFound().build();
             Path packagePath = store.resolve(volumeId, key);
             if (!Files.isRegularFile(packagePath)) return ResponseEntity.notFound().build();
-            long size = Files.size(packagePath);
-            InputStreamResource body = new InputStreamResource(store.open(volumeId, key));
+            java.nio.channels.FileChannel channel = java.nio.channels.FileChannel.open(packagePath,
+                    java.nio.file.StandardOpenOption.READ);
+            long size = channel.size();
+            try {
+                verifySha256(channel, orderPackage.getPackageSha256());
+                if (lease != null) lease.heartbeat();
+                channel.position(0L);
+            } catch (RuntimeException | IOException exception) {
+                if (lease != null) readLeases.markDamaged(lease,"DOWNLOAD_CHECKSUM_FAILED",exception.getMessage(),StpUtil.getLoginIdAsLong());
+                channel.close();
+                throw exception;
+            }
+            java.io.InputStream input = java.nio.channels.Channels.newInputStream(channel);
+            StorageVolumeReadLeaseService.LeasedArtifact heldLease = lease;
+            lease = null;
+            InputStreamResource body = new InputStreamResource(heldLease==null?input:readLeases.wrap(input,heldLease));
             return ResponseEntity.ok()
                     .contentType(MediaType.APPLICATION_OCTET_STREAM)
                     .contentLength(size)
@@ -241,6 +282,8 @@ public class OrderController {
             return ResponseEntity.status(409).body(ApiResponse.ok(java.util.Map.of("code", "STORAGE_VOLUME_OFFLINE", "message", exception.getMessage()), rid()));
         } catch (NoSuchFileException | FileNotFoundException exception) {
             return ResponseEntity.notFound().build();
+        } finally {
+            if (lease != null) lease.close();
         }
     }
 
@@ -263,6 +306,24 @@ public class OrderController {
         }
     }
 
+    /** 在同一个已打开文件句柄上校验并随后输出，避免校验和下载之间文件被替换。 */
+    private static void verifySha256(java.nio.channels.FileChannel channel, String expected) throws IOException {
+        if (expected == null || expected.isBlank()) throw new IllegalStateException("订单包缺少 SHA-256，拒绝下载");
+        try {
+            java.security.MessageDigest digest = java.security.MessageDigest.getInstance("SHA-256");
+            java.nio.ByteBuffer buffer = java.nio.ByteBuffer.allocate(64 * 1024);
+            while (channel.read(buffer) >= 0) {
+                buffer.flip();
+                digest.update(buffer);
+                buffer.clear();
+            }
+            String actual = java.util.HexFormat.of().formatHex(digest.digest());
+            if (!actual.equalsIgnoreCase(expected)) throw new IllegalStateException("订单包 SHA-256 校验失败，拒绝下载");
+        } catch (java.security.NoSuchAlgorithmException impossible) {
+            throw new IllegalStateException("运行环境不支持 SHA-256", impossible);
+        }
+    }
+
     /** 订单列表展示文件规模；资产数量和源文件总大小来自当前快照资产表。 */
     private void enrichAssetScale(List<OrderSnapshotEntity> rows) {
         if (rows == null || rows.isEmpty()) return;
@@ -281,6 +342,34 @@ public class OrderController {
             row.setAssetCount(counts.getOrDefault(row.getId(), 0L));
             row.setTotalBytes(bytes.getOrDefault(row.getId(), 0L));
         });
+    }
+
+    private OrderPackageEntity packageForSnapshot(long snapshotId) {
+        return packages.selectOne(com.baomidou.mybatisplus.core.toolkit.Wrappers.<OrderPackageEntity>lambdaQuery()
+                .eq(OrderPackageEntity::getSnapshotId, snapshotId).eq(OrderPackageEntity::getStatus, "AVAILABLE")
+                .orderByDesc(OrderPackageEntity::getId).last("limit 1"));
+    }
+
+    /** 列表与详情使用同一份副本解析结果，离线卷仍可查询。 */
+    private void enrichStorageLocations(List<OrderSnapshotEntity> rows) {
+        if (locations == null || rows == null || rows.isEmpty()) return;
+        List<Long> ids = rows.stream().map(OrderSnapshotEntity::getId).filter(java.util.Objects::nonNull).toList();
+        if (ids.isEmpty()) return;
+        Map<Long, OrderPackageEntity> bySnapshot = new HashMap<>();
+        packages.selectList(com.baomidou.mybatisplus.core.toolkit.Wrappers.<OrderPackageEntity>lambdaQuery()
+                        .in(OrderPackageEntity::getSnapshotId, ids).eq(OrderPackageEntity::getStatus, "AVAILABLE")
+                        .orderByDesc(OrderPackageEntity::getId))
+                .forEach(pkg -> bySnapshot.putIfAbsent(pkg.getSnapshotId(), pkg));
+        for (OrderSnapshotEntity row : rows) {
+            OrderStorageLocationService.LocationView location = locations.locate(bySnapshot.get(row.getId()));
+            row.setStorageVolumeId(location.storageVolumeId()); row.setStorageVolumeName(location.storageVolumeName());
+            row.setStorageTier(location.storageTier()); row.setStorageKey(location.storageKey());
+            row.setStorageMountStatus(location.mountStatus()); row.setStorageAccessible(location.accessible());
+            row.setStorageUnavailableReason(location.unavailableReason());
+            row.setStorageAdminStatus(location.adminStatus()); row.setStorageOperationStatus(location.operationStatus());
+            row.setStorageArchiveNote(location.archiveNote()); row.setStorageOfflineLabelNote(location.offlineLabelNote());
+            row.setStoragePhysicalLocation(location.physicalLocation());
+        }
     }
 
     /** 将订单号限制为安全的下载文件名，避免响应头注入和非法路径字符。 */

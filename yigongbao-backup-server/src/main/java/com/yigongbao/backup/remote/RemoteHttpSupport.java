@@ -37,6 +37,7 @@ public class RemoteHttpSupport {
     private final ObjectMapper mapper;
     private final URI baseUri;
     private final Duration timeout;
+    private final Duration fileTransferTimeout;
     private final byte[] secret;
     private final java.util.function.Supplier<OnlineSettings> dynamicSettings;
     private volatile OnlineSettings cachedSettings;
@@ -45,11 +46,19 @@ public class RemoteHttpSupport {
     /** 生产共享 HMAC 构造器；密钥只保存在进程内存中。 */
     public RemoteHttpSupport(HttpClient client, ObjectMapper mapper, URI baseUri, Duration timeout,
                              String sharedSecret) {
+        this(client, mapper, baseUri, timeout, Duration.ofHours(2), sharedSecret);
+    }
+
+    /** 普通接口和大文件传输分别使用独立超时，避免慢速文件流被短请求超时中断。 */
+    public RemoteHttpSupport(HttpClient client, ObjectMapper mapper, URI baseUri, Duration timeout,
+                             Duration fileTransferTimeout, String sharedSecret) {
         this.client = Objects.requireNonNull(client, "client");
         this.mapper = Objects.requireNonNull(mapper, "mapper");
         this.baseUri = normalizeBase(baseUri);
         this.timeout = timeout == null || timeout.isNegative() || timeout.isZero()
                 ? Duration.ofSeconds(30) : timeout;
+        this.fileTransferTimeout = fileTransferTimeout == null || fileTransferTimeout.isNegative()
+                || fileTransferTimeout.isZero() ? Duration.ofHours(2) : fileTransferTimeout;
         this.secret = sharedSecret == null ? new byte[0] : sharedSecret.getBytes(StandardCharsets.UTF_8);
         this.dynamicSettings = null;
         if (this.secret.length < 32) throw new IllegalArgumentException("共享HMAC密钥不能小于32位");
@@ -63,6 +72,7 @@ public class RemoteHttpSupport {
         this.mapper = Objects.requireNonNull(mapper, "mapper");
         this.baseUri = URI.create("http://127.0.0.1/");
         this.timeout = Duration.ofSeconds(30);
+        this.fileTransferTimeout = Duration.ofHours(2);
         this.secret = new byte[0];
         this.dynamicSettings = Objects.requireNonNull(dynamicSettings, "dynamicSettings");
     }
@@ -112,7 +122,7 @@ public class RemoteHttpSupport {
         if (dynamic != null) return dynamic.download(uri);
         validateExternalUri(uri, "COS下载地址非法");
         HttpRequest.Builder builder = HttpRequest.newBuilder(uri)
-                .timeout(timeout)
+                .timeout(fileTransferTimeout)
                 .header("Accept", "application/octet-stream")
                 .GET();
         return sendDownload(builder);
@@ -141,7 +151,7 @@ public class RemoteHttpSupport {
         if (dynamic != null) return dynamic.stream(uri, method, contentType, input);
         validateExternalUri(uri, "COS上传地址非法");
         HttpRequest.Builder builder = HttpRequest.newBuilder(uri)
-                .timeout(timeout)
+                .timeout(fileTransferTimeout)
                 .method(method, HttpRequest.BodyPublishers.ofInputStream(() -> input))
                 .header("Content-Type", contentType == null ? "application/octet-stream" : contentType)
                 .header("X-Content-SHA256", "UNSIGNED-PAYLOAD");
@@ -445,7 +455,7 @@ public class RemoteHttpSupport {
             if (cachedDelegate != null && settings.equals(cachedSettings)) return cachedDelegate;
             HttpClient currentClient = HttpClient.newBuilder().connectTimeout(settings.connectTimeout()).build();
             RemoteHttpSupport rebuilt = new RemoteHttpSupport(currentClient, mapper, settings.baseUri(),
-                    settings.requestTimeout(), settings.sharedSecret());
+                    settings.requestTimeout(), settings.fileTransferTimeout(), settings.sharedSecret());
             cachedSettings = settings;
             cachedDelegate = rebuilt;
             return rebuilt;
@@ -454,6 +464,7 @@ public class RemoteHttpSupport {
 
     /** 动态线上连接配置，不包含持久化行为。 */
     public record OnlineSettings(URI baseUri, Duration connectTimeout, Duration requestTimeout,
+                                 Duration fileTransferTimeout,
                                  String sharedSecret) { }
 
 }

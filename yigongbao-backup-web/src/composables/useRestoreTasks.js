@@ -1,6 +1,6 @@
 import { computed, onUnmounted, ref } from 'vue';
 import { api } from '../api.js';
-import { isTerminalJob, jobProgress, normalizePage } from '../taskCenter.js';
+import { isTerminalJob, jobProgress, normalizePage, replaceJobById } from '../taskCenter.js';
 
 /**
  * 线上恢复任务的独立页面状态。
@@ -60,6 +60,7 @@ export function useRestoreTasks() {
         api(`/admin/restores/jobs/${encodeURIComponent(id)}/orders?current=${encodeURIComponent(orderCurrent.value)}&size=${encodeURIComponent(orderSize.value)}`)
       ]);
       selected.value = taskResult.data || null;
+      tasks.value = replaceJobById(tasks.value, selected.value);
       const page = normalizePage(orderResult.data);
       orders.value = page.records;
       orderCurrent.value = page.current;

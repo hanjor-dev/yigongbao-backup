@@ -11,6 +11,8 @@ import com.yigongbao.backup.job.PersistentJobService;
 import com.yigongbao.backup.storage.api.VolumeArtifactStore;
 import com.yigongbao.backup.storage.volume.ActiveVolumeSelectionService;
 import com.yigongbao.backup.storage.volume.StorageVolumeEntity;
+import com.yigongbao.backup.storage.lease.StorageVolumeReadLeaseService;
+import com.yigongbao.backup.storage.volume.StorageVolumeUnavailableException;
 import lombok.RequiredArgsConstructor;
 import org.springframework.core.io.InputStreamResource;
 import org.springframework.http.HttpHeaders;
@@ -23,6 +25,7 @@ import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RequestPart;
 import org.springframework.web.bind.annotation.RestController;
 import org.springframework.web.multipart.MultipartFile;
+import org.springframework.transaction.annotation.Transactional;
 
 import java.io.FileNotFoundException;
 import java.io.IOException;
@@ -34,6 +37,7 @@ import java.util.HexFormat;
 import java.util.List;
 import java.util.Objects;
 import java.util.UUID;
+import java.time.Duration;
 
 /** 普通用户订单补传接口；每个上传任务在创建时锁定实际写入热备卷。 */
 @RestController
@@ -48,6 +52,7 @@ public class SupplementController {
     private final PersistentJobCoordinator jobs;
     private final PersistentJobService jobService;
     private final ObjectMapper mapper;
+    private final StorageVolumeReadLeaseService readLeases;
 
     @GetMapping
     public ApiResponse<List<SupplementService.SupplementInfo>> list(@PathVariable("orderId") String orderId) throws IOException {
@@ -58,13 +63,14 @@ public class SupplementController {
 
     /** 将上传流暂存于目标卷，再创建带目标卷 ID 的后台上传任务。 */
     @PostMapping
+    @Transactional(rollbackFor = Exception.class)
     public ApiResponse<UploadTask> upload(@PathVariable("orderId") String orderId,
                                            @RequestPart("file") MultipartFile file) throws IOException {
         StpUtil.checkLogin();
         if (file.isEmpty()) throw new IllegalArgumentException("补传文件为空");
         SnapshotRef ref = snapshot(orderId);
         long actor = StpUtil.getLoginIdAsLong();
-        StorageVolumeEntity volume = activeVolumes.requireActiveHotVolume();
+        StorageVolumeEntity volume = activeVolumes.selectActiveForNewBackup(file.getSize());
         Path staging = store.resolve(volume.getId(), STAGING_DIRECTORY);
         Files.createDirectories(staging);
         Path staged = Files.createTempFile(staging, "upload-", ".part");
@@ -101,13 +107,51 @@ public class SupplementController {
     @GetMapping("/{fileId}/download")
     public ResponseEntity<?> download(@PathVariable("orderId") String orderId, @PathVariable("fileId") String fileId) throws IOException {
         StpUtil.checkLogin();
+        StorageVolumeReadLeaseService.LeasedArtifact lease = null;
         try {
             SnapshotRef ref = snapshot(orderId);
+            BkSupplementFileEntity file = supplements.requireForSnapshot(ref.id(), fileId);
+            lease = readLeases.acquire("SUPPLEMENT_FILE", file.getId(), "DOWNLOAD",
+                    "user:" + StpUtil.getLoginIdAsLong() + ":" + UUID.randomUUID(), readLeases.defaultTtl());
+            var replica = lease.replica();
+            Path path = store.resolve(replica.storageVolumeId(), replica.storageKey());
+            if (!Files.isRegularFile(path)) return ResponseEntity.notFound().build();
+            var channel = java.nio.channels.FileChannel.open(path, java.nio.file.StandardOpenOption.READ);
+            try {
+                verifySha256(channel, file.getSha256());
+                lease.heartbeat();
+                channel.position(0L);
+            } catch (RuntimeException | IOException exception) {
+                readLeases.markDamaged(lease,"DOWNLOAD_CHECKSUM_FAILED",exception.getMessage(),StpUtil.getLoginIdAsLong());
+                channel.close();
+                throw exception;
+            }
+            StorageVolumeReadLeaseService.LeasedArtifact heldLease = lease;
+            lease = null;
+            var input = readLeases.wrap(java.nio.channels.Channels.newInputStream(channel),heldLease);
             return ResponseEntity.ok().contentType(MediaType.APPLICATION_OCTET_STREAM)
                     .header(HttpHeaders.CONTENT_DISPOSITION, "attachment; filename=\"" + fileId + "\"")
-                    .body(new InputStreamResource(supplements.openForSnapshot(ref.id(), fileId)));
+                    .contentLength(channel.size()).body(new InputStreamResource(input));
+        } catch (StorageVolumeUnavailableException exception) {
+            return ResponseEntity.status(409).body(ApiResponse.ok(java.util.Map.of(
+                    "code", "STORAGE_VOLUME_OFFLINE", "message", exception.getMessage()), requestId()));
         } catch (NoSuchFileException | FileNotFoundException exception) {
             return ResponseEntity.notFound().build();
+        } finally {
+            if (lease != null) lease.close();
+        }
+    }
+
+    private static void verifySha256(java.nio.channels.FileChannel channel, String expected) throws IOException {
+        if (expected == null || expected.isBlank()) throw new IllegalStateException("补传文件缺少 SHA-256，拒绝下载");
+        try {
+            MessageDigest digest = MessageDigest.getInstance("SHA-256");
+            java.nio.ByteBuffer buffer = java.nio.ByteBuffer.allocate(64 * 1024);
+            while (channel.read(buffer) >= 0) { buffer.flip(); digest.update(buffer); buffer.clear(); }
+            if (!HexFormat.of().formatHex(digest.digest()).equalsIgnoreCase(expected))
+                throw new IllegalStateException("补传文件 SHA-256 校验失败，拒绝下载");
+        } catch (java.security.NoSuchAlgorithmException impossible) {
+            throw new IllegalStateException("运行环境不支持 SHA-256", impossible);
         }
     }
 

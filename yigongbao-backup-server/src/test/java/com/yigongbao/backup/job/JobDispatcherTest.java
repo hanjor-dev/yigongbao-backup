@@ -56,6 +56,36 @@ class JobDispatcherTest {
     }
 
     @Test
+    void interruptsLongRunningHandlerWhenLeaseHeartbeatObservesCancellation() {
+        PersistentJobCoordinator coordinator = mock(PersistentJobCoordinator.class);
+        JobEntity claimed = job(11L, "RESTORE", 12L, false);
+        when(coordinator.claimNext("worker-a", 1)).thenReturn(claimed);
+        doThrow(new JobCancelledException("管理员已取消任务")).when(coordinator)
+                .renewLease(11L, "worker-a", 12L, 1L);
+        JobHandler handler = (context, job) -> {
+            try { Thread.sleep(2_000L); }
+            catch (InterruptedException interrupted) {
+                Thread.currentThread().interrupt();
+                throw new PartialJobFailureException("中断后的订单汇总失败");
+            }
+        };
+        JobDispatcher dispatcher = new JobDispatcher(coordinator,
+                new JobExecutorRegistry(Map.of("RESTORE", handler)),
+                "worker-a", Duration.ofSeconds(1), 3);
+
+        long startedAt = System.nanoTime();
+        dispatcher.dispatchOne();
+        long elapsedMillis = Duration.ofNanos(System.nanoTime() - startedAt).toMillis();
+        boolean interruptLeakedToDispatcherThread = Thread.interrupted();
+
+        assertThat(elapsedMillis).isLessThan(1_500L);
+        assertThat(interruptLeakedToDispatcherThread).isFalse();
+        verify(coordinator, never()).succeed(11L, "worker-a", 12L);
+        verify(coordinator, never()).partial(eq(11L), anyString(), anyLong(), anyString());
+        verify(coordinator, never()).failOrRetry(eq(11L), anyString(), anyLong(), anyInt(), any());
+    }
+
+    @Test
     void dispatchesRegisteredHandlerAndCompletesWithCurrentFencingToken() throws Exception {
         PersistentJobCoordinator coordinator = mock(PersistentJobCoordinator.class);
         JobEntity claimed = job(7L, "RESTORE", 4L, false);

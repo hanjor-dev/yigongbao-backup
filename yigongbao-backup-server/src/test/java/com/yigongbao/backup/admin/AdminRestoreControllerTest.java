@@ -1,6 +1,7 @@
 package com.yigongbao.backup.admin;
 
 import org.junit.jupiter.api.Test;
+import org.springframework.transaction.annotation.Transactional;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
@@ -13,5 +14,15 @@ class AdminRestoreControllerTest {
 
         assertThat(first).isNotEqualTo(second);
         assertThat(AdminRestoreController.restoreRequestKey("request-1")).isEqualTo("request-1");
+    }
+
+    @Test
+    void everyRestoreCreationEndpointStartsARealTransaction() throws Exception {
+        assertThat(AdminRestoreController.class.getMethod("restore", AdminRestoreController.RestoreCommand.class, String.class)
+                .getAnnotation(Transactional.class)).isNotNull();
+        assertThat(AdminRestoreController.class.getMethod("restoreBatch", AdminRestoreController.BatchRestoreCommand.class, String.class)
+                .getAnnotation(Transactional.class)).isNotNull();
+        assertThat(AdminRestoreController.class.getMethod("retryFailed", long.class)
+                .getAnnotation(Transactional.class)).isNotNull();
     }
 }

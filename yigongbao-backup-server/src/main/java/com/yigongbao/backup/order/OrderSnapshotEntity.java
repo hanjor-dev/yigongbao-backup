@@ -90,4 +90,16 @@ public class OrderSnapshotEntity extends BaseEntity {
     /** 当前快照源文件总大小，列表查询时由 bk_asset.source_size 聚合回填。 */
     @TableField(exist = false)
     private Long totalBytes;
+    @TableField(exist = false) private Long storageVolumeId;
+    @TableField(exist = false) private String storageVolumeName;
+    @TableField(exist = false) private String storageTier;
+    @TableField(exist = false) private String storageKey;
+    @TableField(exist = false) private String storageMountStatus;
+    @TableField(exist = false) private Boolean storageAccessible;
+    @TableField(exist = false) private String storageUnavailableReason;
+    @TableField(exist = false) private String storageAdminStatus;
+    @TableField(exist = false) private String storageOperationStatus;
+    @TableField(exist = false) private String storageArchiveNote;
+    @TableField(exist = false) private String storageOfflineLabelNote;
+    @TableField(exist = false) private String storagePhysicalLocation;
 }

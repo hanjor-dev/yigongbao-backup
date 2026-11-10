@@ -18,11 +18,16 @@ test('admin backup page renders automatic backup tasks without candidate selecti
   assert.match(table, /元数据模拟/);
   assert.match(table, /预计文件/);
   assert.match(table, /:label="row\.cancelRequested/);
+  assert.match(table, /label="存储卷"/);
+  assert.match(table, /row\.storageVolumeName/);
+  assert.match(table, /row\.storageTier/);
+  assert.match(table, /row\.targetStorageVolumeId/);
   assert.doesNotMatch(view, /createBackupJob|backupCandidates|type="selection"/);
   assert.match(consoleSource, /\/admin\/backup\/jobs/);
   assert.match(consoleSource, /\/admin\/backup\/schedule\/run-now/);
   assert.match(view, /立即执行扫描/);
   assert.match(consoleSource, /retry-failed/);
+  assert.match(consoleSource, /await loadJobDetails\(job\.id\);\s*if \(!isTerminalJob\(selectedJob\.value\)\) startJobPolling\(\);/);
   assert.doesNotMatch(consoleSource, /\/admin\/backup\/candidates/);
   const detail = read('../src/components/jobs/JobDetail.vue');
   const orderTable = read('../src/components/orders/OrderTable.vue');

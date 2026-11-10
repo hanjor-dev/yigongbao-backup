@@ -40,4 +40,15 @@ class StorageVolumeMigrationContractTest {
                 .contains("不可靠")
                 .contains("不猜测");
     }
+
+    @Test
+    void jobOrderLocationMigrationBackfillsExistingRows() throws Exception {
+        String migration = Files.readString(Path.of("").toAbsolutePath()
+                .resolve("sql/migration/2026-11-09-06-job-order-storage-location.sql"));
+
+        assertThat(migration).contains("UPDATE bk_job_order")
+                .contains("source_storage_volume_id")
+                .contains("bk_order_package")
+                .contains("target_storage_volume_id");
+    }
 }

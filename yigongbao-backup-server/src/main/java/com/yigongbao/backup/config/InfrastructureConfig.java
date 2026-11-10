@@ -11,6 +11,7 @@ import com.yigongbao.backup.cold.ColdImportService;
 import com.yigongbao.backup.cold.HotCleanupService;
 import com.yigongbao.backup.order.OrderPackageMapper;
 import com.yigongbao.backup.storage.location.ArtifactCopyMapper;
+import com.yigongbao.backup.storage.location.ArtifactReplicaResolver;
 import com.yigongbao.backup.order.BkSupplementFileMapper;
 import com.yigongbao.backup.order.SupplementService;
 import com.yigongbao.backup.storage.api.ArtifactStore;
@@ -66,8 +67,9 @@ public class InfrastructureConfig {
     @Bean
     @ConditionalOnMissingBean
     SupplementService supplementService(VolumeArtifactStore store, BkSupplementFileMapper mapper,
-                                         RuntimeConfigService runtimeConfig) {
-        return new SupplementService(store, mapper, runtimeConfig);
+                                         RuntimeConfigService runtimeConfig, StorageVolumeMapper volumes,
+                                         ArtifactCopyMapper copies, ArtifactReplicaResolver replicas) {
+        return new SupplementService(store, mapper, runtimeConfig, volumes, copies, replicas);
     }
 
     @Bean

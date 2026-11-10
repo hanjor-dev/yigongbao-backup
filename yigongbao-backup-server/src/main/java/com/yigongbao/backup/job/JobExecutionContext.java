@@ -25,6 +25,7 @@ public final class JobExecutionContext {
     public void orderFailed(Throwable failure){orderFailed("FAILED",failure);}
     public void orderFailed(String status,Throwable failure){if(evidence!=null&&currentOrder!=null)evidence.order(id,currentOrder,currentSnapshot,status,failure);currentOrder=null;currentSnapshot=null;}
     public void orderSimulationMetadata(int expectedFiles,long expectedBytes,String path){if(evidence!=null&&currentOrder!=null)evidence.orderSimulationMetadata(id,currentOrder,expectedFiles,expectedBytes,path);}
+    public void orderAtVolume(Long source,long volumeId,String storageKey){if(evidence!=null&&source!=null)evidence.orderAtVolume(id,source,volumeId,storageKey);}
     public void fileStarted(Long source,String identity,String step,long total){currentFile=identity;currentFileStep=step;if(evidence!=null)evidence.file(id,source,identity,step,"RUNNING",0,total,null);}
     /** 记录恢复 ZIP 内单个文件的开始状态及线上签发的目标对象键。 */
     public void fileStarted(Long source,String identity,String step,long total,String objectKey){currentFile=identity;currentFileStep=step;if(evidence!=null)evidence.file(id,source,identity,step,"RUNNING",0,total,objectKey,null);}
@@ -39,6 +40,7 @@ public final class JobExecutionContext {
     public void fileFailed(Long source,String identity,String step,Throwable failure){if(evidence!=null&&identity!=null)evidence.file(id,source,identity,step,"FAILED",0,0,failure);if(identity!=null&&identity.equals(currentFile)){currentFile=null;currentFileStep=null;}}
     /** 失败附属文件步骤，不影响订单 ZIP 聚合步骤。 */
     public void fileStepFailed(Long source,String identity,String step,long uploadedBytes,Throwable failure){if(evidence!=null&&identity!=null)evidence.file(id,source,identity,step,"FAILED",uploadedBytes,0,failure);}
+    public void fileAtVolume(Long source,String identity,String step,String status,long done,long total,String objectKey,long volumeId,String storageKey,Throwable failure){if(evidence!=null&&identity!=null)evidence.fileAtVolume(id,source,identity,step,status,done,total,objectKey,volumeId,storageKey,failure);}
     public void failure(Throwable failure){fileFailed(currentOrder,failure);orderFailed(failure);}
     /** 持久化任务范围内的普通业务事件。 */
     public void taskInfo(String eventCode,String stage,String message,Map<String,?> details){if(logs!=null)logs.info(id,null,eventCode,stage,message,details);}
@@ -52,5 +54,5 @@ public final class JobExecutionContext {
     public void orderWarn(long sourceOrderId,String eventCode,String stage,String message,Map<String,?> details){if(logs!=null)logs.warn(id,sourceOrderId,eventCode,stage,message,details);}
     /** 持久化指定订单的错误事件。 */
     public void orderError(long sourceOrderId,String eventCode,String stage,String message,Map<String,?> details){if(logs!=null)logs.error(id,sourceOrderId,eventCode,stage,message,details);}
-    public long jobId(){return id;} public long fencingToken(){return token;}
+    public long jobId(){return id;} public String owner(){return owner;} public long fencingToken(){return token;}
 }

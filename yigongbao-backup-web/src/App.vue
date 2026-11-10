@@ -10,10 +10,10 @@ import OrdersView from './views/OrdersView.vue';
 import StorageView from './views/StorageView.vue';
 import AccountsView from './views/AccountsView.vue';
 import CleanupView from './views/CleanupView.vue';
-import ColdView from './views/ColdView.vue';
 import ConfigsView from './views/ConfigsView.vue';
 import BackupView from './views/BackupView.vue';
 import RestoreView from './views/RestoreView.vue';
+import ColdStorageView from './views/ColdStorageView.vue';
 
 const backup = useBackupConsole();
 provide(BACKUP_CONTEXT, backup);
@@ -27,10 +27,10 @@ const pageViews = {
   'storage-volumes': StorageView,
   accounts: AccountsView,
   cleanup: CleanupView,
-  cold: ColdView,
   configs: ConfigsView,
   backup: BackupView,
-  restore: RestoreView
+  restore: RestoreView,
+  'cold-storage': ColdStorageView
 };
 const currentView = computed(() => pageViews[page.value] || OrdersView);
 </script>

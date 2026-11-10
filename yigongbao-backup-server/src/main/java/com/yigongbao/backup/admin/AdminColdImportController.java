@@ -31,7 +31,7 @@ public class AdminColdImportController {
     @GetMapping("/scan")
     public ApiResponse<List<String>> scan() throws IOException {
         admin();
-        return ApiResponse.ok(imports.scan().stream().map(path -> path.getFileName().toString()).toList(), rid());
+        throw new IllegalStateException("旧冷备导入区流程已停用，请重新插入原冷备盘并在存储卷管理中确认挂载");
     }
 
     /** 契约规定的幂等扫描命令；GET 版本保留给管理页面刷新使用。 */
@@ -46,11 +46,7 @@ public class AdminColdImportController {
                                               @RequestBody(required = false) RestoreCommand command)
             throws Exception {
         admin();
-        Set<String> orderIds = command == null || command.orderIds() == null ? Set.of() : new java.util.TreeSet<>(command.orderIds());
-        ColdImportJobHandler.Payload payload = new ColdImportJobHandler.Payload(batchId, orderIds);
-        long actor = StpUtil.getLoginIdAsLong(); String json = mapper.writeValueAsString(payload);
-        JobEntity job = jobs.create("COLD_IMPORT", JobIdempotency.key("COLD_IMPORT", actor, json), actor, json);
-        return ApiResponse.ok(new RestoreTask(job.getId(), job.getJobNo(), job.getStatus()), rid());
+        throw new IllegalStateException("旧冷备导入区流程已停用，请重新插入原冷备盘并在存储卷管理中确认挂载");
     }
 
     private static void admin() {

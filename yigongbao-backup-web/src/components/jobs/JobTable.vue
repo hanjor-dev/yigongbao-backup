@@ -18,6 +18,14 @@ const capacitySummary = (job) => `源文件 ${bytes(job.expectedBytes)} / ZIP ${
   <el-table :data="jobs" class="data-table" highlight-current-row row-key="id">
     <el-table-column label="任务编号" min-width="210"><template #default="{ row }"><div class="mono">{{ row.jobNo || ('#' + row.id) }}</div><small class="muted">ID: {{ row.id }}</small></template></el-table-column>
     <el-table-column label="创建时间" min-width="175"><template #default="{ row }">{{ displayTime(row.requestedAt) }}</template></el-table-column>
+    <el-table-column label="存储卷" min-width="200">
+      <template #default="{ row }">
+        <div>{{ row.storageVolumeName || (row.targetStorageVolumeId ? `卷 #${row.targetStorageVolumeId}` : '历史任务未记录') }}</div>
+        <small v-if="row.storageTier || row.targetStorageVolumeId" class="muted">
+          {{ [row.storageTier, row.targetStorageVolumeId ? `ID: ${row.targetStorageVolumeId}` : ''].filter(Boolean).join(' / ') }}
+        </small>
+      </template>
+    </el-table-column>
     <el-table-column label="模式/状态" width="170"><template #default="{ row }"><el-tag v-if="simulation(row)" type="warning" size="small">元数据模拟</el-tag><status-badge :value="row.cancelRequested ? 'CANCELLED' : jobState(row)" :label="row.cancelRequested ? '取消中' : statusText(row)" /></template></el-table-column>
     <el-table-column label="进度" width="170"><template #default="{ row }"><el-progress :percentage="jobProgress(row)" :stroke-width="7" /></template></el-table-column>
     <el-table-column label="订单" min-width="230"><template #default="{ row }"><span class="success-text">成功 {{ row.orderCompleted || 0 }}</span> / <span class="error-text">失败 {{ row.orderFailed || 0 }}</span> / 待处理 {{ orderPending(row) }} / 共 {{ row.orderTotal || 0 }}</template></el-table-column>

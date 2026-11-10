@@ -16,6 +16,7 @@ import com.yigongbao.backup.order.OrderPackageEntity;
 import com.yigongbao.backup.order.OrderPackageMapper;
 import com.yigongbao.backup.storage.api.VolumeArtifactStore;
 import com.yigongbao.backup.storage.location.ArtifactReplicaResolver;
+import com.yigongbao.backup.storage.lease.StorageVolumeReadLeaseService;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.ObjectProvider;
@@ -44,6 +45,7 @@ public class RestoreJobHandler implements JobHandler {
     private final ObjectMapper mapper;
     private final PersistentJobService jobService;
     private final RuntimeConfigService configs;
+    private final StorageVolumeReadLeaseService readLeases;
 
     @Override
     public void execute(JobExecutionContext context, JobEntity job) throws Exception {
@@ -134,10 +136,21 @@ public class RestoreJobHandler implements JobHandler {
                 context.safePoint("RESTORE_ORDER_COMPLETED", done);
                 continue;
             }
+            StorageVolumeReadLeaseService.LeasedArtifact restoreLease = null;
+            com.yigongbao.backup.job.JobOrderEntity sourceLocation = jobService.listAllRestoreOrders(job.getId()).stream()
+                    .filter(row -> java.util.Objects.equals(row.getSnapshotId(), snapshot.getId())).findFirst().orElse(null);
             try {
                 // 本地包、容量等前置检查失败时也必须落订单失败明细。
                 context.orderStarted(snapshot.getSourceOrderId(), snapshot.getId());
+                if (sourceLocation != null && sourceLocation.getSourcePackageId() != null
+                        && sourceLocation.getSourceStorageVolumeId() != null && sourceLocation.getSourceStorageKey() != null) {
+                    restoreLease = readLeases.acquirePinned("ORDER_PACKAGE", sourceLocation.getSourcePackageId(),
+                            sourceLocation.getSourceStorageVolumeId(), sourceLocation.getSourceStorageKey(),
+                            sourceLocation.getSourcePackageSha256(), "RESTORE",
+                            "job:" + job.getId() + ":fencing:" + context.fencingToken(), readLeases.defaultTtl());
+                }
                 Path path = packagePath(job.getId(), snapshot);
+                if (restoreLease != null) restoreLease.heartbeat();
                 LocalOrderRestoreService.RestorePackageInventory inventory = service.inspect(path, snapshot.getSourceOrderId().toString());
                 List<Map<String, Object>> packageAssets = inventory.assets().stream().map(asset -> Map.<String, Object>of(
                         "assetId", asset.assetIdentity(), "fileName", asset.fileName() == null ? "-" : asset.fileName(),
@@ -184,6 +197,11 @@ public class RestoreJobHandler implements JobHandler {
                     @Override public void started(String assetIdentity, String zipEntryName, String objectKey, long totalBytes) {
                         context.fileStepStarted(snapshot.getSourceOrderId(), assetIdentity,
                                 "RESTORE_OBJECT_UPLOAD", totalBytes, objectKey);
+                        if (sourceLocation != null && sourceLocation.getSourceStorageVolumeId() != null) {
+                            context.fileAtVolume(snapshot.getSourceOrderId(), assetIdentity, "RESTORE_OBJECT_UPLOAD", "RUNNING",
+                                    0L, totalBytes, objectKey, sourceLocation.getSourceStorageVolumeId(),
+                                    sourceLocation.getSourceStorageKey() + "!/" + zipEntryName, null);
+                        }
                         context.orderInfo(snapshot.getSourceOrderId(), "FILE_UPLOAD_STARTED", "文件上传",
                                 "开始上传文件｜资产ID=" + assetIdentity + "｜文件=" + zipEntryName,
                                 Map.of("assetId", assetIdentity, "fileName", zipEntryName, "bytesTotal", totalBytes));
@@ -192,6 +210,11 @@ public class RestoreJobHandler implements JobHandler {
                     @Override public void succeeded(String assetIdentity, String zipEntryName, String objectKey, long uploadedBytes) {
                         context.fileStepSucceeded(snapshot.getSourceOrderId(), assetIdentity,
                                 "RESTORE_OBJECT_UPLOAD", uploadedBytes);
+                        if (sourceLocation != null && sourceLocation.getSourceStorageVolumeId() != null) {
+                            context.fileAtVolume(snapshot.getSourceOrderId(), assetIdentity, "RESTORE_OBJECT_UPLOAD", "SUCCEEDED",
+                                    uploadedBytes, uploadedBytes, objectKey, sourceLocation.getSourceStorageVolumeId(),
+                                    sourceLocation.getSourceStorageKey() + "!/" + zipEntryName, null);
+                        }
                         context.orderInfo(snapshot.getSourceOrderId(), "FILE_UPLOAD_SUCCEEDED", "文件上传",
                                 "文件上传成功｜资产ID=" + assetIdentity + "｜文件=" + zipEntryName + "｜容量=" + uploadedBytes + "字节",
                                 Map.of("assetId", assetIdentity, "fileName", zipEntryName, "bytesUploaded", uploadedBytes));
@@ -201,6 +224,11 @@ public class RestoreJobHandler implements JobHandler {
                                                  long uploadedBytes, Throwable failure) {
                         context.fileStepFailed(snapshot.getSourceOrderId(), assetIdentity,
                                 "RESTORE_OBJECT_UPLOAD", uploadedBytes, failure);
+                        if (sourceLocation != null && sourceLocation.getSourceStorageVolumeId() != null) {
+                            context.fileAtVolume(snapshot.getSourceOrderId(), assetIdentity, "RESTORE_OBJECT_UPLOAD", "FAILED",
+                                    uploadedBytes, 0L, objectKey, sourceLocation.getSourceStorageVolumeId(),
+                                    sourceLocation.getSourceStorageKey() + "!/" + zipEntryName, failure);
+                        }
                         context.orderError(snapshot.getSourceOrderId(), "FILE_UPLOAD_FAILED", "文件上传",
                                 "文件上传失败｜资产ID=" + assetIdentity + "｜文件=" + zipEntryName + "｜原因=" + safe(failure),
                                 Map.of("assetId", assetIdentity, "fileName", zipEntryName, "bytesUploaded", uploadedBytes,
@@ -247,6 +275,8 @@ public class RestoreJobHandler implements JobHandler {
                         Map.of("sourceOrderId", snapshot.getSourceOrderId(), "snapshotId", snapshot.getId(),
                                 "retryPhase", phase, "reason", safe(failure), "nonRetryable", nonRetryable));
                 log.warn("线上恢复订单失败，继续后续订单｜任务ID={}｜订单ID={}｜原因={}", job.getId(), snapshot.getSourceOrderId(), failure.getMessage(), failure);
+            } finally {
+                if (restoreLease != null) restoreLease.close();
             }
             done++;
             context.safePoint("RESTORE_ORDER_COMPLETED", done);

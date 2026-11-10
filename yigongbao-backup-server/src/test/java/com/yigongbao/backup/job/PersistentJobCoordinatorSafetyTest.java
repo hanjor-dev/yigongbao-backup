@@ -56,6 +56,32 @@ class PersistentJobCoordinatorSafetyTest {
     }
 
     @Test
+    void runningArchiveCancellationIsLeftForHandlerToCleanUpBeforeTerminalState() {
+        JobMapper mapper = mock(JobMapper.class);
+        JobEntity running = running(20L, "worker", 4L);
+        running.setJobType("VOLUME_ARCHIVE");
+        running.setCancelRequested(true);
+        when(mapper.selectById(20L)).thenReturn(running);
+        PersistentJobCoordinator coordinator = new PersistentJobCoordinator(mapper);
+
+        assertThatThrownBy(() -> coordinator.safePoint(20L, "worker", 4L, "VERIFYING", 0))
+                .isInstanceOf(JobCancelledException.class);
+
+        verify(mapper, never()).update(any(), any());
+    }
+
+    @Test
+    void cancellationBecomesTerminalDuringAutomaticLeaseRenewal() {
+        JobMapper mapper = mock(JobMapper.class);
+        JobEntity running = running(7L, "worker", 10L); running.setCancelRequested(true);
+        when(mapper.selectById(7L)).thenReturn(running); when(mapper.update(any(), any())).thenReturn(1);
+        PersistentJobCoordinator coordinator = new PersistentJobCoordinator(mapper);
+
+        assertThatThrownBy(() -> coordinator.renewLease(7L, "worker", 10L, 60))
+                .isInstanceOf(JobCancelledException.class);
+    }
+
+    @Test
     void expiredLeaseIsRecoveredAndFailureUsesRetryBackoff() {
         JobMapper mapper = mock(JobMapper.class);
         JobEntity expired = running(3L, "dead-worker", 5L); expired.setVersion(0);
@@ -82,6 +108,25 @@ class PersistentJobCoordinatorSafetyTest {
 
         assertThat(new PersistentJobCoordinator(mapper).recoverExpired(3)).isEqualTo(1);
         verify(mapper).update(isNull(), argThat(update -> update.getSqlSet().contains("status=#{")));
+    }
+
+    @Test
+    void expiredArchiveLeaseKeepsSameAttemptRecoverableBeyondGenericLimit() {
+        JobMapper mapper = mock(JobMapper.class);
+        JobEntity expired = running(21L, "dead-worker", 9L);
+        expired.setJobType("VOLUME_ARCHIVE");
+        expired.setVersion(0); expired.setRetryCount(99);
+        expired.setLeaseUntil(LocalDateTime.now().minusSeconds(1));
+        when(mapper.selectList(any())).thenReturn(List.of(expired));
+        when(mapper.update(any(), any())).thenReturn(1);
+
+        assertThat(new PersistentJobCoordinator(mapper).recoverExpired(3)).isEqualTo(1);
+
+        verify(mapper).update(isNull(), argThat(update -> {
+            var values = ((com.baomidou.mybatisplus.core.conditions.AbstractWrapper<?, ?, ?>) update)
+                    .getParamNameValuePairs();
+            return values.containsValue("CREATED") && !values.containsValue("FAILED");
+        }));
     }
 
     private static JobEntity running(long id, String owner, long token) {

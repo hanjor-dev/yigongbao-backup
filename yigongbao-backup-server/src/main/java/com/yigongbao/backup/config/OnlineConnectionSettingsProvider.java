@@ -32,6 +32,7 @@ public class OnlineConnectionSettingsProvider {
         return new Settings(baseUri,
                 Duration.ofSeconds(configs.getLong("online.connect-timeout-seconds", 10L, 1L)),
                 Duration.ofSeconds(configs.getLong("online.request-timeout-seconds", 60L, 1L)),
+                Duration.ofSeconds(configs.getLong("online.file-transfer-timeout-seconds", 7200L, 60L)),
                 secret);
     }
 
@@ -49,5 +50,6 @@ public class OnlineConnectionSettingsProvider {
 
     /** 单次调用使用的线上连接快照。 */
     public record Settings(URI baseUri, Duration connectTimeout, Duration requestTimeout,
+                           Duration fileTransferTimeout,
                            String sharedSecret) { }
 }

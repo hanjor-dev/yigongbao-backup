@@ -28,6 +28,14 @@ export function isTerminalJob(job) {
   return ['SUCCEEDED', 'FAILED', 'PARTIAL_FAILED', 'CANCELLED', 'CANCELED'].includes(String(job?.state || job?.status || '').toUpperCase());
 }
 
+/** 将详情轮询结果同步回列表，避免取消等终态只在详情中更新。 */
+export function replaceJobById(items, refreshed) {
+  if (!Array.isArray(items) || !refreshed?.id) return Array.isArray(items) ? items : [];
+  const index = items.findIndex(item => String(item?.id) === String(refreshed.id));
+  if (index < 0) return items;
+  return items.map((item, current) => current === index ? refreshed : item);
+}
+
 /** 将浏览器上传阶段和服务器后台任务阶段统一为可展示状态。 */
 export function supplementTaskState(job, uploadPercent = 100) {
   const percent = Math.min(100, Math.max(0, Number(uploadPercent) || 0));

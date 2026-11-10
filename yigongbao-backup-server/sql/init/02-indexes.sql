@@ -63,6 +63,12 @@ CALL add_backup_index_if_missing('bk_cold_volume','uk_bk_cold_volume_name','CREA
 
 CALL add_backup_index_if_missing('bk_storage_volume','uk_bk_storage_volume_code','CREATE UNIQUE INDEX uk_bk_storage_volume_code ON bk_storage_volume(volume_code)');
 CALL add_backup_index_if_missing('bk_storage_volume','uk_bk_storage_hot_active','CREATE UNIQUE INDEX uk_bk_storage_hot_active ON bk_storage_volume(hot_active_singleton)');
+CALL add_backup_index_if_missing('bk_volume_archive','uk_bk_volume_archive_attempt','CREATE UNIQUE INDEX uk_bk_volume_archive_attempt ON bk_volume_archive(source_volume_id,attempt_no)');
+CALL add_backup_index_if_missing('bk_volume_archive','uk_bk_volume_archive_idempotency','CREATE UNIQUE INDEX uk_bk_volume_archive_idempotency ON bk_volume_archive(idempotency_key)');
+CALL add_backup_index_if_missing('bk_volume_archive','idx_bk_volume_archive_phase','CREATE INDEX idx_bk_volume_archive_phase ON bk_volume_archive(phase,update_time)');
+CALL add_backup_index_if_missing('bk_volume_archive_item','uk_bk_volume_archive_item_path','CREATE UNIQUE INDEX uk_bk_volume_archive_item_path ON bk_volume_archive_item(archive_id,storage_volume_id,storage_key(191))');
+CALL add_backup_index_if_missing('bk_volume_archive_item','idx_bk_volume_archive_item_progress','CREATE INDEX idx_bk_volume_archive_item_progress ON bk_volume_archive_item(archive_id,verification_status,id)');
+CALL add_backup_index_if_missing('bk_storage_volume_read_lease','idx_bk_volume_read_lease_active','CREATE INDEX idx_bk_volume_read_lease_active ON bk_storage_volume_read_lease(storage_volume_id,status,expires_at)');
 CALL add_backup_index_if_missing('bk_storage_volume','idx_bk_storage_volume_status','CREATE INDEX idx_bk_storage_volume_status ON bk_storage_volume(tier,mount_status,write_status,priority)');
 CALL add_backup_index_if_missing('bk_storage_volume','idx_bk_storage_volume_fingerprint','CREATE INDEX idx_bk_storage_volume_fingerprint ON bk_storage_volume(volume_fingerprint)');
 CALL add_backup_index_if_missing('bk_storage_volume_migration_issue','idx_bk_storage_volume_migration_issue','CREATE INDEX idx_bk_storage_volume_migration_issue ON bk_storage_volume_migration_issue(resolution_status,issue_type)');
@@ -75,8 +81,10 @@ CALL add_backup_index_if_missing('bk_job','idx_bk_job_target_volume','CREATE IND
 CALL add_backup_index_if_missing('bk_job_order','uk_bk_job_order','CREATE UNIQUE INDEX uk_bk_job_order ON bk_job_order(job_id,source_order_id)');
 CALL add_backup_index_if_missing('bk_job_order','idx_bk_job_order_snapshot','CREATE INDEX idx_bk_job_order_snapshot ON bk_job_order(snapshot_id)');
 CALL add_backup_index_if_missing('bk_job_order','idx_bk_job_order_source_volume','CREATE INDEX idx_bk_job_order_source_volume ON bk_job_order(source_storage_volume_id,status)');
+CALL add_backup_index_if_missing('bk_job_order','idx_bk_job_order_storage_volume','CREATE INDEX idx_bk_job_order_storage_volume ON bk_job_order(storage_volume_id,job_id)');
 CALL add_backup_index_if_missing('bk_job_file','uk_bk_job_file_step','CREATE UNIQUE INDEX uk_bk_job_file_step ON bk_job_file(job_id,asset_identity,step)');
 CALL add_backup_index_if_missing('bk_job_file','idx_bk_job_file_status','CREATE INDEX idx_bk_job_file_status ON bk_job_file(job_id,status,id)');
+CALL add_backup_index_if_missing('bk_job_file','idx_bk_job_file_storage_volume','CREATE INDEX idx_bk_job_file_storage_volume ON bk_job_file(storage_volume_id,job_id)');
 CALL add_backup_index_if_missing('bk_job_execution_log','idx_bk_job_log_task_time','CREATE INDEX idx_bk_job_log_task_time ON bk_job_execution_log(job_id,occurred_at,id)');
 CALL add_backup_index_if_missing('bk_job_execution_log','idx_bk_job_log_order_time','CREATE INDEX idx_bk_job_log_order_time ON bk_job_execution_log(job_id,source_order_id,occurred_at,id)');
 CALL add_backup_index_if_missing('bk_lock','uk_bk_lock_key','CREATE UNIQUE INDEX uk_bk_lock_key ON bk_lock(lock_key)');

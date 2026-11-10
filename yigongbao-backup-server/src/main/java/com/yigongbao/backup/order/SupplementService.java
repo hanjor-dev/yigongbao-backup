@@ -16,16 +16,23 @@ import java.security.DigestInputStream;
 import java.security.MessageDigest;
 import java.time.LocalDateTime;
 import com.yigongbao.backup.config.RuntimeConfigService;
+import com.yigongbao.backup.storage.volume.StorageVolumeEntity;
+import com.yigongbao.backup.storage.volume.StorageVolumeMapper;
+import com.yigongbao.backup.storage.location.ArtifactCopyEntity;
+import com.yigongbao.backup.storage.location.ArtifactCopyMapper;
+import com.yigongbao.backup.storage.location.ArtifactReplicaResolver;
+import org.springframework.transaction.annotation.Transactional;
 
 /** 订单补传只允许配置的工程文件类型和大小，第一期不提供删除。 */
-public final class SupplementService {
-    private final VolumeArtifactStore store; private final Set<String> extensions; private final long maxBytes; private final BkSupplementFileMapper mapper; private final RuntimeConfigService runtimeConfig;
+public class SupplementService {
+    private final VolumeArtifactStore store; private final Set<String> extensions; private final long maxBytes; private final BkSupplementFileMapper mapper; private final RuntimeConfigService runtimeConfig; private final StorageVolumeMapper volumes; private final ArtifactCopyMapper copies; private final ArtifactReplicaResolver replicas;
     public SupplementService(ArtifactStore store, Set<String> extensions, long maxBytes) { this(store, extensions, maxBytes, null); }
     public SupplementService(ArtifactStore store, Set<String> extensions, long maxBytes, BkSupplementFileMapper mapper) { this(store, extensions, maxBytes, mapper, null); }
     public SupplementService(ArtifactStore store, BkSupplementFileMapper mapper, RuntimeConfigService runtimeConfig) { this(store, Set.of("zip", "step", "stl", "dcm"), 1073741824L, mapper, runtimeConfig); }
-    public SupplementService(ArtifactStore store, Set<String> extensions, long maxBytes, BkSupplementFileMapper mapper, RuntimeConfigService runtimeConfig) { this.store=new LegacyArtifactStoreVolumeAdapter(store); this.extensions=extensions; this.maxBytes=maxBytes; this.mapper=mapper; this.runtimeConfig=runtimeConfig; }
+    public SupplementService(ArtifactStore store, Set<String> extensions, long maxBytes, BkSupplementFileMapper mapper, RuntimeConfigService runtimeConfig) { this.store=new LegacyArtifactStoreVolumeAdapter(store); this.extensions=extensions; this.maxBytes=maxBytes; this.mapper=mapper; this.runtimeConfig=runtimeConfig; this.volumes=null; this.copies=null; this.replicas=null; }
     /** 多卷生产构造器：调用方必须在任务创建时锁定目标卷。 */
-    public SupplementService(VolumeArtifactStore store, BkSupplementFileMapper mapper, RuntimeConfigService runtimeConfig) { this.store=store; this.extensions=Set.of("zip", "step", "stl", "dcm"); this.maxBytes=1073741824L; this.mapper=mapper; this.runtimeConfig=runtimeConfig; }
+    public SupplementService(VolumeArtifactStore store, BkSupplementFileMapper mapper, RuntimeConfigService runtimeConfig, StorageVolumeMapper volumes,
+                             ArtifactCopyMapper copies, ArtifactReplicaResolver replicas) { this.store=store; this.extensions=Set.of("zip", "step", "stl", "dcm"); this.maxBytes=1073741824L; this.mapper=mapper; this.runtimeConfig=runtimeConfig; this.volumes=volumes; this.copies=copies; this.replicas=replicas; }
     public String upload(String orderId, String fileName, InputStream content, long size) throws IOException {
         if (orderId == null || !orderId.matches("[A-Za-z0-9_-]{1,64}")) throw new IllegalArgumentException("订单号非法");
         if (size < 0 || size > maxBytes()) throw new IllegalArgumentException("补传文件超过大小上限");
@@ -44,6 +51,7 @@ public final class SupplementService {
     }
 
     /** 上传时将文件位置绑定到已锁定的热备卷。 */
+    @Transactional(rollbackFor = Exception.class)
     public String uploadForSnapshot(long snapshotId, String orderId, String fileName, InputStream content,
                                    long size, long uploadedBy, String contentType, String remark, long storageVolumeId) throws IOException {
         if (mapper == null) throw new IllegalStateException("补传元数据持久化未配置");
@@ -73,6 +81,16 @@ public final class SupplementService {
             entity.setUploadedAt(LocalDateTime.now()); entity.setRemark(remark); entity.setHotStatus("AVAILABLE");
             entity.setColdCoverageStatus("PENDING"); entity.setCreateBy(uploadedBy); entity.setUpdateBy(uploadedBy);
             mapper.insert(entity);
+            if (copies != null) {
+                ArtifactCopyEntity copy = new ArtifactCopyEntity();
+                copy.setArtifactType("SUPPLEMENT_FILE"); copy.setArtifactId(entity.getId());
+                copy.setLocationType("HOT_NAS"); copy.setLocationRefId(storageVolumeId);
+                copy.setStorageVolumeId(storageVolumeId); copy.setStorageKey(key);
+                copy.setState("VERIFIED"); copy.setLifecycle("ACTIVE"); copy.setSize(actualSize);
+                copy.setSha256(digest); copy.setLastVerifiedAt(LocalDateTime.now());
+                copy.setCreateBy(uploadedBy); copy.setUpdateBy(uploadedBy);
+                copies.insert(copy);
+            }
             return id;
         } catch (java.security.NoSuchAlgorithmException e) {
             throw new IllegalStateException("SHA-256不可用", e);
@@ -115,7 +133,7 @@ public final class SupplementService {
                         if (fileId.isBlank() || name.length() <= 37) {
                             return null;
                         }
-                        try { return new SupplementInfo(fileId, name.substring(37), Files.size(path)); }
+                        try { return new SupplementInfo(fileId, name.substring(37), Files.size(path), null, null, null, null, null, true, null); }
                         catch (Exception ignored) { return null; }
                     })
                     .filter(java.util.Objects::nonNull)
@@ -131,17 +149,53 @@ public final class SupplementService {
         return mapper.selectList(com.baomidou.mybatisplus.core.toolkit.Wrappers.<BkSupplementFileEntity>lambdaQuery()
                         .eq(BkSupplementFileEntity::getSnapshotId, snapshotId)
                         .orderByDesc(BkSupplementFileEntity::getUploadedAt))
-                .stream().map(entity -> new SupplementInfo(fileId(entity.getInternalFilename()), entity.getOriginalFilename(), entity.getSize())).toList();
+                .stream().map(this::info).toList();
+    }
+
+    public SupplementInfo locationForSnapshot(long snapshotId, String fileId) {
+        if (mapper == null) throw new IllegalStateException("补传元数据持久化未配置");
+        return mapper.selectList(com.baomidou.mybatisplus.core.toolkit.Wrappers.<BkSupplementFileEntity>lambdaQuery()
+                        .eq(BkSupplementFileEntity::getSnapshotId, snapshotId).eq(BkSupplementFileEntity::getIsDeleted, 0))
+                .stream().filter(item -> fileId.equals(fileId(item.getInternalFilename()))).findFirst().map(this::info)
+                .orElseThrow(() -> new IllegalArgumentException("补传文件不存在"));
+    }
+
+    private SupplementInfo info(BkSupplementFileEntity entity) {
+        Long effectiveVolumeId = entity.getStorageVolumeId();
+        String effectiveKey = entity.getStorageKey();
+        StorageVolumeEntity volume = volumes == null || effectiveVolumeId == null ? null : volumes.selectById(effectiveVolumeId);
+        boolean accessible = volume == null || "ONLINE".equals(volume.getMountStatus());
+        String reason = accessible ? null : "文件所在存储卷当前不可访问";
+        if (replicas != null && entity.getId() != null) {
+            try {
+                ArtifactReplicaResolver.ReadableArtifactReplica replica = replicas.resolveReadable("SUPPLEMENT_FILE", entity.getId());
+                effectiveVolumeId = replica.storageVolumeId(); effectiveKey = replica.storageKey();
+                volume = volumes == null ? null : volumes.selectById(effectiveVolumeId);
+                accessible = true; reason = null;
+            }
+            catch (RuntimeException unavailable) { accessible = false; reason = unavailable.getMessage(); }
+        }
+        return new SupplementInfo(fileId(entity.getInternalFilename()), entity.getOriginalFilename(), entity.getSize(),
+                effectiveVolumeId, effectiveKey, volume == null ? null : volume.getDisplayName(),
+                volume == null ? null : volume.getTier(), volume == null ? null : volume.getMountStatus(), accessible, reason);
     }
 
     public InputStream openForSnapshot(long snapshotId, String fileId) throws IOException {
+        BkSupplementFileEntity entity = requireForSnapshot(snapshotId, fileId);
+        if (replicas != null && entity.getId() != null) {
+            ArtifactReplicaResolver.ReadableArtifactReplica replica = replicas.resolveReadable("SUPPLEMENT_FILE", entity.getId());
+            return store.open(replica.storageVolumeId(), replica.storageKey());
+        }
+        return store.open(entity.getStorageVolumeId() == null ? 0L : entity.getStorageVolumeId(), entity.getStorageKey());
+    }
+
+    public BkSupplementFileEntity requireForSnapshot(long snapshotId, String fileId) throws java.nio.file.NoSuchFileException {
         if (mapper == null) throw new IllegalStateException("补传元数据持久化未配置");
-        BkSupplementFileEntity entity = mapper.selectList(com.baomidou.mybatisplus.core.toolkit.Wrappers.<BkSupplementFileEntity>lambdaQuery()
+        return mapper.selectList(com.baomidou.mybatisplus.core.toolkit.Wrappers.<BkSupplementFileEntity>lambdaQuery()
                         .eq(BkSupplementFileEntity::getSnapshotId, snapshotId)
                         .eq(BkSupplementFileEntity::getIsDeleted, 0))
-                .stream().filter(item -> fileId.equals(fileId(item.getInternalFilename()))).findFirst().orElse(null);
-        if (entity == null) throw new java.nio.file.NoSuchFileException(fileId);
-        return store.open(entity.getStorageVolumeId() == null ? 0L : entity.getStorageVolumeId(), entity.getStorageKey());
+                .stream().filter(item -> fileId.equals(fileId(item.getInternalFilename()))).findFirst()
+                .orElseThrow(() -> new java.nio.file.NoSuchFileException(fileId));
     }
 
     private Set<String> allowedExtensions() {
@@ -200,6 +254,8 @@ public final class SupplementService {
         catch (IllegalArgumentException ignored) { return ""; }
     }
 
-    public record SupplementInfo(String fileId, String fileName, long size) {
+    public record SupplementInfo(String fileId, String fileName, long size, Long storageVolumeId, String storageKey,
+                                 String storageVolumeName, String storageTier, String storageMountStatus,
+                                 boolean storageAccessible, String storageUnavailableReason) {
     }
 }

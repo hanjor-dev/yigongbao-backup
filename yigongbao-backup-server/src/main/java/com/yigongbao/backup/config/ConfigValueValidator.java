@@ -13,13 +13,14 @@ public final class ConfigValueValidator {
             "storage.backup-reservation-percent", "storage.volume-switch.enabled",
             "storage.volume-switch.threshold-percent", "storage.volume-health.interval-minutes",
             "storage.threshold.hot.percent", "storage.threshold.cold.percent",
+            "storage.read-lease.ttl-seconds", "storage.read-lease.heartbeat-seconds",
             "cold.max-import-bytes",
             "restore.enabled", "restore.conflict-policy", "restore.retry-count",
             "cleanup.schedule.enabled", "cleanup.schedule.interval-hours", "cleanup.retention-days",
             "cleanup.batch-size", "supplement.allowed-extensions", "supplement.max-file-size-bytes",
             "account.sync-enabled", "account.sync-delay-minutes", "account.sync-page-size",
             "online.enabled", "online.base-url", "online.connect-timeout-seconds",
-            "online.request-timeout-seconds", "job.dispatch-interval-ms",
+            "online.request-timeout-seconds", "online.file-transfer-timeout-seconds", "job.dispatch-interval-ms",
             "job.lease-seconds", "job.recovery-interval-ms", "job.max-retry-count");
     private ConfigValueValidator() { }
 
@@ -79,6 +80,23 @@ public final class ConfigValueValidator {
         }
         if (key.equals("job.lease-seconds")) {
             if (integer(key, normalized) < 10) throw new IllegalArgumentException("任务租约不能小于10秒");
+            return;
+        }
+        if (key.equals("online.file-transfer-timeout-seconds")) {
+            int seconds = integer(key, normalized);
+            if (seconds < 60 || seconds > 86400) {
+                throw new IllegalArgumentException("线上文件传输超时必须在60到86400秒之间");
+            }
+            return;
+        }
+        if (key.equals("storage.read-lease.ttl-seconds")) {
+            int seconds=integer(key,normalized);
+            if(seconds<30||seconds>86400) throw new IllegalArgumentException("读取租约时长必须在30到86400秒之间");
+            return;
+        }
+        if (key.equals("storage.read-lease.heartbeat-seconds")) {
+            int seconds=integer(key,normalized);
+            if(seconds<5||seconds>3600) throw new IllegalArgumentException("读取租约心跳必须在5到3600秒之间");
             return;
         }
         if (key.equals("cleanup.batch-size") || key.endsWith("page-size")) {

@@ -39,14 +39,23 @@ public class StorageVolumeDiscoveryService {
             }
             try {
                 FileStore fileStore = Files.getFileStore(normalizedMount);
+                long totalBytes = fileStore.getTotalSpace();
+                long usableBytes = fileStore.getUsableSpace();
                 candidates.add(new DiscoveredStorageVolume(normalizedMount,
                         normalizedMount.resolve(MANAGED_DIRECTORY), classify(fileStore),
-                        fileStore.name(), fileStore.type()));
+                        fileStore.name(), fileStore.type(), volumeSerial(fileStore), totalBytes, usableBytes,
+                        Math.max(0L, totalBytes - usableBytes)));
             } catch (IOException ignored) {
                 // 无法读取的挂载点不能被纳管，交由后续健康探测和管理员界面说明。
             }
         }
         return candidates;
+    }
+
+    /** WindowsFileStore 提供稳定 volume serial；非 Windows 文件系统明确返回空，不伪造物理身份。 */
+    private String volumeSerial(FileStore store) {
+        try { Object value=store.getAttribute("volume:vsn"); return value==null?null:String.valueOf(value); }
+        catch (RuntimeException | IOException ignored) { return null; }
     }
 
     /** 根据 FileStore 名称/类型识别已映射网络盘；其它可见目录默认本地候选。 */
