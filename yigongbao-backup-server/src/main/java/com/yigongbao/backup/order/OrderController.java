@@ -100,6 +100,8 @@ public class OrderController {
                 option("PRESENT", "存在"), option("ABSENT", "缺失"), option("PARTIAL", "部分存在"),
                 option("CLEARED", "已清理"), option("RESTORING", "恢复中"),
                 option("ERROR", "异常"), option("UNKNOWN", "未知")));
+        options.put("localReplicaStates", List.of(option("PRESENT", "存在"), option("PARTIAL", "部分异常"),
+                option("ERROR", "异常"), option("ABSENT", "缺失")));
         return ApiResponse.ok(options, rid());
     }
 
@@ -169,12 +171,12 @@ public class OrderController {
             query.eq(OrderSnapshotEntity::getCloudRollup, cloudRollup);
         }
         if (hotRollup != null && !hotRollup.isBlank()) {
-            requireStatus(hotRollup, "热备存储状态", ROLLUP_STATES);
-            query.eq(OrderSnapshotEntity::getHotRollup, hotRollup);
+            requireStatus(hotRollup, "热备存储状态", LOCAL_REPLICA_STATES);
+            applyCurrentTierFilter(query, "HOT", hotRollup);
         }
         if (coldRollup != null && !coldRollup.isBlank()) {
-            requireStatus(coldRollup, "冷备存储状态", ROLLUP_STATES);
-            query.eq(OrderSnapshotEntity::getColdRollup, coldRollup);
+            requireStatus(coldRollup, "冷备存储状态", LOCAL_REPLICA_STATES);
+            applyCurrentTierFilter(query, "COLD", coldRollup);
         }
         query.orderByDesc(OrderSnapshotEntity::getOrderCreatedAt)
                 .orderByDesc(OrderSnapshotEntity::getId);
@@ -216,7 +218,10 @@ public class OrderController {
                 asset.setStorageVolumeId(location.storageVolumeId()); asset.setStorageVolumeName(location.storageVolumeName());
                 asset.setStorageTier(location.storageTier()); asset.setStorageMountStatus(location.mountStatus());
                 asset.setStorageAccessible(location.accessible());
-                asset.setStorageArchiveNote(location.archiveNote()); asset.setStoragePhysicalLocation(location.physicalLocation());
+                asset.setStorageUnavailableReason(location.unavailableReason());
+                asset.setStorageDiagnosticReason(location.diagnosticReason());
+                asset.setStorageArchiveNote(location.archiveNote()); asset.setStorageOfflineLabelNote(location.offlineLabelNote());
+                asset.setStoragePhysicalLocation(location.physicalLocation()); asset.setStoragePeriodLabel(location.periodLabel());
                 asset.setStorageKey(location.storageKey() == null || asset.getPackageEntryName() == null ? null
                         : location.storageKey() + "!/" + asset.getPackageEntryName());
             }
@@ -360,16 +365,43 @@ public class OrderController {
                         .in(OrderPackageEntity::getSnapshotId, ids).eq(OrderPackageEntity::getStatus, "AVAILABLE")
                         .orderByDesc(OrderPackageEntity::getId))
                 .forEach(pkg -> bySnapshot.putIfAbsent(pkg.getSnapshotId(), pkg));
+        Map<Long, OrderStorageLocationService.LocationView> projected = locations.locateAll(bySnapshot.values());
         for (OrderSnapshotEntity row : rows) {
-            OrderStorageLocationService.LocationView location = locations.locate(bySnapshot.get(row.getId()));
+            OrderPackageEntity pkg = bySnapshot.get(row.getId());
+            OrderStorageLocationService.LocationView location = pkg == null ? locations.locate(null) : projected.get(pkg.getId());
             row.setStorageVolumeId(location.storageVolumeId()); row.setStorageVolumeName(location.storageVolumeName());
             row.setStorageTier(location.storageTier()); row.setStorageKey(location.storageKey());
             row.setStorageMountStatus(location.mountStatus()); row.setStorageAccessible(location.accessible());
             row.setStorageUnavailableReason(location.unavailableReason());
+            row.setStorageDiagnosticReason(location.diagnosticReason());
             row.setStorageAdminStatus(location.adminStatus()); row.setStorageOperationStatus(location.operationStatus());
             row.setStorageArchiveNote(location.archiveNote()); row.setStorageOfflineLabelNote(location.offlineLabelNote());
             row.setStoragePhysicalLocation(location.physicalLocation());
+            row.setStorageOrderCreatedFrom(location.orderCreatedFrom()); row.setStorageOrderCreatedTo(location.orderCreatedTo());
+            row.setStoragePeriodLabel(location.periodLabel());
+            row.setHotRollup(location.hotRollup()); row.setColdRollup(location.coldRollup());
         }
+    }
+
+    /** HOT/COLD 当前状态由有效副本所属卷派生，禁止读取备份发生时写入的快照 rollup。 */
+    private static void applyCurrentTierFilter(LambdaQueryWrapper<OrderSnapshotEntity> query, String tier, String status) {
+        status = status.trim().toUpperCase(java.util.Locale.ROOT);
+        String healthy = tierCopyExists(tier, "ac.state IN ('VERIFIED','PRESENT')");
+        String abnormal = tierCopyExists(tier, "(ac.state IS NULL OR ac.state NOT IN ('VERIFIED','PRESENT'))");
+        if ("PRESENT".equals(status)) query.apply(healthy + " AND NOT " + abnormal);
+        else if ("PARTIAL".equals(status)) query.apply(healthy + " AND " + abnormal);
+        else if ("ERROR".equals(status)) query.apply("NOT " + healthy + " AND " + abnormal);
+        else if ("ABSENT".equals(status)) query.apply("NOT " + healthy + " AND NOT " + abnormal);
+        else query.apply("1 = 0");
+    }
+
+    private static String tierCopyExists(String tier, String statePredicate) {
+        return "EXISTS (SELECT 1 FROM bk_order_package op "
+                + "JOIN bk_artifact_copy ac ON ac.artifact_type = 'ORDER_PACKAGE' AND ac.artifact_id = op.id "
+                + "AND ac.lifecycle = 'ACTIVE' AND " + statePredicate + " AND ac.is_deleted = 0 "
+                + "JOIN bk_storage_volume sv ON sv.id = ac.storage_volume_id AND sv.is_deleted = 0 "
+                + "WHERE op.snapshot_id = bk_order_snapshot.id AND op.status = 'AVAILABLE' AND op.is_deleted = 0 "
+                + "AND sv.tier = '" + tier + "')";
     }
 
     /** 将订单号限制为安全的下载文件名，避免响应头注入和非法路径字符。 */
@@ -381,6 +413,7 @@ public class OrderController {
 
     private static final java.util.Set<String> ROLLUP_STATES = java.util.Set.of(
             "PRESENT", "CLEARED", "RESTORING", "AVAILABLE", "PARTIAL", "ABSENT", "ERROR", "UNKNOWN");
+    private static final java.util.Set<String> LOCAL_REPLICA_STATES = java.util.Set.of("PRESENT", "PARTIAL", "ERROR", "ABSENT");
 
     private static void requireStatus(String value, String field, java.util.Set<String> allowed) {
         if (!allowed.contains(value.trim().toUpperCase(java.util.Locale.ROOT))) {

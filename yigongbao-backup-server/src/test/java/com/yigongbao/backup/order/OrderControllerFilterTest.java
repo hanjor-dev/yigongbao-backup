@@ -27,7 +27,11 @@ class OrderControllerFilterTest {
     }
 
     @Test
-    void acceptsStorageRollupFiltersAndAppliesThemToQuery() {
+    void localStorageFiltersUseCurrentArtifactVolumeInsteadOfSnapshotRollups() {
+        com.baomidou.mybatisplus.core.metadata.TableInfoHelper.initTableInfo(
+                new org.apache.ibatis.builder.MapperBuilderAssistant(
+                        new com.baomidou.mybatisplus.core.MybatisConfiguration(), "orderStorageFilterTest"),
+                OrderSnapshotEntity.class);
         SaManager.setSaTokenContext(new SaTokenContextForThreadLocal());
         SaTokenContextForThreadLocalStorage.setBox(mock(SaRequest.class), mock(SaResponse.class), storage());
         StpUtil.login(1L);
@@ -36,9 +40,14 @@ class OrderControllerFilterTest {
         OrderController controller = new OrderController(snapshots, mock(AssetMapper.class),
                 mock(OrderPackageMapper.class), mock(ArtifactStore.class));
 
-        controller.list(1, 20, null, null, null, null, null, null, "PRESENT", "ABSENT", "PARTIAL");
+        controller.list(1, 20, null, null, null, null, null, null, "PRESENT", "PRESENT", "ABSENT");
 
-        verify(snapshots).selectPage(any(Page.class), argThat(query -> query != null));
+        verify(snapshots).selectPage(any(Page.class), argThat(query -> {
+            String sql = query.getSqlSegment();
+            return sql.contains("bk_artifact_copy") && sql.contains("bk_storage_volume")
+                    && sql.contains("HOT") && sql.contains("COLD")
+                    && !sql.contains("hot_rollup") && !sql.contains("cold_rollup");
+        }));
     }
 
     @Test
@@ -84,6 +93,30 @@ class OrderControllerFilterTest {
     }
 
     @Test
+    void currentReplicaFilterAcceptsDiagnosticPartialState() {
+        com.baomidou.mybatisplus.core.metadata.TableInfoHelper.initTableInfo(
+                new org.apache.ibatis.builder.MapperBuilderAssistant(
+                        new com.baomidou.mybatisplus.core.MybatisConfiguration(), "orderDiagnosticStorageFilterTest"),
+                OrderSnapshotEntity.class);
+        SaManager.setSaTokenContext(new SaTokenContextForThreadLocal());
+        SaTokenContextForThreadLocalStorage.setBox(mock(SaRequest.class), mock(SaResponse.class), storage());
+        StpUtil.login(1L);
+        OrderSnapshotMapper snapshots = mock(OrderSnapshotMapper.class);
+        when(snapshots.selectPage(any(), any())).thenAnswer(invocation -> invocation.getArgument(0));
+        OrderController controller = new OrderController(snapshots,
+                mock(AssetMapper.class), mock(OrderPackageMapper.class), mock(ArtifactStore.class));
+
+        controller.list(1, 20, null, null, null, null,
+                null, null, null, "PARTIAL", null);
+
+        verify(snapshots).selectPage(any(Page.class), argThat(query -> {
+            String sql = query.getSqlSegment();
+            return sql.contains("state IN ('VERIFIED','PRESENT')")
+                    && sql.contains("state NOT IN ('VERIFIED','PRESENT')");
+        }));
+    }
+
+    @Test
     void exposesCompleteFixedFilterOptionsWithoutReadingOrderSnapshots() {
         SaManager.setSaTokenContext(new SaTokenContextForThreadLocal());
         SaTokenContextForThreadLocalStorage.setBox(mock(SaRequest.class), mock(SaResponse.class), storage());
@@ -106,6 +139,9 @@ class OrderControllerFilterTest {
         assertThat(options.get("storageStates"))
                 .extracting(option -> option.get("value"))
                 .contains("PRESENT", "ABSENT", "CLEARED", "ERROR");
+        assertThat(options.get("localReplicaStates"))
+                .extracting(option -> option.get("value"))
+                .containsExactly("PRESENT", "PARTIAL", "ERROR", "ABSENT");
         verifyNoInteractions(snapshots);
     }
 

@@ -41,6 +41,8 @@ public class Job {
     private String currentStorageTier;
     private String currentMountStatus;
     private String currentOperationStatus;
+    private Boolean currentStorageResolved;
+    private String currentStorageUnavailableReason;
     private int manifestSucceeded;
     private int manifestFailed;
     private int expectedFileTotal;

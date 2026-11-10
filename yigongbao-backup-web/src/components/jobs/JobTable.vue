@@ -1,5 +1,6 @@
 <script setup>
 import { useBackupContext } from '../../composables/useBackupContext.js';
+import { storageVolumeView } from '../../taskCenter.js';
 const { jobs, jobPage, jobSize, jobTotal, jobProgress, selectJob, cancelJob, retryJob, changeJobPage, changeJobSize } = useBackupContext();
 const terminalStates = ['SUCCEEDED','FAILED','PARTIAL_FAILED','CANCELLED','CANCELED'];
 const jobState = (job) => job.state || job.status || '';
@@ -12,6 +13,7 @@ const statusText = (job) => simulation(job) && jobState(job) === 'SUCCEEDED' ? '
 const expectedSummary = (job) => `Manifest 成功 ${job.manifestSucceeded || 0} / 失败 ${job.manifestFailed || 0}；预计文件 ${job.expectedFileTotal || 0}`;
 const bytes = (value) => { const n = Number(value || 0); if (n < 1024) return `${n} B`; if (n < 1048576) return `${(n / 1024).toFixed(2)} KB`; if (n < 1073741824) return `${(n / 1048576).toFixed(2)} MB`; return `${(n / 1073741824).toFixed(2)} GB`; };
 const capacitySummary = (job) => `源文件 ${bytes(job.expectedBytes)} / ZIP ${bytes(job.packageBytes)}`;
+const volume = row => storageVolumeView(row, row.targetStorageVolumeId ? `卷 #${row.targetStorageVolumeId}` : null);
 </script>
 
 <template>
@@ -20,10 +22,10 @@ const capacitySummary = (job) => `源文件 ${bytes(job.expectedBytes)} / ZIP ${
     <el-table-column label="创建时间" min-width="175"><template #default="{ row }">{{ displayTime(row.requestedAt) }}</template></el-table-column>
     <el-table-column label="存储卷" min-width="200">
       <template #default="{ row }">
-        <div>{{ row.storageVolumeName || (row.targetStorageVolumeId ? `卷 #${row.targetStorageVolumeId}` : '历史任务未记录') }}</div>
-        <small v-if="row.storageTier || row.targetStorageVolumeId" class="muted">
-          {{ [row.storageTier, row.targetStorageVolumeId ? `ID: ${row.targetStorageVolumeId}` : ''].filter(Boolean).join(' / ') }}
-        </small>
+        <div>{{ volume(row).name }}</div>
+        <small v-if="volume(row).current" class="muted">当前：{{ volume(row).current }}</small>
+        <small v-if="volume(row).historical" class="muted">{{ volume(row).historical }}</small>
+        <small v-if="row.targetStorageVolumeId" class="muted">ID: {{ row.targetStorageVolumeId }}</small>
       </template>
     </el-table-column>
     <el-table-column label="模式/状态" width="170"><template #default="{ row }"><el-tag v-if="simulation(row)" type="warning" size="small">元数据模拟</el-tag><status-badge :value="row.cancelRequested ? 'CANCELLED' : jobState(row)" :label="row.cancelRequested ? '取消中' : statusText(row)" /></template></el-table-column>

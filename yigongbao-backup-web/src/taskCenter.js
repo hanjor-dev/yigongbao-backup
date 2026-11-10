@@ -1,3 +1,5 @@
+import { statusLabel } from './components/StatusBadge.js';
+
 export function extractJobId(result) {
   const data = result?.data ?? result;
   return data?.jobId || data?.job?.id || data?.task?.jobId || data?.id || null;
@@ -67,7 +69,10 @@ export function storageState(order) {
   const location = order?.storageLocation;
   if (location) return location.accessible
     ? { canDownload: true, message: '' }
-    : { canDownload: false, message: location.unavailableReason || `订单包所在${location.storageTier || ''}卷未挂载` };
+    : { canDownload: false, message: unavailableStorageMessage(location) };
+  if (typeof order?.storageAccessible === 'boolean') return order.storageAccessible
+    ? { canDownload: true, message: '' }
+    : { canDownload: false, message: unavailableStorageMessage(order) };
   const hot = String(order?.hotRollup || '').toUpperCase();
   const cold = String(order?.coldRollup || '').toUpperCase();
   const canDownload = ['PRESENT', 'AVAILABLE', 'EXISTS'].includes(hot);
@@ -76,6 +81,79 @@ export function storageState(order) {
     return { canDownload: false, message: '文件位于离线冷备，请联系管理员调取' };
   }
   return { canDownload: false, message: hot === 'UNKNOWN' ? '热备状态未知，请联系管理员检查存储' : '热备文件不可用，请先完成冷备回迁' };
+}
+
+/** 离线冷备的线下查找摘要；字段同时兼容订单平铺数据与 package-location DTO。 */
+export function offlineStorageSummary(value) {
+  return [
+    value?.storageOfflineLabelNote ?? value?.offlineLabelNote,
+    value?.storagePhysicalLocation ?? value?.physicalLocation,
+    value?.storagePeriodLabel ?? value?.periodLabel,
+  ].filter(Boolean).join(' · ');
+}
+
+/** 挂载状态与文件可读性是两个维度；在线但损坏/占用的副本不能伪装成 OFFLINE。 */
+export function storageMountState(value) {
+  return value?.storageMountStatus ?? value?.mountStatus
+    ?? (value?.storageAccessible === false || value?.accessible === false ? 'UNAVAILABLE' : value?.backupStatus || 'UNKNOWN');
+}
+
+function unavailableStorageMessage(value) {
+  const reason = value?.storageUnavailableReason ?? value?.unavailableReason
+    ?? `订单包所在${value?.storageTier ? statusLabel(value.storageTier) : ''}卷未挂载`;
+  if (String(value?.storageTier || '').toUpperCase() !== 'COLD') return reason;
+  const lookup = offlineStorageSummary(value);
+  return [reason, lookup, '请插入对应冷备盘并由管理员确认挂载'].filter(Boolean).join('；');
+}
+
+/** 同时表达当前卷事实和任务发生时审计快照，避免历史 HOT 覆盖当前 COLD/OFFLINE。 */
+export function storageVolumeView(row, fallbackId = null) {
+  const historicalParts = [row?.storageVolumeName, row?.storageTier ? statusLabel(row.storageTier) : null].filter(Boolean);
+  if (row?.currentStorageResolved === false) {
+    const resolvedName = row?.currentStorageVolumeName;
+    const resolvedState = [row?.currentStorageTier, row?.currentMountStatus, row?.currentOperationStatus]
+      .map(value => value ? statusLabel(value) : value)
+      .filter(Boolean).join(' / ');
+    const unavailableReason = row?.currentStorageUnavailableReason || '存储卷台账不存在或已删除';
+    if (resolvedName) {
+      return {
+        name: `${resolvedName}（部分台账不可用）`,
+        current: [resolvedState, unavailableReason].filter(Boolean).join('；'),
+        historical: historicalParts.length ? `任务时：${historicalParts.join(' / ')}` : '',
+      };
+    }
+    const reference = fallbackId || row?.storageVolumeId;
+    const label = reference == null || reference === ''
+      ? '当前卷台账不可用'
+      : `${String(reference).startsWith('卷 #') ? reference : `卷 #${reference}`}（当前台账不可用）`;
+    return {
+      name: label,
+      current: unavailableReason,
+      historical: historicalParts.length ? `任务时：${historicalParts.join(' / ')}` : '',
+    };
+  }
+  const hasCurrentProjection = row?.currentStorageResolved === true
+    || [row?.currentStorageVolumeName, row?.currentStorageTier, row?.currentMountStatus, row?.currentOperationStatus]
+      .some(value => value != null && value !== '');
+  if (!hasCurrentProjection) {
+    return {
+      name: '当前卷状态未知',
+      current: historicalParts.length || row?.storageVolumeId || fallbackId
+        ? '历史记录未保存存储卷 ID，无法解析当前卷'
+        : '任务未记录可解析的存储卷信息',
+      historical: historicalParts.length ? `任务时：${historicalParts.join(' / ')}` : '',
+    };
+  }
+  const currentName = row?.currentStorageVolumeName || row?.storageVolumeId
+    || fallbackId || '当前卷状态未知';
+  const current = [row?.currentStorageTier, row?.currentMountStatus, row?.currentOperationStatus]
+    .map(value => value ? statusLabel(value) : value)
+    .filter(Boolean).join(' / ');
+  return {
+    name: String(currentName),
+    current,
+    historical: historicalParts.length ? `任务时：${historicalParts.join(' / ')}` : '',
+  };
 }
 
 /** 汇总任务级与结构化结果中的失败原因，供列表和详情统一展示。 */

@@ -42,4 +42,13 @@ public class StorageVolumeEntity extends BaseEntity {
     private String lastErrorMessage;
     private Long totalBytes;
     private Long usableBytes;
+
+    /** 封存介质覆盖的订单创建日期范围，供所有查询投影统一展示。 */
+    public String periodLabel() {
+        if (orderCreatedFrom == null && orderCreatedTo == null) return null;
+        java.time.format.DateTimeFormatter formatter = java.time.format.DateTimeFormatter.BASIC_ISO_DATE;
+        String from = orderCreatedFrom == null ? "" : orderCreatedFrom.format(formatter);
+        String to = orderCreatedTo == null ? "" : orderCreatedTo.format(formatter);
+        return from.equals(to) || to.isBlank() ? from : from.isBlank() ? to : from + "-" + to;
+    }
 }

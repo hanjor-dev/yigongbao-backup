@@ -1,20 +1,11 @@
 <script setup>
 import { computed, onMounted, ref } from 'vue';
 import { useBackupContext } from '../composables/useBackupContext.js';
+import { statusLabel } from '../components/StatusBadge.js';
 
 const { isAdmin, storageVolumes, storageCandidates, loadStorageVolumes, loadStorageVolumeDetail, scanStorageVolumes, registerStorageVolume, changeStorageVolumeState, previewStorageArchive, startStorageArchive, navigate } = useBackupContext();
 const hotActive = computed(() => storageVolumes.value.find((item) => item.tier === 'HOT' && item.writeStatus === 'ACTIVE'));
 const selectedVolume = ref(null);
-const statusType = (value) =>
-  ({
-    ONLINE: 'success',
-    OFFLINE: 'info',
-    UNAVAILABLE: 'danger',
-    ACTIVE: 'success',
-    STANDBY: 'warning',
-    READ_ONLY: 'info',
-    DISABLED: 'danger',
-  })[value] || 'info';
 const bytes = (value) => (value == null ? '不可用' : value < 1048576 ? `${(value / 1024).toFixed(1)} KB` : value < 1073741824 ? `${(value / 1048576).toFixed(1)} MB` : `${(value / 1073741824).toFixed(2)} GB`);
 async function activate(row) {
   if (confirm(`确认切换活动热备卷至“${row.displayName}”？原活动卷将转为只读。`)) await changeStorageVolumeState(row.id, 'set-active');
@@ -111,20 +102,18 @@ onMounted(loadStorageVolumes);
         >
         <el-table-column prop="tier" label="分层" width="95"
           ><template #default="{ row }"
-            ><el-tag size="small">{{ row.tier === 'HOT' ? '热备' : row.tier === 'COLD' ? '冷备' : '导入区' }}</el-tag></template
+            ><status-badge :value="row.tier" /></template
           ></el-table-column
         >
         <el-table-column prop="mountStatus" label="挂载状态" width="120"
           ><template #default="{ row }"
-            ><el-tag :type="statusType(row.mountStatus)" size="small">{{ row.mountStatus }}</el-tag></template
+            ><status-badge :value="row.mountStatus" /></template
           ></el-table-column
         >
         <el-table-column prop="writeStatus" label="写入状态" width="120"
           ><template #default="{ row }"
-            ><el-tag :type="statusType(row.writeStatus)" size="small">{{ row.writeStatus }}</el-tag>
-            <div class="table-muted">
-              {{ row.operationStatus || 'IDLE' }}
-            </div></template
+            ><status-badge :value="row.writeStatus" />
+            <div class="table-muted"><status-badge :value="row.operationStatus || 'IDLE'" /></div></template
           ></el-table-column
         >
         <el-table-column prop="priority" label="优先级" width="90" />
@@ -150,7 +139,7 @@ onMounted(loadStorageVolumes);
         ><div class="card-title"><span>扫描到的候选卷</span><el-tag type="info">仅发现，尚未纳管</el-tag></div></template
       >
       <el-table :data="storageCandidates" stripe
-        ><el-table-column prop="mountPath" label="挂载点" min-width="220" /><el-table-column prop="rootPath" label="受控目录" min-width="280" /><el-table-column prop="accessType" label="访问类型" width="120" /><el-table-column label="容量（已用 / 可用 / 总）" min-width="230"
+        ><el-table-column prop="mountPath" label="挂载点" min-width="220" /><el-table-column prop="rootPath" label="受控目录" min-width="280" /><el-table-column prop="accessType" label="访问类型" width="140"><template #default="{ row }"><status-badge :value="row.accessType" /></template></el-table-column><el-table-column label="容量（已用 / 可用 / 总）" min-width="230"
           ><template #default="{ row: candidate }">{{ bytes(candidate.usedBytes) }} / {{ bytes(candidate.usableBytes) }} / {{ bytes(candidate.totalBytes) }}</template></el-table-column
         ><el-table-column v-if="isAdmin" label="操作" width="100"
           ><template #default="{ row }"><el-button size="small" type="primary" @click="register(row)">纳管</el-button></template></el-table-column
@@ -163,7 +152,8 @@ onMounted(loadStorageVolumes);
           ><el-descriptions-item label="卷代码">{{ selectedVolume.volume?.volumeCode }}</el-descriptions-item
           ><el-descriptions-item label="受控路径">{{ selectedVolume.volume?.rootPath }}</el-descriptions-item
           ><el-descriptions-item label="容量（已用 / 可用 / 总）">{{ bytes(selectedVolume.volume?.usedBytes) }} / {{ bytes(selectedVolume.volume?.usableBytes) }} / {{ bytes(selectedVolume.volume?.totalBytes) }}</el-descriptions-item
-          ><el-descriptions-item label="挂载/写入/操作">{{ selectedVolume.volume?.mountStatus }} / {{ selectedVolume.volume?.writeStatus }} / {{ selectedVolume.volume?.operationStatus || 'IDLE' }}</el-descriptions-item
+          ><el-descriptions-item label="存储分层"><status-badge :value="selectedVolume.volume?.tier" /></el-descriptions-item
+          ><el-descriptions-item label="挂载/写入/操作"><status-badge :value="selectedVolume.volume?.mountStatus" /> / <status-badge :value="selectedVolume.volume?.writeStatus" /> / <status-badge :value="selectedVolume.volume?.operationStatus || 'IDLE'" /></el-descriptions-item
           ><el-descriptions-item label="封存备注">{{ selectedVolume.volume?.archiveNote || '—' }}</el-descriptions-item
           ><el-descriptions-item label="线下标签 / 存放位置">{{ selectedVolume.volume?.offlineLabelNote || '—' }} / {{ selectedVolume.volume?.physicalLocation || '—' }}</el-descriptions-item
           ><el-descriptions-item label="订单创建周期">{{ selectedVolume.volume?.orderCreatedFrom || '—' }} 至 {{ selectedVolume.volume?.orderCreatedTo || '—' }}</el-descriptions-item
@@ -177,7 +167,7 @@ onMounted(loadStorageVolumes);
         <h4>最近审计 recentAudits</h4>
         <el-empty v-if="!selectedVolume.recentAudits?.length" description="暂无审计记录" :image-size="60" /><el-timeline v-else
           ><el-timeline-item v-for="audit in selectedVolume.recentAudits" :key="audit.id" :timestamp="audit.occurredAt"
-            ><strong>{{ audit.action }}</strong> · {{ audit.resultCode }}
+            ><strong>{{ statusLabel(audit.action) }}</strong> · {{ statusLabel(audit.resultCode) }}
             <div v-if="audit.failureReason" class="table-muted">
               {{ audit.failureReason }}
             </div></el-timeline-item

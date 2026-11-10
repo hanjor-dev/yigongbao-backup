@@ -19,8 +19,9 @@ test('admin backup page renders automatic backup tasks without candidate selecti
   assert.match(table, /预计文件/);
   assert.match(table, /:label="row\.cancelRequested/);
   assert.match(table, /label="存储卷"/);
-  assert.match(table, /row\.storageVolumeName/);
-  assert.match(table, /row\.storageTier/);
+  assert.match(table, /storageVolumeView/);
+  assert.match(table, /volume\(row\)\.current/);
+  assert.match(table, /volume\(row\)\.historical/);
   assert.match(table, /row\.targetStorageVolumeId/);
   assert.doesNotMatch(view, /createBackupJob|backupCandidates|type="selection"/);
   assert.match(consoleSource, /\/admin\/backup\/jobs/);
@@ -46,6 +47,7 @@ test('order file page uses a unified keyword and fixed filter option catalogs', 
   const consoleSource = read('../src/composables/useBackupConsole.js');
   assert.match(filters, /keyword/);
   assert.match(filters, /orderFilterOptions/);
+  assert.match(filters, /orderFilterOptions\.localReplicaStates/);
   assert.match(filters, /needsPhysicalDelivery/);
   assert.match(consoleSource, /params\.set\('keyword'/);
   assert.match(consoleSource, /params\.set\('needsPhysicalDelivery'/);

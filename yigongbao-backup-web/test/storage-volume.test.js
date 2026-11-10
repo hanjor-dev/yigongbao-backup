@@ -28,7 +28,7 @@ test('order and job views expose persisted volume and relative location at every
   assert.match(orderTable, /storageVolumeName/);
   assert.match(orderDetail, /row\.storageKey/);
   assert.match(orderDetail, /file\.storageVolumeName/);
-  assert.match(jobDetail, /row\.storageVolumeName/);
+  assert.match(jobDetail, /storageVolumeView/);
   assert.match(jobDetail, /row\.storageKey/);
 });
 
@@ -46,4 +46,39 @@ test('storage volume detail displays identity references tasks and audit history
   for (const field of ['archiveNote', 'markerJson', 'activeCopyCount', 'runningTaskCount', 'recentAudits']) {
     assert.match(source, new RegExp(field));
   }
+});
+
+test('backup and restore task views separate current volume from task-time snapshot', () => {
+  const backupTable = fs.readFileSync(path.join(root, 'src', 'components', 'jobs', 'JobTable.vue'), 'utf8');
+  const backupDetail = fs.readFileSync(path.join(root, 'src', 'components', 'jobs', 'JobDetail.vue'), 'utf8');
+  const restoreTable = fs.readFileSync(path.join(root, 'src', 'components', 'restores', 'RestoreTaskTable.vue'), 'utf8');
+  const restoreDetail = fs.readFileSync(path.join(root, 'src', 'components', 'restores', 'RestoreTaskDetail.vue'), 'utf8');
+  for (const source of [backupTable, backupDetail, restoreTable, restoreDetail]) {
+    assert.match(source, /storageVolumeView/);
+    assert.match(source, /historical/);
+    assert.match(source, /current/);
+  }
+  for (const source of [backupDetail, restoreDetail]) {
+    assert.doesNotMatch(source, /v-if="[^\"]*currentStorageTier \|\|[^\"]*currentMountStatus/);
+  }
+});
+
+test('order views use current storage semantics instead of legacy hot and cold-batch labels', () => {
+  const orderTable = fs.readFileSync(path.join(root, 'src', 'components', 'orders', 'OrderTable.vue'), 'utf8');
+  const orderDetail = fs.readFileSync(path.join(root, 'src', 'components', 'orders', 'OrderDetail.vue'), 'utf8');
+  assert.doesNotMatch(orderTable, /冷备 \/ 批次/);
+  assert.doesNotMatch(orderDetail, /热备状态/);
+  assert.match(orderTable, /冷备副本/);
+  assert.match(orderDetail, /存储状态/);
+});
+
+test('order list renders offline cold lookup metadata instead of only an offline badge', () => {
+  const orderTable = fs.readFileSync(path.join(root, 'src', 'components', 'orders', 'OrderTable.vue'), 'utf8');
+  const orderDetail = fs.readFileSync(path.join(root, 'src', 'components', 'orders', 'OrderDetail.vue'), 'utf8');
+  assert.match(orderTable, /offlineStorageSummary/);
+  assert.match(orderTable, /storageAccessible === false/);
+  assert.match(orderTable, /row\.storageDiagnosticReason/);
+  assert.match(orderDetail, /offlineStorageSummary/);
+  assert.match(orderDetail, /row\.storageUnavailableReason/);
+  assert.match(orderDetail, /storageDiagnosticReason/);
 });

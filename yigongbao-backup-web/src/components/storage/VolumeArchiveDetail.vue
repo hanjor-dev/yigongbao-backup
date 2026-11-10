@@ -1,4 +1,6 @@
 <script setup>
+import { statusLabel } from '../StatusBadge.js';
+
 defineProps({ detail: { type: Object, default: null } });
 const emit = defineEmits(['close', 'abandon']);
 const bytes = (value) => {
@@ -17,7 +19,7 @@ const failed = (phase) => ['PREPARE_FAILED', 'VERIFY_FAILED', 'COMMIT_FAILED', '
       <el-descriptions :column="4" border>
         <el-descriptions-item label="封存编号">{{ detail.archive.id }}</el-descriptions-item>
         <el-descriptions-item label="尝试次数">{{ detail.archive.attemptNo || 1 }}</el-descriptions-item>
-        <el-descriptions-item label="当前阶段">{{ detail.archive.phase }}</el-descriptions-item>
+        <el-descriptions-item label="当前阶段"><status-badge :value="detail.archive.phase" /></el-descriptions-item>
         <el-descriptions-item label="订单周期">{{ detail.archive.periodLabel || '—' }}</el-descriptions-item>
         <el-descriptions-item label="封存备注" :span="2">{{ detail.archive.archiveNote || '—' }}</el-descriptions-item>
         <el-descriptions-item label="线下标签">{{ detail.archive.offlineLabelNote || '—' }}</el-descriptions-item>
@@ -32,10 +34,10 @@ const failed = (phase) => ['PREPARE_FAILED', 'VERIFY_FAILED', 'COMMIT_FAILED', '
       <div class="card-title archive-detail-title"><span>逐文件校验结果</span><el-tag>{{ detail.items.length }} 个文件</el-tag></div>
       <el-table :data="detail.items" max-height="560" stripe>
         <el-table-column prop="sourceOrderId" label="订单 ID" width="120" />
-        <el-table-column prop="artifactType" label="制品类型" width="150" />
+        <el-table-column label="制品类型" width="150"><template #default="{ row }">{{ statusLabel(row.artifactType) }}</template></el-table-column>
         <el-table-column prop="storageKey" label="卷内位置" min-width="300" show-overflow-tooltip />
         <el-table-column label="预期 / 实际容量" width="180"><template #default="{ row }">{{ bytes(row.expectedSize) }} / {{ row.actualSize == null ? '—' : bytes(row.actualSize) }}</template></el-table-column>
-        <el-table-column prop="verificationStatus" label="校验状态" width="120" />
+        <el-table-column label="校验状态" width="120"><template #default="{ row }"><status-badge :value="row.verificationStatus" /></template></el-table-column>
         <el-table-column prop="failureCode" label="失败代码" width="180" />
         <el-table-column prop="failureMessage" label="失败原因" min-width="220" show-overflow-tooltip />
       </el-table>

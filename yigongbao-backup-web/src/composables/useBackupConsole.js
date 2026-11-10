@@ -52,6 +52,7 @@ export function useBackupConsole() {
     businessTypes: [],
     physicalDeliveries: [],
     storageStates: [],
+    localReplicaStates: [],
   });
   const storagePath = ref('');
   const storage = ref(null);
@@ -715,6 +716,9 @@ export function useBackupConsole() {
         businessTypes: Array.isArray(data.businessTypes) ? data.businessTypes : [],
         physicalDeliveries: Array.isArray(data.physicalDeliveries) ? data.physicalDeliveries : [],
         storageStates: Array.isArray(data.storageStates) ? data.storageStates : [],
+        localReplicaStates: Array.isArray(data.localReplicaStates)
+          ? data.localReplicaStates
+          : (Array.isArray(data.storageStates) ? data.storageStates.filter(item => ['PRESENT', 'ABSENT'].includes(item.value)) : []),
       };
     } catch (error) {
       notice.value = error.message || '订单筛选项加载失败';

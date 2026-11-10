@@ -97,9 +97,13 @@ public class OrderSnapshotEntity extends BaseEntity {
     @TableField(exist = false) private String storageMountStatus;
     @TableField(exist = false) private Boolean storageAccessible;
     @TableField(exist = false) private String storageUnavailableReason;
+    @TableField(exist = false) private String storageDiagnosticReason;
     @TableField(exist = false) private String storageAdminStatus;
     @TableField(exist = false) private String storageOperationStatus;
     @TableField(exist = false) private String storageArchiveNote;
     @TableField(exist = false) private String storageOfflineLabelNote;
     @TableField(exist = false) private String storagePhysicalLocation;
+    @TableField(exist = false) private LocalDateTime storageOrderCreatedFrom;
+    @TableField(exist = false) private LocalDateTime storageOrderCreatedTo;
+    @TableField(exist = false) private String storagePeriodLabel;
 }

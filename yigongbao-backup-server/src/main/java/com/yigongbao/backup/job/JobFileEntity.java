@@ -1,6 +1,7 @@
 package com.yigongbao.backup.job;
 
 import com.baomidou.mybatisplus.annotation.TableName;
+import com.baomidou.mybatisplus.annotation.TableField;
 import com.yigongbao.backup.common.BaseEntity;
 import lombok.Data;
 import lombok.EqualsAndHashCode;
@@ -18,6 +19,13 @@ public class JobFileEntity extends BaseEntity {
     private String storageKey;
     private String storageVolumeName;
     private String storageTier;
+    /** 当前卷状态用于展示；任务发生时名称和层级仍保留在上面的审计快照字段中。 */
+    @TableField(exist = false) private String currentStorageVolumeName;
+    @TableField(exist = false) private String currentStorageTier;
+    @TableField(exist = false) private String currentMountStatus;
+    @TableField(exist = false) private String currentOperationStatus;
+    @TableField(exist = false) private Boolean currentStorageResolved;
+    @TableField(exist = false) private String currentStorageUnavailableReason;
     private String assetIdentity;
     private String step;
     private String status;

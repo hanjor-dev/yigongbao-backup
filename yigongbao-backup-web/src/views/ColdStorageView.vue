@@ -15,7 +15,6 @@ const mountDialog = ref(false);
 const mountVolume = ref(null);
 let refreshTimer = null;
 const bytes = (value) => { const size = Number(value || 0); if (size < 1048576) return `${(size / 1024).toFixed(1)} KB`; if (size < 1073741824) return `${(size / 1048576).toFixed(1)} MB`; return `${(size / 1073741824).toFixed(2)} GB`; };
-const phaseType = (phase) => ({ SUCCEEDED: 'success', PREPARE_FAILED: 'danger', VERIFY_FAILED: 'danger', COMMIT_FAILED: 'danger', CANCELLED: 'info', VERIFYING: 'warning', COMMITTING: 'warning' })[phase] || 'info';
 const progress = (item) => { const total = Number(item.archive?.managedFileCount || 0); if (!total) return 0; return item.archive?.phase === 'SUCCEEDED' ? 100 : Math.min(99, Math.round(Number(item.verifiedFileCount || 0) * 100 / total)); };
 
 async function refresh() {
@@ -55,7 +54,7 @@ onUnmounted(() => { if (refreshTimer) window.clearInterval(refreshTimer); });
       <template #header><div class="card-title"><span>封存任务</span><el-tag>{{ coldStorageArchives.length }} 次尝试</el-tag></div></template>
       <el-table v-loading="coldStorageLoading" :data="coldStorageArchives" empty-text="暂无整盘封存记录" stripe>
         <el-table-column label="封存卷" min-width="180"><template #default="{ row }"><strong>{{ row.sourceVolume?.displayName || row.archive.displayNameSnapshot || '未知卷' }}</strong><div class="table-muted">{{ row.sourceVolume?.volumeCode || row.archive.sourceVolumeId }}</div></template></el-table-column>
-        <el-table-column label="阶段 / 进度" min-width="190"><template #default="{ row }"><el-tag :type="phaseType(row.archive.phase)" size="small">{{ row.archive.phase }}</el-tag><el-progress :percentage="progress(row)" :show-text="false" class="archive-progress" /></template></el-table-column>
+        <el-table-column label="阶段 / 进度" min-width="190"><template #default="{ row }"><status-badge :value="row.archive.phase" /><el-progress :percentage="progress(row)" :show-text="false" class="archive-progress" /></template></el-table-column>
         <el-table-column prop="archive.periodLabel" label="订单周期" width="190" />
         <el-table-column label="订单 / 文件" width="130"><template #default="{ row }">{{ row.archive.orderCount || 0 }} / {{ row.archive.managedFileCount || 0 }}</template></el-table-column>
         <el-table-column label="数据量" width="120"><template #default="{ row }">{{ bytes(row.archive.totalBytes) }}</template></el-table-column>
@@ -68,7 +67,7 @@ onUnmounted(() => { if (refreshTimer) window.clearInterval(refreshTimer); });
       <template #header><div class="card-title"><span>冷备介质</span><el-tag type="info">{{ coldVolumes.length }} 块</el-tag></div></template>
       <el-table :data="coldVolumes" empty-text="暂无已封存冷备介质" stripe>
         <el-table-column label="介质身份" min-width="180"><template #default="{ row }"><strong>{{ row.displayName }}</strong><div class="table-muted">{{ row.volumeCode }}</div></template></el-table-column>
-        <el-table-column label="状态" width="150"><template #default="{ row }"><el-tag :type="row.mountStatus === 'ONLINE' ? 'success' : 'info'">{{ row.mountStatus }}</el-tag><div class="table-muted">{{ row.operationStatus || 'IDLE' }}</div></template></el-table-column>
+        <el-table-column label="状态" width="180"><template #default="{ row }"><status-badge :value="row.mountStatus" /><div class="table-muted"><status-badge :value="row.operationStatus || 'IDLE'" /></div></template></el-table-column>
         <el-table-column prop="periodLabel" label="订单周期" width="190"><template #default="{ row }">{{ row.orderCreatedFrom || '—' }} 至 {{ row.orderCreatedTo || '—' }}</template></el-table-column>
         <el-table-column label="订单 / 文件 / 容量" min-width="190"><template #default="{ row }">{{ row.archivedOrderCount || 0 }} / {{ row.archivedFileCount || 0 }} / {{ bytes(row.archivedBytes) }}</template></el-table-column>
         <el-table-column prop="offlineLabelNote" label="线下标签备注" min-width="180"><template #default="{ row }">{{ row.offlineLabelNote || '—' }}</template></el-table-column>

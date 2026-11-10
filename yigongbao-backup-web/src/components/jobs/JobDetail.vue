@@ -1,9 +1,9 @@
 <script setup>
 import { computed } from 'vue';
 import { useBackupContext } from '../../composables/useBackupContext.js';
-import { orderBusinessFields } from '../../taskCenter.js';
+import { orderBusinessFields, storageVolumeView } from '../../taskCenter.js';
 import OrderBusinessFields from '../orders/OrderBusinessFields.vue';
-import { statusLabel } from '../StatusBadge.js';
+import { statusLabel, workflowLabel } from '../StatusBadge.js';
 
 const { selectedJob, jobOrders, jobOrderPage, jobOrderSize, jobOrderTotal, jobFiles, jobLoading, jobProgress, changeJobOrderPage, changeJobOrderSize, cancelJob, retryJob, jobLogVisible, jobLogTitle, jobLogRecords, jobLogCurrent, jobLogSize, jobLogTotal, jobLogLoading, openBackupTaskLogs, openBackupOrderLogs, changeBackupLogPage, changeBackupLogSize } = useBackupContext();
 const terminalStates = ['SUCCEEDED', 'FAILED', 'PARTIAL_FAILED', 'CANCELLED', 'CANCELED'];
@@ -18,6 +18,7 @@ const bytes = (value) => { const n = Number(value || 0); if (n < 1024) return `$
 const logTone = level => ({ ERROR: 'is-error', WARN: 'is-warn', INFO: 'is-info' })[String(level || '').toUpperCase()] || 'is-info';
 const formatTime = value => value ? String(value).replace('T', ' ').replace(/\.\d+$/, '') : '-';
 const detail = value => { try { return JSON.stringify(typeof value === 'string' ? JSON.parse(value) : (value || {}), null, 2); } catch { return value || ''; } };
+const volume = (row, fallback = null) => storageVolumeView(row, fallback);
 </script>
 
 <template>
@@ -30,9 +31,7 @@ const detail = value => { try { return JSON.stringify(typeof value === 'string' 
         </div>
         <div class="detail-actions">
           <el-tag v-if="simulation" type="warning">元数据模拟</el-tag>
-          <el-tag :type="jobState(selectedJob) === 'SUCCEEDED' ? 'success' : jobState(selectedJob) === 'FAILED' ? 'danger' : 'info'" effect="light">
-            {{ stateLabel || 'UNKNOWN' }}
-          </el-tag>
+          <status-badge :value="jobState(selectedJob)" :label="stateLabel || '未知'" />
           <el-tag v-if="selectedJob.cancelRequested" type="warning">取消中</el-tag>
           <el-button v-if="orderBackup" plain @click="openBackupTaskLogs()">查看任务日志</el-button>
           <el-button v-if="!terminalStates.includes(jobState(selectedJob)) && !selectedJob.cancelRequested" type="danger" plain @click="cancelJob()">取消任务</el-button>
@@ -46,10 +45,10 @@ const detail = value => { try { return JSON.stringify(typeof value === 'string' 
       <el-progress :percentage="progress" :status="jobState(selectedJob) === 'FAILED' ? 'exception' : jobState(selectedJob) === 'SUCCEEDED' ? 'success' : undefined" :stroke-width="10" />
     </div>
     <el-descriptions v-if="orderBackup" :column="4" border class="mb-16">
-      <el-descriptions-item label="执行结果">{{ simulation && jobState(selectedJob) === 'SUCCEEDED' ? '模拟完成' : jobState(selectedJob) }}</el-descriptions-item>
+      <el-descriptions-item label="执行结果"><status-badge :value="jobState(selectedJob)" :label="simulation && jobState(selectedJob) === 'SUCCEEDED' ? '模拟完成' : ''" /></el-descriptions-item>
       <el-descriptions-item label="源文件总容量（压缩前）">{{ bytes(selectedJob.expectedBytes) }}</el-descriptions-item>
       <el-descriptions-item label="ZIP实际占用容量">{{ bytes(selectedJob.packageBytes) }}</el-descriptions-item>
-        <el-descriptions-item label="目标存储卷">{{ selectedJob.storageVolumeName || selectedJob.targetStorageVolumeId || '历史任务未记录' }}<span v-if="selectedJob.storageTier"> · 任务时 {{ selectedJob.storageTier }}</span><span v-if="selectedJob.currentStorageTier"> · 当前 {{ selectedJob.currentStorageVolumeName }} / {{ selectedJob.currentStorageTier }} / {{ selectedJob.currentMountStatus }}</span></el-descriptions-item>
+        <el-descriptions-item label="目标存储卷"><strong>{{ volume(selectedJob, selectedJob.targetStorageVolumeId).name }}</strong><span v-if="volume(selectedJob).current"> · 当前 {{ volume(selectedJob).current }}</span><span v-if="volume(selectedJob).historical"> · {{ volume(selectedJob).historical }}</span></el-descriptions-item>
       <template v-if="simulation">
         <el-descriptions-item label="Manifest">成功 {{ selectedJob.manifestSucceeded || 0 }} / 失败 {{ selectedJob.manifestFailed || 0 }}</el-descriptions-item>
         <el-descriptions-item label="预计文件">{{ selectedJob.expectedFileTotal || 0 }}</el-descriptions-item>
@@ -66,9 +65,9 @@ const detail = value => { try { return JSON.stringify(typeof value === 'string' 
       <el-table-column prop="orderCreatedAt" label="创建时间" min-width="170" />
       <el-table-column label="所属机构" min-width="180" show-overflow-tooltip><template #default="{ row }">{{ business(row).orgName || '-' }}</template></el-table-column>
       <el-table-column label="地区" min-width="130"><template #default="{ row }">{{ business(row).areaName || '-' }}</template></el-table-column>
-      <el-table-column label="业务状态" width="120"><template #default="{ row }"><status-badge :value="row.sourceStatus" /></template></el-table-column>
+      <el-table-column label="业务状态" width="120"><template #default="{ row }"><status-badge :value="business(row).statusName || row.sourceStatus" /></template></el-table-column>
       <el-table-column label="状态" width="140"><template #default="{ row }"><status-badge :value="row.status" /></template></el-table-column>
-      <el-table-column label="存储卷 / 相对位置" min-width="300"><template #default="{ row }">{{ row.storageVolumeName || row.storageVolumeId || row.sourceStorageVolumeId || selectedJob.targetStorageVolumeId || '-' }}<span v-if="row.storageTier">（任务时：{{ row.storageTier }}）</span><span v-if="row.currentStorageTier" class="table-muted"> · 当前：{{ row.currentStorageVolumeName || row.storageVolumeId }} / {{ row.currentStorageTier }} / {{ row.currentMountStatus }}</span><span v-if="row.storageKey"> · {{ row.storageKey }}</span><span v-else-if="row.sourceStorageKey"> · {{ row.sourceStorageKey }}</span><span v-else-if="row.simulationPath"> · {{ row.simulationPath }}</span></template></el-table-column>
+      <el-table-column label="存储卷 / 相对位置" min-width="320"><template #default="{ row }"><div>{{ volume(row, row.storageVolumeId || row.sourceStorageVolumeId || selectedJob.targetStorageVolumeId).name }}<span v-if="volume(row).current"> · 当前：{{ volume(row).current }}</span></div><small v-if="volume(row).historical" class="table-muted">{{ volume(row).historical }}</small><small v-if="row.storageKey"> · {{ row.storageKey }}</small><small v-else-if="row.sourceStorageKey"> · {{ row.sourceStorageKey }}</small><small v-else-if="row.simulationPath"> · {{ row.simulationPath }}</small></template></el-table-column>
       <el-table-column v-if="simulation" prop="expectedFileCount" label="预计文件" width="100" />
       <el-table-column v-if="simulation" label="源文件容量（压缩前）" width="160"><template #default="{ row }">{{ bytes(row.expectedBytes) }}</template></el-table-column>
       <el-table-column v-if="simulation" label="ZIP实际容量" width="130"><template #default="{ row }">{{ bytes(row.packageBytes) }}</template></el-table-column>
@@ -84,14 +83,14 @@ const detail = value => { try { return JSON.stringify(typeof value === 'string' 
     <el-table :data="jobFiles" stripe border empty-text="暂无文件明细">
       <el-table-column prop="sourceOrderId" label="订单" min-width="160" />
       <el-table-column prop="assetIdentity" label="资产" min-width="220" />
-      <el-table-column prop="step" label="步骤" width="140" />
-      <el-table-column label="存储卷 / 相对位置" min-width="220"><template #default="{ row }">{{ row.storageVolumeName || row.storageVolumeId || '-' }}<span v-if="row.storageTier">（{{ row.storageTier }}）</span><span v-if="row.storageKey"> · {{ row.storageKey }}</span></template></el-table-column>
+      <el-table-column label="步骤" width="140"><template #default="{ row }">{{ workflowLabel(row.step) }}</template></el-table-column>
+      <el-table-column label="存储卷 / 相对位置" min-width="300"><template #default="{ row }"><div>{{ volume(row, row.storageVolumeId).name }}<span v-if="volume(row).current"> · 当前：{{ volume(row).current }}</span></div><small v-if="volume(row).historical" class="table-muted">{{ volume(row).historical }}</small><small v-if="row.storageKey"> · {{ row.storageKey }}</small></template></el-table-column>
       <el-table-column label="状态" width="130"><template #default="{ row }"><status-badge :value="row.status" /></template></el-table-column>
       <el-table-column label="进度" width="180"><template #default="{ row }">{{ row.bytesDone || 0 }} / {{ row.bytesTotal || 0 }}</template></el-table-column>
       <el-table-column label="失败原因" min-width="260"><template #default="{ row }"><span class="error-text">{{ row.failureCode || '' }} {{ row.failureMessage || '' }}</span></template></el-table-column>
     </el-table>
     <el-dialog v-model="jobLogVisible" :title="jobLogTitle" width="min(980px, 92vw)" top="7vh" destroy-on-close>
-      <div v-loading="jobLogLoading" class="log-console"><div v-if="!jobLogRecords.length" class="console-empty">暂无已持久化的执行日志。历史任务不会补写旧日志。</div><details v-for="entry in jobLogRecords" :key="entry.id" class="console-entry" :class="logTone(entry.logLevel)"><summary><time>{{ formatTime(entry.occurredAt) }}</time><b>[{{ entry.logLevel || 'INFO' }}]</b><span>[{{ entry.stage || '-' }}]</span><span>{{ entry.message }}</span></summary><pre v-if="entry.detailJson">{{ detail(entry.detailJson) }}</pre></details></div>
+      <div v-loading="jobLogLoading" class="log-console"><div v-if="!jobLogRecords.length" class="console-empty">暂无已持久化的执行日志。历史任务不会补写旧日志。</div><details v-for="entry in jobLogRecords" :key="entry.id" class="console-entry" :class="logTone(entry.logLevel)"><summary><time>{{ formatTime(entry.occurredAt) }}</time><b>[{{ statusLabel(entry.logLevel || 'INFO') }}]</b><span>[{{ workflowLabel(entry.stage || '-') }}]</span><span>{{ entry.message }}</span></summary><pre v-if="entry.detailJson">{{ detail(entry.detailJson) }}</pre></details></div>
       <template #footer><el-pagination v-if="jobLogTotal" small background layout="total, sizes, prev, pager, next" :current-page="jobLogCurrent" :page-size="jobLogSize" :total="jobLogTotal" :page-sizes="[20,50,100]" @current-change="changeBackupLogPage" @size-change="changeBackupLogSize" /></template>
     </el-dialog>
   </el-card>

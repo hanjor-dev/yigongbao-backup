@@ -1,5 +1,6 @@
 <script setup>
 import { computed, ref, watch } from 'vue';
+import { statusLabel } from '../StatusBadge.js';
 
 const props = defineProps({
   modelValue: Boolean,
@@ -19,7 +20,7 @@ const bytes = (value) => value == null ? '—' : value < 1073741824 ? `${(value 
     <el-alert type="info" :closable="false" show-icon>系统只接受扫描到的挂载点，并会在服务端核对卷 marker 与物理指纹；盘符相同不代表介质相同。</el-alert>
     <el-descriptions v-if="volume" :column="2" border class="mount-volume-summary">
       <el-descriptions-item label="待接入冷备卷">{{ volume.displayName }}（{{ volume.volumeCode }}）</el-descriptions-item>
-      <el-descriptions-item label="登记状态">{{ volume.mountStatus }} / {{ volume.writeStatus }}</el-descriptions-item>
+      <el-descriptions-item label="登记状态"><status-badge :value="volume.mountStatus" /> / <status-badge :value="volume.writeStatus" /></el-descriptions-item>
       <el-descriptions-item label="线下标签">{{ volume.offlineLabelNote || '—' }}</el-descriptions-item>
       <el-descriptions-item label="存放位置">{{ volume.physicalLocation || '—' }}</el-descriptions-item>
     </el-descriptions>
@@ -27,7 +28,7 @@ const bytes = (value) => value == null ? '—' : value < 1073741824 ? `${(value 
     <el-radio-group v-model="selectedMountPath" class="candidate-list">
       <el-radio v-for="candidate in storageCandidates" :key="String(candidate.mountPath)" :value="String(candidate.mountPath)" border>
         <span class="candidate-main">{{ candidate.mountPath }}</span>
-        <span class="candidate-meta">{{ candidate.fileStoreName || candidate.fileStoreType || candidate.accessType }} · 可用 {{ bytes(candidate.usableBytes) }} / 共 {{ bytes(candidate.totalBytes) }}</span>
+        <span class="candidate-meta">{{ candidate.fileStoreName || candidate.fileStoreType || statusLabel(candidate.accessType) }} · 可用 {{ bytes(candidate.usableBytes) }} / 共 {{ bytes(candidate.totalBytes) }}</span>
       </el-radio>
     </el-radio-group>
     <el-empty v-if="!storageCandidates.length" description="尚未扫描到可访问介质，请插盘后重新扫描" :image-size="72" />

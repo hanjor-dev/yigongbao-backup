@@ -48,6 +48,10 @@ public class JobOrderEntity extends BaseEntity {
     private String currentMountStatus;
     @TableField(exist = false)
     private String currentOperationStatus;
+    @TableField(exist = false)
+    private Boolean currentStorageResolved;
+    @TableField(exist = false)
+    private String currentStorageUnavailableReason;
     private String simulationPath;
     private String status;
     private String failureCode;

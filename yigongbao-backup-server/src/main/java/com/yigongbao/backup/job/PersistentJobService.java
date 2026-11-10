@@ -20,6 +20,7 @@ import java.util.List;
 import java.util.HashMap;
 import java.util.Map;
 import java.util.UUID;
+import java.util.Objects;
 
 /** 任务中心数据库实现；领取使用版本、租约和 fencing token 条件更新。 */
 @Service
@@ -111,10 +112,9 @@ public class PersistentJobService {
 
     /** 只返回订单备份任务，供“订单备份”页使用。 */
     public List<Job> listBackupJobs() {
-        return mapper.selectList(Wrappers.<JobEntity>lambdaQuery()
-                        .in(JobEntity::getJobType, "ORDER_BACKUP", "MANUAL_BACKUP")
-                        .orderByDesc(JobEntity::getId))
-                .stream().map(entity -> viewWithEvidence(entity)).toList();
+        return viewsWithEvidence(mapper.selectList(Wrappers.<JobEntity>lambdaQuery()
+                .in(JobEntity::getJobType, "ORDER_BACKUP", "MANUAL_BACKUP")
+                .orderByDesc(JobEntity::getId)));
     }
 
     /** 服务端分页读取备份任务，避免任务历史增长后一次加载全部明细。 */
@@ -122,16 +122,15 @@ public class PersistentJobService {
         if (current < 1 || size < 1 || size > 100) throw new IllegalArgumentException("任务分页参数非法");
         Page<JobEntity> page = mapper.selectPage(Page.of(current, size), Wrappers.<JobEntity>lambdaQuery()
                 .in(JobEntity::getJobType, "ORDER_BACKUP", "MANUAL_BACKUP").orderByDesc(JobEntity::getId));
-        return new JobPage(page.getRecords().stream().map(this::viewWithEvidence).toList(),
+        return new JobPage(viewsWithEvidence(page.getRecords()),
                 page.getTotal(), page.getCurrent(), page.getSize(), page.getPages());
     }
 
     /** 只返回线上恢复任务，避免恢复记录与订单备份调度批次混在同一管理列表。 */
     public List<Job> listRestoreJobs() {
-        return mapper.selectList(Wrappers.<JobEntity>lambdaQuery()
-                        .eq(JobEntity::getJobType, "RESTORE")
-                        .orderByDesc(JobEntity::getId))
-                .stream().map(this::viewWithEvidence).toList();
+        return viewsWithEvidence(mapper.selectList(Wrappers.<JobEntity>lambdaQuery()
+                .eq(JobEntity::getJobType, "RESTORE")
+                .orderByDesc(JobEntity::getId)));
     }
 
     /** 服务端分页读取线上恢复任务；恢复历史可独立长期保留和审计。 */
@@ -139,7 +138,7 @@ public class PersistentJobService {
         if (current < 1 || size < 1 || size > 100) throw new IllegalArgumentException("任务分页参数非法");
         Page<JobEntity> page = mapper.selectPage(Page.of(current, size), Wrappers.<JobEntity>lambdaQuery()
                 .eq(JobEntity::getJobType, "RESTORE").orderByDesc(JobEntity::getId));
-        return new JobPage(page.getRecords().stream().map(this::viewWithEvidence).toList(),
+        return new JobPage(viewsWithEvidence(page.getRecords()),
                 page.getTotal(), page.getCurrent(), page.getSize(), page.getPages());
     }
 
@@ -200,7 +199,8 @@ public class PersistentJobService {
                         .eq(JobFileEntity::getSourceOrderId, sourceOrderId)
                         .eq(JobFileEntity::getStep, "RESTORE_OBJECT_UPLOAD")
                         .orderByAsc(JobFileEntity::getId));
-        return new JobFilePage(page.getRecords(), page.getTotal(), page.getCurrent(), page.getSize(), page.getPages());
+        return new JobFilePage(enrichCurrentVolumes(page.getRecords()), page.getTotal(), page.getCurrent(),
+                page.getSize(), page.getPages());
     }
 
     /** 统一的文件级证据分页返回结构。 */
@@ -271,18 +271,38 @@ public class PersistentJobService {
 
     public List<JobFileEntity> listFiles(long jobId) {
         if (fileMapper == null) throw new IllegalStateException("任务文件明细持久化未配置");
+        return enrichCurrentVolumes(listFilesRaw(jobId));
+    }
+
+    private List<JobFileEntity> listFilesRaw(long jobId) {
         return fileMapper.selectList(Wrappers.<JobFileEntity>lambdaQuery().eq(JobFileEntity::getJobId, jobId)
                 .orderByAsc(JobFileEntity::getId));
     }
 
+    /** 批量投影文件证据所引用卷的当前状态；任务执行时名称和层级始终保留为历史审计快照。 */
+    private List<JobFileEntity> enrichCurrentVolumes(List<JobFileEntity> rows) {
+        if (rows == null || rows.isEmpty()) return rows;
+        Map<Long, com.yigongbao.backup.storage.volume.StorageVolumeEntity> current = currentVolumes(
+                rows.stream().map(JobFileEntity::getStorageVolumeId).toList());
+        rows.forEach(row -> applyCurrentVolume(row, row.getStorageVolumeId(),
+                row.getStorageVolumeId() == null ? null : current.get(row.getStorageVolumeId())));
+        return rows;
+    }
+
     private List<JobOrderEntity> enrichPackageBytes(List<JobOrderEntity> rows) {
         if (rows == null || rows.isEmpty()) return rows;
-          // 历史名称/层级是审计快照；当前状态写入独立展示字段，禁止覆盖历史证据。
-        if (volumeMapper != null) rows.forEach(row -> {
-            if (row.getStorageVolumeId() == null) return;
-            var volume = volumeMapper.selectById(row.getStorageVolumeId());
-              if (volume != null) { row.setCurrentStorageTier(volume.getTier()); row.setCurrentStorageVolumeName(volume.getDisplayName()); row.setCurrentMountStatus(volume.getMountStatus()); row.setCurrentOperationStatus(volume.getOperationStatus()); }
-        });
+        Map<Long, com.yigongbao.backup.storage.volume.StorageVolumeEntity> current = currentVolumes(
+                rows.stream().map(JobOrderEntity::getStorageVolumeId).toList());
+        return enrichPackageBytes(rows, current);
+    }
+
+    private List<JobOrderEntity> enrichPackageBytes(
+            List<JobOrderEntity> rows,
+            Map<Long, com.yigongbao.backup.storage.volume.StorageVolumeEntity> current) {
+        if (rows == null || rows.isEmpty()) return rows;
+        // 历史名称/层级是审计快照；当前状态写入独立展示字段，禁止覆盖历史证据。
+        rows.forEach(row -> applyCurrentVolume(row, row.getStorageVolumeId(),
+                row.getStorageVolumeId() == null ? null : current.get(row.getStorageVolumeId())));
         if (packageMapper == null) return rows;
         List<Long> snapshotIds = rows.stream().map(JobOrderEntity::getSnapshotId)
                 .filter(java.util.Objects::nonNull).distinct().toList();
@@ -293,6 +313,56 @@ public class PersistentJobService {
                 .forEach(pkg -> sizes.merge(pkg.getSnapshotId(), pkg.getPackageSize() == null ? 0L : pkg.getPackageSize(), Math::max));
         rows.forEach(row -> row.setPackageBytes(row.getSnapshotId() == null ? null : sizes.get(row.getSnapshotId())));
         return rows;
+    }
+
+    private Map<Long, com.yigongbao.backup.storage.volume.StorageVolumeEntity> currentVolumes(List<Long> ids) {
+        if (volumeMapper == null || ids == null) return Map.of();
+        List<Long> distinct = ids.stream().filter(Objects::nonNull).distinct().toList();
+        if (distinct.isEmpty()) return Map.of();
+        List<com.yigongbao.backup.storage.volume.StorageVolumeEntity> rows = volumeMapper.selectBatchIds(distinct);
+        if (rows == null) return Map.of();
+        return rows.stream().collect(java.util.stream.Collectors.toMap(
+                com.yigongbao.backup.storage.volume.StorageVolumeEntity::getId, volume -> volume));
+    }
+
+    private static void applyCurrentVolume(JobOrderEntity row, Long volumeId,
+                                           com.yigongbao.backup.storage.volume.StorageVolumeEntity volume) {
+        if (volumeId == null) {
+            if (hasHistoricalStorage(row.getStorageVolumeName(), row.getStorageTier())) {
+                row.setCurrentStorageResolved(false);
+                row.setCurrentStorageUnavailableReason("STORAGE_VOLUME_UNRESOLVED：历史记录未保存存储卷ID，无法解析当前卷");
+            }
+            return;
+        }
+        row.setCurrentStorageResolved(volume != null);
+        if (volume == null) {
+            row.setCurrentStorageUnavailableReason("STORAGE_VOLUME_MISSING：存储卷台账不存在或已删除");
+            return;
+        }
+        row.setCurrentStorageTier(volume.getTier()); row.setCurrentStorageVolumeName(volume.getDisplayName());
+        row.setCurrentMountStatus(volume.getMountStatus()); row.setCurrentOperationStatus(volume.getOperationStatus());
+    }
+
+    private static void applyCurrentVolume(JobFileEntity row, Long volumeId,
+                                           com.yigongbao.backup.storage.volume.StorageVolumeEntity volume) {
+        if (volumeId == null) {
+            if (hasHistoricalStorage(row.getStorageVolumeName(), row.getStorageTier())) {
+                row.setCurrentStorageResolved(false);
+                row.setCurrentStorageUnavailableReason("STORAGE_VOLUME_UNRESOLVED：历史记录未保存存储卷ID，无法解析当前卷");
+            }
+            return;
+        }
+        row.setCurrentStorageResolved(volume != null);
+        if (volume == null) {
+            row.setCurrentStorageUnavailableReason("STORAGE_VOLUME_MISSING：存储卷台账不存在或已删除");
+            return;
+        }
+        row.setCurrentStorageTier(volume.getTier()); row.setCurrentStorageVolumeName(volume.getDisplayName());
+        row.setCurrentMountStatus(volume.getMountStatus()); row.setCurrentOperationStatus(volume.getOperationStatus());
+    }
+
+    private static boolean hasHistoricalStorage(String volumeName, String tier) {
+        return (volumeName != null && !volumeName.isBlank()) || (tier != null && !tier.isBlank());
     }
 
     public record OrderInput(Long sourceOrderId, Long snapshotId) {
@@ -314,9 +384,46 @@ public class PersistentJobService {
         if (!"RESTORE".equals(entity.getJobType())) throw new IllegalArgumentException("恢复任务不存在");
     }
 
+    private List<Job> viewsWithEvidence(List<JobEntity> entities) {
+        if (entities == null || entities.isEmpty()) return List.of();
+        List<Long> jobIds = entities.stream().map(JobEntity::getId).filter(Objects::nonNull).distinct().toList();
+        List<JobOrderEntity> allOrders = orderMapper == null || jobIds.isEmpty() ? List.of()
+                : orderMapper.selectList(Wrappers.<JobOrderEntity>lambdaQuery()
+                .in(JobOrderEntity::getJobId, jobIds).orderByAsc(JobOrderEntity::getId));
+        List<JobFileEntity> allFiles = fileMapper == null || jobIds.isEmpty() ? List.of()
+                : fileMapper.selectList(Wrappers.<JobFileEntity>lambdaQuery()
+                .in(JobFileEntity::getJobId, jobIds).orderByAsc(JobFileEntity::getId));
+        List<Long> allVolumeIds = java.util.stream.Stream.concat(
+                        entities.stream().map(JobEntity::getTargetStorageVolumeId),
+                        allOrders.stream().map(JobOrderEntity::getStorageVolumeId))
+                .filter(Objects::nonNull).distinct().toList();
+        Map<Long, com.yigongbao.backup.storage.volume.StorageVolumeEntity> currentVolumes = currentVolumes(allVolumeIds);
+        enrichPackageBytes(allOrders, currentVolumes);
+        Map<Long, List<JobOrderEntity>> ordersByJob = new HashMap<>();
+        allOrders.forEach(row -> addEvidence(ordersByJob, row.getJobId(), entities, row));
+        Map<Long, List<JobFileEntity>> filesByJob = new HashMap<>();
+        allFiles.forEach(row -> addEvidence(filesByJob, row.getJobId(), entities, row));
+        return entities.stream().map(entity -> viewWithEvidence(entity, currentVolumes,
+                ordersByJob.getOrDefault(entity.getId(), List.of()),
+                filesByJob.getOrDefault(entity.getId(), List.of()))).toList();
+    }
+
+    private static <T> void addEvidence(Map<Long, List<T>> target, Long jobId,
+                                        List<JobEntity> entities, T row) {
+        Long resolvedJobId = jobId;
+        // 兼容早期证据和测试夹具：单任务读取时允许缺失 job_id；多任务时绝不猜测归属。
+        if (resolvedJobId == null && entities.size() == 1) resolvedJobId = entities.getFirst().getId();
+        if (resolvedJobId != null) target.computeIfAbsent(resolvedJobId, ignored -> new java.util.ArrayList<>()).add(row);
+    }
+
     private Job viewWithEvidence(JobEntity entity) {
-        List<JobOrderEntity> orderRows = orderMapper == null ? List.of() : listOrders(entity.getId());
-        List<JobFileEntity> fileRows = fileMapper == null ? List.of() : listFiles(entity.getId());
+        return viewsWithEvidence(List.of(entity)).getFirst();
+    }
+
+    private Job viewWithEvidence(JobEntity entity,
+                                 Map<Long, com.yigongbao.backup.storage.volume.StorageVolumeEntity> currentVolumes,
+                                 List<JobOrderEntity> orderRows,
+                                 List<JobFileEntity> fileRows) {
         // 恢复任务同时保存 ZIP 聚合步骤和 ZIP 内资产步骤；任务列表容量必须只统计压缩包，
         // 否则会将压缩后容量与文件原始容量相加，产生双重统计。
         List<JobFileEntity> progressFileRows = "RESTORE".equals(entity.getJobType())
@@ -340,26 +447,46 @@ public class PersistentJobService {
                 && row.getExpectedFileCount() == null).count());
         job.setExpectedFileTotal(orderRows.stream().mapToInt(row -> row.getExpectedFileCount() == null ? 0 : row.getExpectedFileCount()).sum());
         job.setExpectedBytes(orderRows.stream().mapToLong(row -> row.getExpectedBytes() == null ? 0L : row.getExpectedBytes()).sum());
-        Map<Long, Long> packageBytes = new HashMap<>();
-        java.util.List<Long> snapshotIds = orderRows.stream().map(JobOrderEntity::getSnapshotId)
-                .filter(java.util.Objects::nonNull).distinct().toList();
-        if (packageMapper != null && !snapshotIds.isEmpty()) {
-            packageMapper.selectList(Wrappers.<OrderPackageEntity>lambdaQuery()
-                            .in(OrderPackageEntity::getSnapshotId, snapshotIds))
-                    .forEach(pkg -> packageBytes.merge(pkg.getSnapshotId(), pkg.getPackageSize() == null ? 0L : pkg.getPackageSize(), Math::max));
-        }
-        orderRows.forEach(row -> row.setPackageBytes(row.getSnapshotId() == null ? null : packageBytes.get(row.getSnapshotId())));
         job.setPackageBytes(orderRows.stream().mapToLong(row -> row.getPackageBytes() == null ? 0L : row.getPackageBytes()).sum());
         job.setTargetStorageVolumeId(entity.getTargetStorageVolumeId());
         job.setStorageVolumeName(orderRows.stream().map(JobOrderEntity::getStorageVolumeName)
                 .filter(value -> value != null && !value.isBlank()).distinct().collect(java.util.stream.Collectors.joining("、")));
           job.setStorageTier(orderRows.stream().map(JobOrderEntity::getStorageTier)
                   .filter(value -> value != null && !value.isBlank()).distinct().collect(java.util.stream.Collectors.joining("、")));
-          job.setCurrentStorageVolumeName(orderRows.stream().map(JobOrderEntity::getCurrentStorageVolumeName).filter(value->value!=null&&!value.isBlank()).distinct().collect(java.util.stream.Collectors.joining("、")));
-          job.setCurrentStorageTier(orderRows.stream().map(JobOrderEntity::getCurrentStorageTier).filter(value->value!=null&&!value.isBlank()).distinct().collect(java.util.stream.Collectors.joining("、")));
-          job.setCurrentMountStatus(orderRows.stream().map(JobOrderEntity::getCurrentMountStatus).filter(value->value!=null&&!value.isBlank()).distinct().collect(java.util.stream.Collectors.joining("、")));
-          job.setCurrentOperationStatus(orderRows.stream().map(JobOrderEntity::getCurrentOperationStatus).filter(value->value!=null&&!value.isBlank()).distinct().collect(java.util.stream.Collectors.joining("、")));
+          com.yigongbao.backup.storage.volume.StorageVolumeEntity target = entity.getTargetStorageVolumeId() == null
+                  ? null : currentVolumes.get(entity.getTargetStorageVolumeId());
+          if (entity.getTargetStorageVolumeId() != null) {
+              applyCurrentVolume(job, entity.getTargetStorageVolumeId(), target);
+          } else {
+              job.setCurrentStorageVolumeName(orderRows.stream().map(JobOrderEntity::getCurrentStorageVolumeName).filter(value->value!=null&&!value.isBlank()).distinct().collect(java.util.stream.Collectors.joining("、")));
+              job.setCurrentStorageTier(orderRows.stream().map(JobOrderEntity::getCurrentStorageTier).filter(value->value!=null&&!value.isBlank()).distinct().collect(java.util.stream.Collectors.joining("、")));
+              job.setCurrentMountStatus(orderRows.stream().map(JobOrderEntity::getCurrentMountStatus).filter(value->value!=null&&!value.isBlank()).distinct().collect(java.util.stream.Collectors.joining("、")));
+              job.setCurrentOperationStatus(orderRows.stream().map(JobOrderEntity::getCurrentOperationStatus).filter(value->value!=null&&!value.isBlank()).distinct().collect(java.util.stream.Collectors.joining("、")));
+              boolean hasReference = orderRows.stream().anyMatch(row -> row.getStorageVolumeId() != null
+                      || hasHistoricalStorage(row.getStorageVolumeName(), row.getStorageTier()));
+              boolean unresolved = orderRows.stream().anyMatch(row -> Boolean.FALSE.equals(row.getCurrentStorageResolved()));
+              if (hasReference) job.setCurrentStorageResolved(!unresolved);
+              if (unresolved) {
+                  boolean missingLedger = orderRows.stream().map(JobOrderEntity::getCurrentStorageUnavailableReason)
+                          .filter(Objects::nonNull).anyMatch(reason -> reason.startsWith("STORAGE_VOLUME_MISSING"));
+                  job.setCurrentStorageUnavailableReason(missingLedger
+                          ? "STORAGE_VOLUME_MISSING：一个或多个当前卷台账不存在或已删除"
+                          : "STORAGE_VOLUME_UNRESOLVED：历史记录未保存存储卷ID，无法解析当前卷");
+              }
+          }
           return job;
+    }
+
+    private static void applyCurrentVolume(Job job, Long volumeId,
+                                           com.yigongbao.backup.storage.volume.StorageVolumeEntity volume) {
+        if (volumeId == null) return;
+        job.setCurrentStorageResolved(volume != null);
+        if (volume == null) {
+            job.setCurrentStorageUnavailableReason("STORAGE_VOLUME_MISSING：存储卷台账不存在或已删除");
+            return;
+        }
+        job.setCurrentStorageTier(volume.getTier()); job.setCurrentStorageVolumeName(volume.getDisplayName());
+        job.setCurrentMountStatus(volume.getMountStatus()); job.setCurrentOperationStatus(volume.getOperationStatus());
     }
 
     private static Job view(JobEntity entity, int orderTotal, int fileTotal) {
