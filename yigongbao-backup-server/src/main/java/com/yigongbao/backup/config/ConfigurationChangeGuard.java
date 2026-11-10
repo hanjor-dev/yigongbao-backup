@@ -15,6 +15,13 @@ public class ConfigurationChangeGuard {
 
     public void validate(String key, String proposedValue) {
         if (key.startsWith("online.")) validateOnline(key, proposedValue);
+        if (key.equals("storage.read-lease.ttl-seconds") || key.equals("storage.read-lease.heartbeat-seconds")) {
+            int ttl = projectedInt("storage.read-lease.ttl-seconds", key, proposedValue, 120);
+            int heartbeat = projectedInt("storage.read-lease.heartbeat-seconds", key, proposedValue, 20);
+            if ((long) heartbeat * 2 >= ttl) {
+                throw new IllegalArgumentException("读取租约心跳必须小于租约时长的一半");
+            }
+        }
         if (key.equals("supplement.max-file-size-bytes")) {
             long businessLimit = Long.parseLong(proposedValue);
             DataSize hardLimit = DataSize.parse(environment.getProperty("BACKUP_MAX_UPLOAD_SIZE", "2GB"));
@@ -29,6 +36,11 @@ public class ConfigurationChangeGuard {
         String baseUrl = projected("online.base-url", changedKey, proposedValue);
         if (baseUrl.isBlank()) throw new IllegalArgumentException("开启线上通信前必须配置线上系统地址");
         requireSecret("BACKUP_SHARED_HMAC_SECRET", "共享HMAC密钥");
+    }
+
+    private int projectedInt(String key, String changedKey, String proposedValue, int fallback) {
+        String value = projected(key, changedKey, proposedValue);
+        return value.isBlank() ? fallback : Integer.parseInt(value);
     }
 
     private String projected(String key, String changedKey, String proposedValue) {

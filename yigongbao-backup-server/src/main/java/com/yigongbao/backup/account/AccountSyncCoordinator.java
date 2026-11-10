@@ -25,11 +25,12 @@ public class AccountSyncCoordinator {
         if (!running.compareAndSet(false, true)) return new Result("RUNNING", 0, "已有账号同步正在执行");
         int total = 0;
         try {
-            checkpoints.begin();
-            String cursor = checkpoints.currentCursor();
+            AccountSyncCheckpointService.RunState run = checkpoints.begin();
+            String cursor = run.cursor();
+            String highWatermark = run.highWatermark();
             int pageSize = configs.getInt("account.sync-page-size", 200, 1);
             for (int pageNumber = 1; pageNumber <= MAX_PAGES_PER_RUN; pageNumber++) {
-                RemoteAccountClient.Page page = client.fetch(cursor, pageSize);
+                RemoteAccountClient.Page page = client.fetch(cursor, highWatermark, pageSize);
                 if (page == null || page.accounts() == null) throw new IllegalStateException("线上账号接口返回为空");
                 String next = page.nextCursor();
                 if (page.hasMore() && (next == null || next.isBlank())) {
@@ -38,7 +39,11 @@ public class AccountSyncCoordinator {
                 if (next != null && next.equals(cursor) && page.hasMore()) {
                     throw new IllegalStateException("线上账号接口游标未推进");
                 }
-                checkpoints.commitPage(page.accounts(), next);
+                if (highWatermark == null) highWatermark = page.highWatermark();
+                if (page.highWatermark() != null && !page.highWatermark().equals(highWatermark)) {
+                    throw new IllegalStateException("线上账号接口 high-watermark 在分页期间发生变化");
+                }
+                checkpoints.commitPage(page.accounts(), next, highWatermark);
                 total += page.accounts().size();
                 if (!page.hasMore()) {
                     checkpoints.complete(total);

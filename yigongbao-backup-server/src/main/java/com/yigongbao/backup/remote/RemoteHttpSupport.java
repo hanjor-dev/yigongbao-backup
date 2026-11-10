@@ -188,8 +188,7 @@ public class RemoteHttpSupport {
             // 不能让各业务客户端将空 data 误解析为“缺少字段”的协议错误。
             if (root != null && root.isObject() && root.has("code")
                     && !"OK".equalsIgnoreCase(root.path("code").asText())) {
-                throw new RemoteCallException("线上服务业务失败" + structuredErrorDiagnostic(response.body()),
-                        response.statusCode(), structuredRetryable(response.body(), false));
+                throw structuredException("线上服务业务失败", response.statusCode(), false, response.body());
             }
             JsonNode data = root == null ? null : root.get("data");
             return data == null || data.isMissingNode() || data.isNull() ? root : data;
@@ -215,39 +214,64 @@ public class RemoteHttpSupport {
             } catch (IOException ignored) { }
         }
         // 只提取约定错误 JSON 的 code/message/requestId，不回显原始响应体，避免泄露凭据。
+        if (body instanceof String text) {
+            throw structuredException("线上服务返回HTTP " + response.statusCode(),
+                    response.statusCode(), retryable, text);
+        }
         throw new RemoteCallException("线上服务返回HTTP " + response.statusCode() + diagnostic,
                 response.statusCode(), retryable);
     }
 
+    private RemoteCallException structuredException(String prefix, int status,
+                                                     boolean fallbackRetryable, String body) {
+        StructuredError error = structuredError(body);
+        boolean retryable = error.retryable() == null ? fallbackRetryable : error.retryable();
+        return new RemoteCallException(prefix + error.diagnostic(), status, retryable,
+                emptyToNull(error.code()), emptyToNull(error.requestId()), emptyToNull(error.reason()), null);
+    }
+
     private boolean structuredRetryable(String body, boolean fallback) {
-        if (body == null || body.isBlank()) return fallback;
-        try {
-            JsonNode root = mapper.readTree(body.length() > MAX_ERROR_BODY ? body.substring(0, MAX_ERROR_BODY) : body);
-            return root != null && root.has("retryable") ? root.path("retryable").asBoolean(fallback) : fallback;
-        } catch (IOException ignored) { return fallback; }
+        Boolean value = structuredError(body).retryable();
+        return value == null ? fallback : value;
     }
 
     private String structuredErrorDiagnostic(String body) {
-        if (body == null || body.isBlank()) return "";
+        return structuredError(body).diagnostic();
+    }
+
+    private StructuredError structuredError(String body) {
+        if (body == null || body.isBlank()) return StructuredError.EMPTY;
         try {
             JsonNode root = mapper.readTree(body.length() > MAX_ERROR_BODY ? body.substring(0, MAX_ERROR_BODY) : body);
-            if (root == null || !root.isObject()) return "";
+            if (root == null || !root.isObject()) return StructuredError.EMPTY;
             String code = safeDiagnostic(root.path("code").asText(""));
             String message = safeDiagnostic(root.path("message").asText(""));
             String requestId = safeDiagnostic(root.path("requestId").asText(""));
+            String reason = "";
             List<String> values = new ArrayList<>();
             if (!code.isBlank()) values.add("code=" + code);
             if (!message.isBlank()) values.add("message=" + message);
             if (!requestId.isBlank()) values.add("requestId=" + requestId);
             JsonNode details = root.path("details");
             if (details.isArray() && !details.isEmpty()) {
-                String reason = safeDiagnostic(details.get(0).path("reason").asText(""));
+                reason = safeDiagnostic(details.get(0).path("reason").asText(""));
                 if (!reason.isBlank()) values.add("reason=" + reason);
             }
-            return values.isEmpty() ? "" : " (" + String.join(", ", values) + ")";
+            Boolean retryable = root.has("retryable") ? root.path("retryable").asBoolean() : null;
+            return new StructuredError(code, requestId, reason, retryable,
+                    values.isEmpty() ? "" : " (" + String.join(", ", values) + ")");
         } catch (IOException ignored) {
-            return "";
+            return StructuredError.EMPTY;
         }
+    }
+
+    private static String emptyToNull(String value) {
+        return value == null || value.isBlank() ? null : value;
+    }
+
+    private record StructuredError(String code, String requestId, String reason,
+                                   Boolean retryable, String diagnostic) {
+        private static final StructuredError EMPTY = new StructuredError("", "", "", null, "");
     }
 
     private static String safeDiagnostic(String value) {

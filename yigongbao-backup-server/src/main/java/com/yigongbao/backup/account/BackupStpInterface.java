@@ -24,7 +24,8 @@ public class BackupStpInterface implements StpInterface {
             return Collections.emptyList();
         }
         BkUserEntity user = userMapper.selectById(Long.valueOf(String.valueOf(loginId)));
-        if (user == null || user.getRoleCode() == null || user.getRoleCode().isBlank()) {
+        if (user == null || !"ENABLED".equals(user.getEnabledStatus())
+                || user.getRoleCode() == null || user.getRoleCode().isBlank()) {
             return Collections.emptyList();
         }
         return List.of(user.getRoleCode().trim().toUpperCase());

@@ -14,6 +14,7 @@ import java.util.concurrent.TimeUnit;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.Mockito.*;
+import com.yigongbao.backup.remote.RemoteCallException;
 
 class JobDispatcherTest {
     @Test
@@ -129,6 +130,21 @@ class JobDispatcherTest {
 
         verify(coordinator).partial(10L, "worker-a", 3L, "3个订单失败");
         verify(coordinator, never()).failOrRetry(anyLong(), anyString(), anyLong(), anyInt(), any());
+    }
+
+    @Test
+    void nonRetryableRemoteBusinessFailureNeverSchedulesTaskRetry() {
+        PersistentJobCoordinator coordinator = mock(PersistentJobCoordinator.class);
+        JobEntity claimed = job(12L, "DEGRADED_BACKUP", 5L, false);
+        when(coordinator.claimNext("worker-a", 60)).thenReturn(claimed);
+        JobHandler handler = (context, job) -> { throw new RemoteCallException(
+                "终态冲突", 409, false, "STATE_CONFLICT", "request-1", "已有终态凭证", null); };
+        JobDispatcher dispatcher = new JobDispatcher(coordinator,
+                new JobExecutorRegistry(Map.of("DEGRADED_BACKUP", handler)), "worker-a", Duration.ofSeconds(60), 3);
+
+        dispatcher.dispatchOne();
+
+        verify(coordinator).failOrRetry(eq(12L), eq("worker-a"), eq(5L), eq(0), any(Throwable.class));
     }
 
     @Test

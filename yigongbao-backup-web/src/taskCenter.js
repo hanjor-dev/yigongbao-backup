@@ -30,6 +30,21 @@ export function isTerminalJob(job) {
   return ['SUCCEEDED', 'FAILED', 'PARTIAL_FAILED', 'CANCELLED', 'CANCELED'].includes(String(job?.state || job?.status || '').toUpperCase());
 }
 
+/** 严格失败重试只适用于正常备份任务；降级备份必须始终从订单行显式创建。 */
+export function canRetryFailedOrders(job) {
+  const type = String(job?.jobType || '').toUpperCase();
+  const state = String(job?.state || job?.status || '').toUpperCase();
+  return ['ORDER_BACKUP', 'MANUAL_BACKUP'].includes(type)
+    && ['FAILED', 'PARTIAL_FAILED'].includes(state)
+    && Number(job?.orderFailed || 0) > 0;
+}
+
+/** 订单列表和详情共用的不完整备份说明。 */
+export function incompleteBackupLabel(order) {
+  if (String(order?.backupCompleteness || '').toUpperCase() !== 'INCOMPLETE') return '';
+  return `文件可能不完整 · 缺失关系 ${Number(order?.relationGapCount || 0)}`;
+}
+
 /** 将详情轮询结果同步回列表，避免取消等终态只在详情中更新。 */
 export function replaceJobById(items, refreshed) {
   if (!Array.isArray(items) || !refreshed?.id) return Array.isArray(items) ? items : [];

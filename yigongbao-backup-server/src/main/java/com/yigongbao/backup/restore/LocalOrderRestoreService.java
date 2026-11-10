@@ -282,10 +282,28 @@ public final class LocalOrderRestoreService {
             if (relationSetHash == null || relationSetHash.isBlank()) {
                 relationSetHash = sha256(mapper.writeValueAsBytes(relations));
             }
+            int schemaVersion = root.path("manifestSchemaVersion").asInt(1);
+            String completeness = text(root, "backupCompleteness");
+            if (completeness == null || completeness.isBlank()) completeness = "COMPLETE";
+            String relationshipStateHash = schemaVersion >= 2 ? text(root, "relationshipStateHash") : null;
+            List<OnlineRestoreClient.RestoreRelationGap> relationGaps = new ArrayList<>();
+            if (schemaVersion >= 2 && root.path("relationGaps").isArray()) {
+                for (JsonNode gap : root.path("relationGaps")) {
+                    relationGaps.add(new OnlineRestoreClient.RestoreRelationGap(
+                            text(gap, "relationKind"), text(gap, "sourceRecordId"), text(gap, "relationOwnerKey"),
+                            text(gap, "relationValue"), text(gap, "originalFileId"), text(gap, "reasonCode"),
+                            text(gap, "reason"), text(gap, "relationHash")));
+                }
+            }
+            if (schemaVersion >= 2 && (relationshipStateHash == null || relationshipStateHash.isBlank())) {
+                throw new IOException("v2 manifest 缺少 relationshipStateHash");
+            }
+            String requestRelationDigest = schemaVersion >= 2 ? relationshipStateHash : relationSetHash;
             String requestDigest = sha256((orderId + "\n" + manifestSha + "\n"
-                    + assetSetDigest + "\n" + relationSetHash).getBytes(java.nio.charset.StandardCharsets.UTF_8));
+                    + assetSetDigest + "\n" + requestRelationDigest).getBytes(java.nio.charset.StandardCharsets.UTF_8));
             return new OnlineRestoreClient.RestoreRequest(revision, manifestSha, conflictPolicy,
-                    requestDigest, assetSetDigest, relationSetHash, restoreAssets);
+                    requestDigest, assetSetDigest, relationSetHash, schemaVersion, completeness,
+                    relationshipStateHash, relationGaps, restoreAssets);
         } catch (IOException ex) {
             throw new IOException("读取恢复包 manifest.json 失败", ex);
         }

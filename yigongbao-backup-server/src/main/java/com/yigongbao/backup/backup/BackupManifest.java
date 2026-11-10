@@ -6,6 +6,9 @@ import java.util.Map;
 /** 订单备份清单，资产列表是订单级整包的唯一输入。 */
 public record BackupManifest(String orderId, String orderCreatedAt, List<Asset> assets,
                              String manifestRevision, String manifestSha256, String relationSetHash,
+                             int manifestSchemaVersion, String backupCompleteness,
+                             List<RelationGap> relationGaps, int relationGapCount,
+                             String relationGapHash, String relationshipStateHash,
                              Map<String, Object> orderRaw, Map<String, Object> orderDisplay) {
     public BackupManifest(String orderId, String orderCreatedAt, List<Asset> assets) {
         this(orderId, orderCreatedAt, assets, null, null, null, Map.of(), Map.of());
@@ -24,8 +27,26 @@ public record BackupManifest(String orderId, String orderCreatedAt, List<Asset> 
         this(orderId, orderCreatedAt, assets, manifestRevision, manifestSha256, relationSetHash, order, order);
     }
 
+    /** 历史 v1 构造器：只表示正式完整备份，不补造 v2 关系状态摘要。 */
+    public BackupManifest(String orderId, String orderCreatedAt, List<Asset> assets,
+                          String manifestRevision, String manifestSha256, String relationSetHash,
+                          Map<String, Object> orderRaw, Map<String, Object> orderDisplay) {
+        this(orderId, orderCreatedAt, assets, manifestRevision, manifestSha256, relationSetHash,
+                1, "COMPLETE", List.of(), 0, null, null, orderRaw, orderDisplay);
+    }
+
     public BackupManifest {
         assets = List.copyOf(assets == null ? List.of() : assets);
+        manifestSchemaVersion = manifestSchemaVersion <= 0 ? 1 : manifestSchemaVersion;
+        backupCompleteness = backupCompleteness == null || backupCompleteness.isBlank()
+                ? "COMPLETE" : backupCompleteness;
+        if (!List.of("COMPLETE", "INCOMPLETE", "NOT_APPLICABLE").contains(backupCompleteness)) {
+            throw new IllegalArgumentException("未知备份完整性: " + backupCompleteness);
+        }
+        relationGaps = List.copyOf(relationGaps == null ? List.of() : relationGaps);
+        if (relationGapCount < 0 || relationGapCount != relationGaps.size()) {
+            throw new IllegalArgumentException("关系缺口数量与明细不一致");
+        }
         // 订单全量业务快照天然包含可空列，Map.copyOf 会因 null 值抛异常。
         orderRaw = immutableNullableMap(orderRaw);
         orderDisplay = immutableNullableMap(orderDisplay == null || orderDisplay.isEmpty() ? orderRaw : orderDisplay);
@@ -37,6 +58,11 @@ public record BackupManifest(String orderId, String orderCreatedAt, List<Asset> 
     private static Map<String, Object> immutableNullableMap(Map<String, Object> value) {
         return java.util.Collections.unmodifiableMap(new java.util.LinkedHashMap<>(
                 value == null ? Map.of() : value));
+    }
+
+    public record RelationGap(String relationKind, String sourceRecordId, String relationOwnerKey,
+                              String relationValue, String originalFileId, String reasonCode,
+                              String reason, String relationHash) {
     }
 
     public record Asset(String assetId, String fileName, String type, long size, String sourceKey, String sha256,

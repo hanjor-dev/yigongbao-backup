@@ -28,6 +28,7 @@ test('admin backup page renders automatic backup tasks without candidate selecti
   assert.match(consoleSource, /\/admin\/backup\/schedule\/run-now/);
   assert.match(view, /立即执行扫描/);
   assert.match(consoleSource, /retry-failed/);
+  assert.match(consoleSource, /degraded-backup/);
   assert.match(consoleSource, /await loadJobDetails\(job\.id\);\s*if \(!isTerminalJob\(selectedJob\.value\)\) startJobPolling\(\);/);
   assert.doesNotMatch(consoleSource, /\/admin\/backup\/candidates/);
   const detail = read('../src/components/jobs/JobDetail.vue');
@@ -38,6 +39,12 @@ test('admin backup page renders automatic backup tasks without candidate selecti
   assert.match(detail, /源文件总容量/);
   assert.match(detail, /模拟完成/);
   assert.match(orderTable, /displayJson/);
+  assert.match(orderTable, /文件可能不完整/);
+  assert.match(detail, /degradedBackupEligible/);
+  assert.match(detail, /降级备份/);
+  assert.match(detail, /canRetryFailedOrders/);
+  assert.match(read('../src/components/orders/OrderDetail.vue'), /文件可能不完整/);
+  assert.match(read('../src/components/jobs/JobTable.vue'), /canRetryFailedOrders/);
   assert.match(read('../src/components/orders/OrderBusinessFields.vue'), /全部业务字段/);
 });
 

@@ -4,6 +4,9 @@ package com.yigongbao.backup.remote;
 public final class RemoteCallException extends RuntimeException {
     private final int status;
     private final boolean retryable;
+    private final String code;
+    private final String requestId;
+    private final String reason;
 
     public RemoteCallException(String message) {
         this(message, 0, true, null);
@@ -26,9 +29,17 @@ public final class RemoteCallException extends RuntimeException {
     }
 
     public RemoteCallException(String message, int status, boolean retryable, Throwable cause) {
+        this(message, status, retryable, null, null, null, cause);
+    }
+
+    public RemoteCallException(String message, int status, boolean retryable,
+                               String code, String requestId, String reason, Throwable cause) {
         super(message, cause);
         this.status = status;
         this.retryable = retryable;
+        this.code = code;
+        this.requestId = requestId;
+        this.reason = reason;
     }
 
     public int status() {
@@ -36,4 +47,10 @@ public final class RemoteCallException extends RuntimeException {
     }
 
     public boolean retryable() { return retryable; }
+
+    public String code() { return code; }
+
+    public String requestId() { return requestId; }
+
+    public String reason() { return reason; }
 }

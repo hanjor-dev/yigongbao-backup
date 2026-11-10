@@ -23,7 +23,12 @@ public class OnlineConnectionSettingsProvider {
             throw new IllegalStateException("线上通信已禁用，请在系统配置中开启 online.enabled");
         }
         String baseUrl = configs.require("online.base-url");
-        URI baseUri = URI.create(baseUrl);
+        URI baseUri;
+        try {
+            baseUri = URI.create(baseUrl);
+        } catch (RuntimeException exception) {
+            throw new IllegalStateException("线上系统地址必须是有效的 HTTP URL");
+        }
         if (baseUri.getHost() == null || !("http".equalsIgnoreCase(baseUri.getScheme())
                 || "https".equalsIgnoreCase(baseUri.getScheme()))) {
             throw new IllegalStateException("线上系统地址必须是有效的 HTTP URL");

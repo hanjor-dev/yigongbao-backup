@@ -36,5 +36,18 @@ class StorageVolumeArchiveMigrationContractTest {
                 .contains("uk_bk_volume_archive_item_path")
                 .contains("idx_bk_volume_read_lease_active");
         assertThat(migration).doesNotContain("tier='COLD' AND write_status='DISABLED'");
+        assertThat(migration).contains("category_name", "scope", "config_version", "changed_at")
+                .doesNotContain("group_name", "is_secret");
+    }
+
+    @Test
+    void providesDdlFreeRepairForPreviouslyPartiallyAppliedMigration() throws Exception {
+        Path repair = Path.of("sql/migration/2026-11-10-11-cold-volume-archive-config-repair.sql");
+
+        assertThat(repair).exists();
+        String sql = Files.readString(repair);
+        assertThat(sql).contains("INSERT INTO bk_config", "storage.read-lease.ttl-seconds",
+                        "storage.read-lease.heartbeat-seconds", "category_name", "config_version")
+                .doesNotContain("ALTER TABLE", "CREATE TABLE", "CREATE INDEX", "group_name", "is_secret");
     }
 }

@@ -42,4 +42,21 @@ class AccountSyncCheckpointServiceTest {
 
         assertThat(service.status().lastErrorMessage()).isNull();
     }
+
+    @Test
+    void successfulCheckpointStartsNextRunWithLookbackAndFreshWatermark() {
+        BkSyncCursorMapper mapper = mock(BkSyncCursorMapper.class);
+        BkSyncCursorEntity cursor = new BkSyncCursorEntity();
+        cursor.setId(1L); cursor.setCursorType("USER"); cursor.setSyncStatus("SUCCEEDED");
+        cursor.setCursorValue("2026-10-29T01:00:00Z|99"); cursor.setHighWatermark("old-watermark");
+        cursor.setLookbackSeconds(60);
+        when(mapper.findForUpdate("USER")).thenReturn(cursor);
+
+        AccountSyncCheckpointService.RunState state = new AccountSyncCheckpointService(
+                mapper, mock(PersistentAccountSyncService.class)).begin();
+
+        assertThat(state.cursor()).isEqualTo("2026-10-29T00:59Z|0");
+        assertThat(state.highWatermark()).isNull();
+        assertThat(cursor.getHighWatermark()).isEmpty();
+    }
 }

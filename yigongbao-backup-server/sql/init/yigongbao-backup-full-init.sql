@@ -5,7 +5,7 @@
  * 来源：sql/init/00-create-database.sql 至 04-functional-config-defaults.sql。
  * 约束：仅用于全新环境；已有数据库升级请使用 sql/migration 下的迁移脚本。
  * 默认数据库：yigongbao_backup。
- * 默认管理员：admin1（首次登录后必须修改密码）。
+ * 应急管理员由应用首次启动时使用一次性环境密钥创建。
  *
  * 推荐执行：mysql --default-character-set=utf8mb4 -u <迁移账号> -p < sql/init/yigongbao-backup-full-init.sql
  */
@@ -56,22 +56,7 @@ CREATE TABLE IF NOT EXISTS bk_user (
  create_by BIGINT NULL COMMENT '创建人ID', update_by BIGINT NULL COMMENT '更新人ID', is_deleted TINYINT NOT NULL DEFAULT 0 COMMENT '逻辑删除', PRIMARY KEY(id)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci COMMENT='本地账号';
 
--- 首次联调管理员（仅当 admin1 账号不存在时创建，不覆盖已有账号）。
--- 初始账号：admin1；密码使用预置 BCrypt 哈希，首次登录后建议立即修改密码。
--- 密码为 BCrypt 哈希，和 PersistentAccountSyncService/AuthController 使用同一校验算法。
-INSERT INTO bk_user (source_user_id, username, password_hash, real_name, role_code,
-                     enabled_status, login_fail_count, emergency_admin)
-SELECT NULL,
-       'admin1',
-       '$2a$10$N.zmdr9k7uOCQb376NoUnuTJ8iAt6Z5EHsM8lE9lBOsl7iKTVKIUi',
-       '系统管理员',
-       'ADMIN',
-       'ENABLED',
-       0,
-       1
-WHERE NOT EXISTS (
-    SELECT 1 FROM bk_user WHERE username = 'admin1' AND is_deleted = 0
-);
+-- 应急管理员由应用首次启动时使用 BACKUP_BOOTSTRAP_ADMIN_PASSWORD 安全创建。
 
 CREATE TABLE IF NOT EXISTS bk_user_field_control (
  id BIGINT NOT NULL AUTO_INCREMENT COMMENT '主键ID', user_id BIGINT NOT NULL COMMENT '本地用户ID', field_name VARCHAR(64) NOT NULL COMMENT '托管字段', ownership VARCHAR(16) NOT NULL COMMENT 'REMOTE/LOCAL',
@@ -86,7 +71,7 @@ CREATE TABLE IF NOT EXISTS bk_backup_candidate (
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci COMMENT='本地备份候选投影';
 
 CREATE TABLE IF NOT EXISTS bk_order_snapshot (
- id BIGINT NOT NULL AUTO_INCREMENT COMMENT '主键ID', backup_mode VARCHAR(32) NOT NULL DEFAULT 'REAL' COMMENT 'REAL/METADATA_SIMULATION', source_order_id BIGINT NOT NULL COMMENT '线上订单ID', order_code VARCHAR(64) NULL COMMENT '订单号', public_order_code VARCHAR(64) NULL COMMENT '对外展示单号', order_created_at DATETIME(3) NULL COMMENT '订单创建时间',
+ id BIGINT NOT NULL AUTO_INCREMENT COMMENT '主键ID', backup_mode VARCHAR(32) NOT NULL DEFAULT 'REAL' COMMENT 'REAL/METADATA_SIMULATION', backup_completeness VARCHAR(32) NOT NULL DEFAULT 'COMPLETE' COMMENT 'COMPLETE/INCOMPLETE/NOT_APPLICABLE', source_order_id BIGINT NOT NULL COMMENT '线上订单ID', order_code VARCHAR(64) NULL COMMENT '订单号', public_order_code VARCHAR(64) NULL COMMENT '对外展示单号', order_created_at DATETIME(3) NULL COMMENT '订单创建时间',
  order_type INT NULL COMMENT '订单类型', order_type_name VARCHAR(64) NULL COMMENT '订单类型名称', needs_physical_delivery INT NULL COMMENT '实体交付类型', needs_physical_delivery_name VARCHAR(64) NULL COMMENT '实体交付名称', business_type VARCHAR(32) NULL COMMENT '业务类型编码', business_type_name VARCHAR(128) NULL COMMENT '业务类型名称',
  org_id BIGINT NULL COMMENT '提单机构ID', org_name VARCHAR(255) NULL COMMENT '提单机构名称', operator_id BIGINT NULL COMMENT '操作员ID', operator_name VARCHAR(128) NULL COMMENT '操作员姓名', operator_phone VARCHAR(64) NULL COMMENT '操作员电话', operator_dept_id BIGINT NULL COMMENT '操作员部门ID', operator_dept_name VARCHAR(255) NULL COMMENT '操作员部门名称',
  hospital_id BIGINT NULL COMMENT '医院ID', hospital_name VARCHAR(255) NULL COMMENT '医院名称', area_id BIGINT NULL COMMENT '地区ID', area_name VARCHAR(255) NULL COMMENT '地区名称', full_area_name VARCHAR(512) NULL COMMENT '完整地区名称', hospital_dept_id BIGINT NULL COMMENT '医院科室ID', hospital_dept_name VARCHAR(255) NULL COMMENT '医院科室名称',
@@ -95,7 +80,7 @@ CREATE TABLE IF NOT EXISTS bk_order_snapshot (
  designer_id BIGINT NULL COMMENT '设计师ID', designer_name VARCHAR(128) NULL COMMENT '设计师姓名', expected_delivery_date DATETIME(3) NULL COMMENT '期望交付时间', estimated_cost DECIMAL(18,2) NULL COMMENT '预估费用', data_evaluation_opinion TEXT NULL COMMENT '影像数据评估意见', designer_remark TEXT NULL COMMENT '设计师备注',
  phase INT NULL COMMENT '订单阶段', phase_name VARCHAR(64) NULL COMMENT '订单阶段名称', status INT NULL COMMENT '订单状态', status_name VARCHAR(128) NULL COMMENT '订单状态名称', status_color_json JSON NULL COMMENT '状态颜色对象', regional_audit_json JSON NULL COMMENT '区域审核对象', design_audit_json JSON NULL COMMENT '设计审核对象',
  design_start_time DATETIME(3) NULL COMMENT '设计开始时间', design_submit_time DATETIME(3) NULL COMMENT '设计提交时间', production_start_time DATETIME(3) NULL COMMENT '生产开始时间', production_end_time DATETIME(3) NULL COMMENT '生产结束时间', source_version INT NULL COMMENT '线上订单版本', rebuild_project_list_json JSON NULL COMMENT '重建项目列表', rebuild_project_names TEXT NULL COMMENT '重建项目名称检索文本',
- order_raw_json JSON NOT NULL COMMENT 'order_main全列原始快照', display_json JSON NOT NULL COMMENT '列表非操作列展示快照', related_business_json JSON NOT NULL COMMENT '关联业务快照', manifest_revision VARCHAR(128) NOT NULL COMMENT '清单修订号', manifest_sha256 CHAR(64) NOT NULL COMMENT 'JCS清单哈希', snapshot_status VARCHAR(32) NOT NULL COMMENT 'PENDING_RECEIPT/AVAILABLE/RECEIPT_SUSPENDED/CORRUPT', backup_completed_at DATETIME(3) NOT NULL COMMENT '本地订单包写入时间', latest_verified_at DATETIME(3) NULL COMMENT '最近校验时间', cloud_rollup VARCHAR(32) NOT NULL COMMENT '云端聚合状态', hot_rollup VARCHAR(32) NOT NULL COMMENT '热备聚合状态', cold_rollup VARCHAR(32) NOT NULL COMMENT '冷备聚合状态',
+ order_raw_json JSON NOT NULL COMMENT 'order_main全列原始快照', display_json JSON NOT NULL COMMENT '列表非操作列展示快照', related_business_json JSON NOT NULL COMMENT '关联业务快照', manifest_revision VARCHAR(128) NOT NULL COMMENT '清单修订号', manifest_sha256 CHAR(64) NOT NULL COMMENT 'JCS清单哈希', manifest_schema_version INT NOT NULL DEFAULT 1 COMMENT '清单协议版本', relation_gap_count INT NOT NULL DEFAULT 0 COMMENT '关系缺口数量', relation_gap_hash CHAR(64) NULL COMMENT '关系缺口摘要', relationship_state_hash CHAR(64) NULL COMMENT '资产与缺口联合状态摘要', snapshot_status VARCHAR(32) NOT NULL COMMENT 'PENDING_RECEIPT/AVAILABLE/RECEIPT_SUSPENDED/CORRUPT', backup_completed_at DATETIME(3) NOT NULL COMMENT '本地订单包写入时间', latest_verified_at DATETIME(3) NULL COMMENT '最近校验时间', cloud_rollup VARCHAR(32) NOT NULL COMMENT '云端聚合状态', hot_rollup VARCHAR(32) NOT NULL COMMENT '热备聚合状态', cold_rollup VARCHAR(32) NOT NULL COMMENT '冷备聚合状态',
  create_time DATETIME(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3) COMMENT '创建时间', update_time DATETIME(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3) ON UPDATE CURRENT_TIMESTAMP(3) COMMENT '更新时间', create_by BIGINT NULL COMMENT '创建人ID', update_by BIGINT NULL COMMENT '更新人ID', is_deleted TINYINT NOT NULL DEFAULT 0 COMMENT '逻辑删除', PRIMARY KEY(id)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci COMMENT='不可变订单快照';
 
@@ -108,6 +93,17 @@ CREATE TABLE IF NOT EXISTS bk_asset_relation (
  id BIGINT NOT NULL AUTO_INCREMENT COMMENT '主键ID', asset_id BIGINT NOT NULL COMMENT '资产ID', relation_kind VARCHAR(64) NOT NULL COMMENT '白名单关系类型', source_record_id BIGINT NOT NULL COMMENT '源关系记录ID', relation_version VARCHAR(128) NOT NULL COMMENT '关系版本', relation_hash CHAR(64) NOT NULL COMMENT '关系摘要', original_file_id BIGINT NULL COMMENT '原文件ID', original_url TEXT NULL COMMENT '原URL', relation_payload_json JSON NULL COMMENT '版本化最小重建数据',
  create_time DATETIME(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3) COMMENT '创建时间', update_time DATETIME(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3) ON UPDATE CURRENT_TIMESTAMP(3) COMMENT '更新时间', create_by BIGINT NULL COMMENT '创建人ID', update_by BIGINT NULL COMMENT '更新人ID', is_deleted TINYINT NOT NULL DEFAULT 0 COMMENT '逻辑删除', PRIMARY KEY(id)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci COMMENT='资产typed业务关系';
+
+CREATE TABLE IF NOT EXISTS bk_relation_gap (
+ id BIGINT NOT NULL AUTO_INCREMENT COMMENT '主键ID', snapshot_id BIGINT NOT NULL COMMENT '订单快照ID', relation_kind VARCHAR(64) NOT NULL COMMENT '关系类型', source_record_id VARCHAR(64) NOT NULL COMMENT '来源记录ID', relation_owner_key CHAR(64) NOT NULL COMMENT '关系拥有者摘要', relation_value VARCHAR(1024) NULL COMMENT '原始关系值', original_file_id VARCHAR(64) NULL COMMENT '原始文件ID', reason_code VARCHAR(64) NOT NULL COMMENT '稳定缺口原因码', reason VARCHAR(1024) NOT NULL COMMENT '缺口原因', relation_hash CHAR(64) NOT NULL COMMENT '关系摘要', version INT NOT NULL DEFAULT 0 COMMENT '乐观锁版本',
+ create_time DATETIME(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3), update_time DATETIME(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3) ON UPDATE CURRENT_TIMESTAMP(3), create_by BIGINT NULL, update_by BIGINT NULL, is_deleted TINYINT NOT NULL DEFAULT 0, PRIMARY KEY(id)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci COMMENT='降级备份关系缺口证据';
+
+CREATE TABLE IF NOT EXISTS bk_backup_stage (
+ id BIGINT NOT NULL AUTO_INCREMENT COMMENT '主键ID', job_id BIGINT NOT NULL COMMENT '本地任务ID', source_order_id BIGINT NOT NULL COMMENT '线上订单ID', idempotency_key VARCHAR(255) NOT NULL COMMENT '线上回执幂等键', manifest_json JSON NOT NULL COMMENT '待发布清单', result_json JSON NOT NULL COMMENT '待发布订单包结果', manifest_sha256 CHAR(64) NOT NULL COMMENT '清单摘要', package_sha256 CHAR(64) NOT NULL COMMENT '包摘要', package_size BIGINT NOT NULL COMMENT '包大小', storage_volume_id BIGINT NULL COMMENT '存储卷ID', storage_key VARCHAR(1024) NOT NULL COMMENT '卷内相对键', backup_completeness VARCHAR(32) NOT NULL COMMENT 'COMPLETE/INCOMPLETE', stage_status VARCHAR(32) NOT NULL COMMENT 'STAGED/RECEIPT_ACCEPTED/AVAILABLE/SUPERSEDED', published_snapshot_id BIGINT NULL COMMENT '已发布快照ID', receipt_completed_at DATETIME(3) NOT NULL COMMENT '首次回执请求的稳定完成时间', receipt_accepted_at DATETIME(3) NULL, published_at DATETIME(3) NULL, superseded_at DATETIME(3) NULL, version INT NOT NULL DEFAULT 0,
+ create_time DATETIME(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3), update_time DATETIME(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3) ON UPDATE CURRENT_TIMESTAMP(3), create_by BIGINT NULL, update_by BIGINT NULL, is_deleted TINYINT NOT NULL DEFAULT 0, PRIMARY KEY(id),
+ UNIQUE KEY uk_bk_backup_stage_idempotency (idempotency_key), UNIQUE KEY uk_bk_backup_stage_job_order (job_id, source_order_id), KEY idx_bk_backup_stage_order_status (source_order_id, stage_status)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci COMMENT='订单备份回执前暂存状态';
 
 CREATE TABLE IF NOT EXISTS bk_storage_volume (
  id BIGINT NOT NULL AUTO_INCREMENT COMMENT '主键ID', volume_code VARCHAR(64) NOT NULL COMMENT '逻辑卷编码', display_name VARCHAR(128) NOT NULL COMMENT '显示名称', access_type VARCHAR(32) NOT NULL COMMENT 'LOCAL/REMOVABLE/MAPPED_NETWORK', mount_path VARCHAR(1024) NOT NULL COMMENT 'Windows挂载点', root_path VARCHAR(1024) NOT NULL COMMENT '受控业务根目录', volume_fingerprint VARCHAR(255) NULL COMMENT '系统卷指纹', marker_json JSON NULL COMMENT '受控目录卷标记', capacity_pool_id BIGINT NULL COMMENT '容量域ID', tier VARCHAR(32) NOT NULL COMMENT 'HOT/COLD/IMPORT', mount_status VARCHAR(32) NOT NULL COMMENT 'ONLINE/OFFLINE/UNAVAILABLE', write_status VARCHAR(32) NOT NULL COMMENT 'ACTIVE/STANDBY/READ_ONLY/DISABLED', admin_status VARCHAR(32) NOT NULL DEFAULT 'ENABLED' COMMENT 'ENABLED/RETIRED', operation_status VARCHAR(32) NOT NULL DEFAULT 'IDLE' COMMENT '卷操作状态', operation_ref_id BIGINT NULL COMMENT '卷操作引用ID', archive_note VARCHAR(512) NULL COMMENT '冷备介质查找备注', offline_label_note VARCHAR(512) NULL COMMENT '线下标签备注', physical_location VARCHAR(512) NULL COMMENT '离线存放位置', archived_at DATETIME(3) NULL COMMENT '最近成功封存时间', order_created_from DATETIME(3) NULL COMMENT '封存订单创建时间起点', order_created_to DATETIME(3) NULL COMMENT '封存订单创建时间终点', archived_order_count BIGINT NULL, archived_file_count BIGINT NULL, archived_bytes BIGINT NULL, last_verified_at DATETIME(3) NULL, priority INT NOT NULL DEFAULT 0 COMMENT '切换优先级', last_probed_at DATETIME(3) NULL COMMENT '最近探测时间', last_error_code VARCHAR(64) NULL COMMENT '最近错误码', last_error_message TEXT NULL COMMENT '最近错误信息', total_bytes BIGINT NULL COMMENT '最近探测总容量', usable_bytes BIGINT NULL COMMENT '最近探测可用容量', hot_active_singleton TINYINT GENERATED ALWAYS AS (CASE WHEN tier='HOT' AND write_status='ACTIVE' AND is_deleted=0 THEN 1 ELSE NULL END) STORED COMMENT 'HOT活动卷唯一约束键', version INT NOT NULL DEFAULT 0 COMMENT '乐观锁版本',
@@ -193,7 +189,7 @@ CREATE TABLE IF NOT EXISTS bk_lock (
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci COMMENT='数据库租约锁';
 
 CREATE TABLE IF NOT EXISTS bk_restore_session (
- id BIGINT NOT NULL AUTO_INCREMENT COMMENT '主键ID', local_job_id BIGINT NOT NULL COMMENT '本地任务ID', local_idempotency_key VARCHAR(128) NOT NULL COMMENT '本地幂等键', remote_session_id VARCHAR(128) NULL COMMENT '线上会话ID', source_order_id BIGINT NOT NULL COMMENT '线上订单ID', snapshot_id BIGINT NOT NULL COMMENT '快照ID', conflict_policy VARCHAR(32) NOT NULL COMMENT '冲突策略', prepared_revision VARCHAR(128) NULL COMMENT '准备修订号', signed_plan_digest CHAR(64) NULL COMMENT '线上签名计划摘要', relation_set_hash CHAR(64) NULL COMMENT '关系集合哈希', status VARCHAR(32) NOT NULL COMMENT '会话状态', protection_until DATETIME(3) NULL COMMENT '恢复后保护截止', version INT NOT NULL DEFAULT 0 COMMENT '乐观锁版本',
+ id BIGINT NOT NULL AUTO_INCREMENT COMMENT '主键ID', local_job_id BIGINT NOT NULL COMMENT '本地任务ID', local_idempotency_key VARCHAR(128) NOT NULL COMMENT '本地幂等键', remote_session_id VARCHAR(128) NULL COMMENT '线上会话ID', source_order_id BIGINT NOT NULL COMMENT '线上订单ID', snapshot_id BIGINT NOT NULL COMMENT '快照ID', conflict_policy VARCHAR(32) NOT NULL COMMENT '冲突策略', prepared_revision VARCHAR(128) NULL COMMENT '准备修订号', signed_plan_digest CHAR(64) NULL COMMENT '线上签名计划摘要', relation_set_hash CHAR(64) NULL COMMENT '关系集合哈希', manifest_schema_version INT NOT NULL DEFAULT 1 COMMENT '备份清单协议版本', backup_completeness VARCHAR(32) NOT NULL DEFAULT 'COMPLETE' COMMENT 'COMPLETE/INCOMPLETE', relationship_state_hash CHAR(64) NULL COMMENT 'v2关系状态摘要', status VARCHAR(32) NOT NULL COMMENT '会话状态', protection_until DATETIME(3) NULL COMMENT '恢复后保护截止', version INT NOT NULL DEFAULT 0 COMMENT '乐观锁版本',
  create_time DATETIME(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3) COMMENT '创建时间', update_time DATETIME(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3) ON UPDATE CURRENT_TIMESTAMP(3) COMMENT '更新时间', create_by BIGINT NULL COMMENT '创建人ID', update_by BIGINT NULL COMMENT '更新人ID', is_deleted TINYINT NOT NULL DEFAULT 0 COMMENT '逻辑删除；一期不删除', PRIMARY KEY(id)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci COMMENT='本地恢复会话';
 
@@ -323,6 +319,9 @@ CALL add_backup_index_if_missing('bk_asset','idx_bk_asset_file','CREATE INDEX id
 CALL add_backup_index_if_missing('bk_asset','idx_bk_asset_type','CREATE INDEX idx_bk_asset_type ON bk_asset(asset_type,backup_status)');
 CALL add_backup_index_if_missing('bk_asset_relation','uk_bk_asset_relation','CREATE UNIQUE INDEX uk_bk_asset_relation ON bk_asset_relation(asset_id,relation_kind,source_record_id)');
 CALL add_backup_index_if_missing('bk_asset_relation','idx_bk_asset_relation_hash','CREATE INDEX idx_bk_asset_relation_hash ON bk_asset_relation(relation_hash)');
+CALL add_backup_index_if_missing('bk_relation_gap','uk_bk_relation_gap_owner','CREATE UNIQUE INDEX uk_bk_relation_gap_owner ON bk_relation_gap(snapshot_id,relation_owner_key)');
+CALL add_backup_index_if_missing('bk_relation_gap','idx_bk_relation_gap_reason','CREATE INDEX idx_bk_relation_gap_reason ON bk_relation_gap(reason_code)');
+CALL add_backup_index_if_missing('bk_relation_gap','idx_bk_relation_gap_hash','CREATE INDEX idx_bk_relation_gap_hash ON bk_relation_gap(relation_hash)');
 CALL add_backup_index_if_missing('bk_order_package','uk_bk_package_snapshot','CREATE UNIQUE INDEX uk_bk_package_snapshot ON bk_order_package(snapshot_id)');
 CALL add_backup_index_if_missing('bk_order_package','uk_bk_package_volume_key','CREATE UNIQUE INDEX uk_bk_package_volume_key ON bk_order_package(storage_volume_id,storage_key(191))');
 CALL add_backup_index_if_missing('bk_order_package','idx_bk_package_status','CREATE INDEX idx_bk_package_status ON bk_order_package(status,verified_at)');
@@ -444,6 +443,7 @@ CALL add_backup_version_if_missing('bk_user_field_control');
 CALL add_backup_version_if_missing('bk_order_snapshot');
 CALL add_backup_version_if_missing('bk_asset');
 CALL add_backup_version_if_missing('bk_asset_relation');
+CALL add_backup_version_if_missing('bk_relation_gap');
 CALL add_backup_version_if_missing('bk_supplement_file');
 CALL add_backup_version_if_missing('bk_cold_batch_artifact');
 CALL add_backup_version_if_missing('bk_cold_volume');
@@ -543,6 +543,38 @@ CALL add_simulation_mode_column('bk_order_snapshot');
 CALL add_simulation_mode_column('bk_order_package');
 DROP PROCEDURE IF EXISTS add_simulation_mode_column;
 
+-- 存量环境重复执行全量初始化脚本时补齐降级备份快照字段；不补造历史关系摘要。
+DROP PROCEDURE IF EXISTS add_degraded_snapshot_column;
+DELIMITER $$
+CREATE PROCEDURE add_degraded_snapshot_column(IN p_name VARCHAR(64), IN p_definition VARCHAR(1024))
+BEGIN
+  IF NOT EXISTS (
+    SELECT 1 FROM information_schema.columns
+    WHERE table_schema = DATABASE() AND table_name = 'bk_order_snapshot' AND column_name = p_name
+  ) THEN
+    SET @degraded_snapshot_ddl = CONCAT('ALTER TABLE bk_order_snapshot ADD COLUMN ', p_definition);
+    PREPARE degraded_snapshot_stmt FROM @degraded_snapshot_ddl;
+    EXECUTE degraded_snapshot_stmt;
+    DEALLOCATE PREPARE degraded_snapshot_stmt;
+  END IF;
+END$$
+DELIMITER ;
+CALL add_degraded_snapshot_column('backup_completeness','backup_completeness VARCHAR(32) NULL AFTER backup_mode');
+CALL add_degraded_snapshot_column('manifest_schema_version','manifest_schema_version INT NULL AFTER manifest_sha256');
+CALL add_degraded_snapshot_column('relation_gap_count','relation_gap_count INT NULL AFTER manifest_schema_version');
+CALL add_degraded_snapshot_column('relation_gap_hash','relation_gap_hash CHAR(64) NULL AFTER relation_gap_count');
+CALL add_degraded_snapshot_column('relationship_state_hash','relationship_state_hash CHAR(64) NULL AFTER relation_gap_hash');
+DROP PROCEDURE IF EXISTS add_degraded_snapshot_column;
+UPDATE bk_order_snapshot
+SET backup_completeness=CASE WHEN backup_mode='METADATA_SIMULATION' THEN 'NOT_APPLICABLE' ELSE 'COMPLETE' END,
+    manifest_schema_version=COALESCE(manifest_schema_version,1),
+    relation_gap_count=COALESCE(relation_gap_count,0)
+WHERE backup_completeness IS NULL OR manifest_schema_version IS NULL OR relation_gap_count IS NULL;
+ALTER TABLE bk_order_snapshot
+  MODIFY COLUMN backup_completeness VARCHAR(32) NOT NULL DEFAULT 'COMPLETE',
+  MODIFY COLUMN manifest_schema_version INT NOT NULL DEFAULT 1,
+  MODIFY COLUMN relation_gap_count INT NOT NULL DEFAULT 0;
+
 SELECT DATABASE() AS initialized_database;
 SELECT COUNT(*) AS table_count
 FROM information_schema.tables
@@ -552,4 +584,4 @@ FROM bk_config
 WHERE scope = 'GLOBAL' AND is_deleted = 0;
 SELECT username, role_code, enabled_status, emergency_admin
 FROM bk_user
-WHERE username = 'admin1' AND is_deleted = 0;
+WHERE emergency_admin = 1 AND is_deleted = 0;

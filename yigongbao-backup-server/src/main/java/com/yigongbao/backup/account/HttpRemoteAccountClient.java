@@ -17,11 +17,21 @@ public final class HttpRemoteAccountClient implements RemoteAccountClient {
 
     @Override
     public Page fetch(String cursor, int size) {
+        return fetch(cursor, null, size);
+    }
+
+    @Override
+    public Page fetch(String cursor, String highWatermark, int size) {
         if (size < 1 || size > 500) throw new IllegalArgumentException("账号分页大小非法");
         Cursor state = Cursor.parse(cursor);
         String path = "/internal/backup/v1/accounts?updateTime="
                 + java.net.URLEncoder.encode(state.updatedAfter(), java.nio.charset.StandardCharsets.UTF_8)
                 + "&id=" + state.afterId() + "&pageSize=" + size;
+        if (highWatermark != null && !highWatermark.isBlank()) {
+            Cursor upper = Cursor.parse(highWatermark);
+            path += "&highWatermarkTime=" + java.net.URLEncoder.encode(upper.updatedAfter(), java.nio.charset.StandardCharsets.UTF_8)
+                    + "&highWatermarkId=" + upper.afterId();
+        }
         JsonNode data = http.data("GET", path, "");
         List<RemoteAccount> accounts = new ArrayList<>();
         for (JsonNode item : data.path("items")) {
@@ -45,7 +55,11 @@ public final class HttpRemoteAccountClient implements RemoteAccountClient {
         }
         String nextCursor = nextUpdated == null || nextUpdated.isBlank() || nextId == null || nextId.isBlank()
                 ? null : nextUpdated + "|" + nextId;
-        return new Page(accounts, nextCursor, more);
+        JsonNode high = data.path("highWatermark");
+        String highTime = high.isObject() ? text(high, "updateTime", "updatedAfter") : null;
+        String highId = high.isObject() ? text(high, "id", "afterId") : null;
+        String responseHigh = highTime == null || highId == null ? highWatermark : highTime + "|" + highId;
+        return new Page(accounts, nextCursor, more, responseHigh);
     }
 
     private static String text(JsonNode node, String... fields) {

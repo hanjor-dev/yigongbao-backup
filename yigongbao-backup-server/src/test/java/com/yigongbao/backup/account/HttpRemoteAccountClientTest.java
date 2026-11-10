@@ -55,4 +55,19 @@ class HttpRemoteAccountClientTest {
         assertThat(page.hasMore()).isFalse();
         assertThat(page.nextCursor()).isEqualTo("2026-10-29T02:00:00Z|9");
     }
+
+    @Test
+    void returnsAndCarriesStableHighWatermark() {
+        RecordingHttpClient transport = new RecordingHttpClient(request -> RecordingHttpClient.response(request, 200,
+                "{\"data\":{\"items\":[],\"hasMore\":false,\"highWatermark\":{\"updateTime\":\"2026-10-29T03:00:00Z\",\"id\":10}}}"));
+        RemoteHttpSupport support = new RemoteHttpSupport(transport, new ObjectMapper(), URI.create("http://online.example"),
+                Duration.ofSeconds(5), "shared-production-secret-32-bytes!");
+        HttpRemoteAccountClient client = new HttpRemoteAccountClient(support);
+
+        RemoteAccountClient.Page first = client.fetch(null, null, 200);
+        client.fetch("2026-10-29T02:00:00Z|9", first.highWatermark(), 200);
+
+        assertThat(first.highWatermark()).isEqualTo("2026-10-29T03:00:00Z|10");
+        assertThat(transport.requests.get(1).uri().getQuery()).contains("highWatermarkTime=2026-10-29T03:00:00Z", "highWatermarkId=10");
+    }
 }

@@ -7,7 +7,11 @@ import com.baomidou.mybatisplus.core.conditions.update.UpdateWrapper;
 import com.baomidou.mybatisplus.extension.plugins.pagination.Page;
 import com.yigongbao.backup.order.OrderPackageEntity;
 import com.yigongbao.backup.order.OrderPackageMapper;
+import com.yigongbao.backup.order.OrderSnapshotEntity;
+import com.yigongbao.backup.order.OrderSnapshotMapper;
 import com.yigongbao.backup.storage.volume.StorageVolumeMapper;
+import com.yigongbao.backup.backup.BackupStageEntity;
+import com.yigongbao.backup.backup.BackupStageMapper;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
@@ -31,26 +35,41 @@ public class PersistentJobService {
     private final JobFileMapper fileMapper;
     private final OrderPackageMapper packageMapper;
     private final StorageVolumeMapper volumeMapper;
+    private final OrderSnapshotMapper snapshotMapper;
+    private final BackupStageMapper backupStageMapper;
 
     /** 调度批次统计值，避免将远端订单明细在创建任务前重复拉取。 */
     public record JobInputBatch(int orderTotal, int fileTotal) {}
 
-    public PersistentJobService(JobMapper mapper) { this(mapper, null, null, null, null); }
+    public PersistentJobService(JobMapper mapper) { this(mapper, null, null, null, null, null, null); }
 
     public PersistentJobService(JobMapper mapper, JobOrderMapper orderMapper, JobFileMapper fileMapper) {
-        this(mapper, orderMapper, fileMapper, null, null);
+        this(mapper, orderMapper, fileMapper, null, null, null, null);
     }
 
     public PersistentJobService(JobMapper mapper, JobOrderMapper orderMapper, JobFileMapper fileMapper,
                                 OrderPackageMapper packageMapper) {
-        this(mapper, orderMapper, fileMapper, packageMapper, null);
+        this(mapper, orderMapper, fileMapper, packageMapper, null, null, null);
+    }
+
+    public PersistentJobService(JobMapper mapper, JobOrderMapper orderMapper, JobFileMapper fileMapper,
+                                OrderPackageMapper packageMapper, StorageVolumeMapper volumeMapper) {
+        this(mapper, orderMapper, fileMapper, packageMapper, volumeMapper, null, null);
+    }
+
+    public PersistentJobService(JobMapper mapper, JobOrderMapper orderMapper, JobFileMapper fileMapper,
+                                OrderPackageMapper packageMapper, StorageVolumeMapper volumeMapper,
+                                OrderSnapshotMapper snapshotMapper) {
+        this(mapper, orderMapper, fileMapper, packageMapper, volumeMapper, snapshotMapper, null);
     }
 
     @Autowired
     public PersistentJobService(JobMapper mapper, JobOrderMapper orderMapper, JobFileMapper fileMapper,
-                                OrderPackageMapper packageMapper, StorageVolumeMapper volumeMapper) {
+                                OrderPackageMapper packageMapper, StorageVolumeMapper volumeMapper,
+                                OrderSnapshotMapper snapshotMapper, BackupStageMapper backupStageMapper) {
         this.mapper = mapper; this.orderMapper = orderMapper; this.fileMapper = fileMapper;
-        this.packageMapper = packageMapper; this.volumeMapper = volumeMapper;
+        this.packageMapper = packageMapper; this.volumeMapper = volumeMapper; this.snapshotMapper = snapshotMapper;
+        this.backupStageMapper = backupStageMapper;
     }
 
     public Job create(int orderTotal, int fileTotal, long actor) {
@@ -113,7 +132,7 @@ public class PersistentJobService {
     /** 只返回订单备份任务，供“订单备份”页使用。 */
     public List<Job> listBackupJobs() {
         return viewsWithEvidence(mapper.selectList(Wrappers.<JobEntity>lambdaQuery()
-                .in(JobEntity::getJobType, "ORDER_BACKUP", "MANUAL_BACKUP")
+                .in(JobEntity::getJobType, "ORDER_BACKUP", "MANUAL_BACKUP", "DEGRADED_BACKUP")
                 .orderByDesc(JobEntity::getId)));
     }
 
@@ -121,7 +140,7 @@ public class PersistentJobService {
     public JobPage listBackupJobs(long current, long size) {
         if (current < 1 || size < 1 || size > 100) throw new IllegalArgumentException("任务分页参数非法");
         Page<JobEntity> page = mapper.selectPage(Page.of(current, size), Wrappers.<JobEntity>lambdaQuery()
-                .in(JobEntity::getJobType, "ORDER_BACKUP", "MANUAL_BACKUP").orderByDesc(JobEntity::getId));
+                .in(JobEntity::getJobType, "ORDER_BACKUP", "MANUAL_BACKUP", "DEGRADED_BACKUP").orderByDesc(JobEntity::getId));
         return new JobPage(viewsWithEvidence(page.getRecords()),
                 page.getTotal(), page.getCurrent(), page.getSize(), page.getPages());
     }
@@ -159,7 +178,8 @@ public class PersistentJobService {
     /** 查询订单备份任务，并拒绝通过备份日志接口读取其他任务。 */
     public Job getBackupJob(long id) {
         JobEntity entity = required(id);
-        if (!"ORDER_BACKUP".equals(entity.getJobType()) && !"MANUAL_BACKUP".equals(entity.getJobType())) {
+        if (!"ORDER_BACKUP".equals(entity.getJobType()) && !"MANUAL_BACKUP".equals(entity.getJobType())
+                && !"DEGRADED_BACKUP".equals(entity.getJobType())) {
             throw new IllegalArgumentException("不是订单备份任务");
         }
         return viewWithEvidence(entity);
@@ -253,7 +273,7 @@ public class PersistentJobService {
         if (orderMapper == null) throw new IllegalStateException("任务订单明细持久化未配置");
         List<JobOrderEntity> rows = orderMapper.selectList(Wrappers.<JobOrderEntity>lambdaQuery().eq(JobOrderEntity::getJobId, jobId)
                 .orderByAsc(JobOrderEntity::getId));
-        return enrichPackageBytes(rows);
+        return projectDegradedEligibility(jobId, enrichPackageBytes(rows));
     }
 
     /** 分页读取任务订单明细，并回填已生成订单 ZIP 的实际容量。 */
@@ -263,8 +283,46 @@ public class PersistentJobService {
         Page<JobOrderEntity> page = orderMapper.selectPage(Page.of(current, size),
                 Wrappers.<JobOrderEntity>lambdaQuery().eq(JobOrderEntity::getJobId, jobId)
                         .orderByAsc(JobOrderEntity::getId));
-        return new JobOrderPage(enrichPackageBytes(page.getRecords()), page.getTotal(), page.getCurrent(),
+        return new JobOrderPage(projectDegradedEligibility(jobId, enrichPackageBytes(page.getRecords())), page.getTotal(), page.getCurrent(),
                 page.getSize(), page.getPages());
+    }
+
+    /** 创建显式降级任务前的权威资格校验；不信任前端投影字段。 */
+    public JobOrderEntity requireDegradedBackupEligible(long jobId, long sourceOrderId) {
+        if (sourceOrderId < 1 || orderMapper == null || snapshotMapper == null) {
+            throw new IllegalStateException("降级备份资格校验不可用");
+        }
+        JobEntity source = required(jobId);
+        if (!("ORDER_BACKUP".equals(source.getJobType()) || "MANUAL_BACKUP".equals(source.getJobType()))) {
+            throw new IllegalStateException("只能从严格备份失败订单创建降级备份");
+        }
+        if (!"REAL".equals(configText(source, "executionMode", "REAL"))) {
+            throw new IllegalStateException("模拟备份不允许创建降级备份");
+        }
+        JobOrderEntity row = orderMapper.selectOne(Wrappers.<JobOrderEntity>lambdaQuery()
+                .eq(JobOrderEntity::getJobId, jobId)
+                .eq(JobOrderEntity::getSourceOrderId, sourceOrderId).last("limit 1"));
+        if (row == null || !"FAILED".equals(row.getStatus())
+                || !"RELATION_BROKEN".equals(row.getFailureCode())) {
+            throw new IllegalStateException("只有关系损坏的失败订单允许降级备份");
+        }
+        if (hasTerminalBackup(sourceOrderId)) {
+            throw new IllegalStateException("订单已有可用备份，无需再次备份");
+        }
+        row.setDegradedBackupEligible(true);
+        return row;
+    }
+
+    /** 普通失败重试只接受严格任务，降级任务必须从自己的独立任务生命周期处理。 */
+    public JobEntity requireRetryableStrictBackupJob(long jobId) {
+        JobEntity source = required(jobId);
+        if ("DEGRADED_BACKUP".equals(source.getJobType())) {
+            throw new IllegalStateException("降级备份任务不能使用普通失败重试");
+        }
+        if (!("ORDER_BACKUP".equals(source.getJobType()) || "MANUAL_BACKUP".equals(source.getJobType()))) {
+            throw new IllegalArgumentException("不是可重试的订单备份任务");
+        }
+        return source;
     }
 
     public record JobOrderPage(List<JobOrderEntity> records, long total, long current, long size, long pages) { }
@@ -363,6 +421,36 @@ public class PersistentJobService {
 
     private static boolean hasHistoricalStorage(String volumeName, String tier) {
         return (volumeName != null && !volumeName.isBlank()) || (tier != null && !tier.isBlank());
+    }
+
+    private List<JobOrderEntity> projectDegradedEligibility(long jobId, List<JobOrderEntity> rows) {
+        if (rows == null || rows.isEmpty()) return rows;
+        rows.forEach(row -> row.setDegradedBackupEligible(false));
+        if (snapshotMapper == null) return rows;
+        JobEntity source = mapper.selectById(jobId);
+        if (source == null || !("ORDER_BACKUP".equals(source.getJobType()) || "MANUAL_BACKUP".equals(source.getJobType()))
+                || !"REAL".equals(configText(source, "executionMode", "REAL"))) return rows;
+        rows.stream().filter(row -> "FAILED".equals(row.getStatus()))
+                .filter(row -> "RELATION_BROKEN".equals(row.getFailureCode()))
+                .filter(row -> row.getSourceOrderId() != null && !hasTerminalBackup(row.getSourceOrderId()))
+                .forEach(row -> row.setDegradedBackupEligible(true));
+        return rows;
+    }
+
+    private boolean hasAvailableSnapshot(long sourceOrderId) {
+        return snapshotMapper.selectCount(Wrappers.<OrderSnapshotEntity>lambdaQuery()
+                .eq(OrderSnapshotEntity::getSourceOrderId, sourceOrderId)
+                .eq(OrderSnapshotEntity::getBackupMode, "REAL")
+                .in(OrderSnapshotEntity::getSnapshotStatus, "AVAILABLE", "SUCCESS", "BACKED_UP")
+                .eq(OrderSnapshotEntity::getIsDeleted, 0)) > 0;
+    }
+
+    private boolean hasTerminalBackup(long sourceOrderId) {
+        if (hasAvailableSnapshot(sourceOrderId)) return true;
+        return backupStageMapper != null && backupStageMapper.selectCount(
+                Wrappers.<BackupStageEntity>lambdaQuery()
+                        .eq(BackupStageEntity::getSourceOrderId, sourceOrderId)
+                        .in(BackupStageEntity::getStageStatus, "RECEIPT_ACCEPTED", "AVAILABLE")) > 0;
     }
 
     public record OrderInput(Long sourceOrderId, Long snapshotId) {

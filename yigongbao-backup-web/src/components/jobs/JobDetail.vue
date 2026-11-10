@@ -1,17 +1,17 @@
 <script setup>
 import { computed } from 'vue';
 import { useBackupContext } from '../../composables/useBackupContext.js';
-import { orderBusinessFields, storageVolumeView } from '../../taskCenter.js';
+import { canRetryFailedOrders, orderBusinessFields, storageVolumeView } from '../../taskCenter.js';
 import OrderBusinessFields from '../orders/OrderBusinessFields.vue';
 import { statusLabel, workflowLabel } from '../StatusBadge.js';
 
-const { selectedJob, jobOrders, jobOrderPage, jobOrderSize, jobOrderTotal, jobFiles, jobLoading, jobProgress, changeJobOrderPage, changeJobOrderSize, cancelJob, retryJob, jobLogVisible, jobLogTitle, jobLogRecords, jobLogCurrent, jobLogSize, jobLogTotal, jobLogLoading, openBackupTaskLogs, openBackupOrderLogs, changeBackupLogPage, changeBackupLogSize } = useBackupContext();
+const { selectedJob, jobOrders, jobOrderPage, jobOrderSize, jobOrderTotal, jobFiles, jobLoading, jobProgress, changeJobOrderPage, changeJobOrderSize, cancelJob, retryJob, degradedBackup, jobLogVisible, jobLogTitle, jobLogRecords, jobLogCurrent, jobLogSize, jobLogTotal, jobLogLoading, openBackupTaskLogs, openBackupOrderLogs, changeBackupLogPage, changeBackupLogSize } = useBackupContext();
 const terminalStates = ['SUCCEEDED', 'FAILED', 'PARTIAL_FAILED', 'CANCELLED', 'CANCELED'];
 const jobState = (job) => job?.state || job?.status || '';
 const progress = computed(() => selectedJob.value ? jobProgress(selectedJob.value) : 0);
 const business = (row) => orderBusinessFields(row.orderBusinessJson);
 const simulation = computed(() => selectedJob.value?.executionMode === 'METADATA_SIMULATION');
-const orderBackup = computed(() => ['ORDER_BACKUP', 'MANUAL_BACKUP'].includes(selectedJob.value?.jobType));
+const orderBackup = computed(() => ['ORDER_BACKUP', 'MANUAL_BACKUP', 'DEGRADED_BACKUP'].includes(selectedJob.value?.jobType));
 const stateLabel = computed(() => jobState(selectedJob.value) === 'RETRYING_FAILED_ORDERS' ? '失败订单重试中'
   : simulation.value && jobState(selectedJob.value) === 'SUCCEEDED' ? '模拟完成' : statusLabel(jobState(selectedJob.value)));
 const bytes = (value) => { const n = Number(value || 0); if (n < 1024) return `${n} B`; if (n < 1048576) return `${(n / 1024).toFixed(2)} KB`; if (n < 1073741824) return `${(n / 1048576).toFixed(2)} MB`; return `${(n / 1073741824).toFixed(2)} GB`; };
@@ -35,7 +35,7 @@ const volume = (row, fallback = null) => storageVolumeView(row, fallback);
           <el-tag v-if="selectedJob.cancelRequested" type="warning">取消中</el-tag>
           <el-button v-if="orderBackup" plain @click="openBackupTaskLogs()">查看任务日志</el-button>
           <el-button v-if="!terminalStates.includes(jobState(selectedJob)) && !selectedJob.cancelRequested" type="danger" plain @click="cancelJob()">取消任务</el-button>
-          <el-button v-if="['FAILED', 'PARTIAL_FAILED'].includes(jobState(selectedJob)) && (selectedJob.orderFailed || 0) > 0" type="primary" plain @click="retryJob()">重试失败订单</el-button>
+          <el-button v-if="canRetryFailedOrders(selectedJob)" type="primary" plain @click="retryJob()">重试失败订单</el-button>
         </div>
       </div>
     </template>
@@ -73,6 +73,7 @@ const volume = (row, fallback = null) => storageVolumeView(row, fallback);
       <el-table-column v-if="simulation" label="ZIP实际容量" width="130"><template #default="{ row }">{{ bytes(row.packageBytes) }}</template></el-table-column>
       <el-table-column v-if="simulation" prop="simulationPath" label="模拟压缩包" min-width="260" show-overflow-tooltip />
       <el-table-column label="失败原因" min-width="260"><template #default="{ row }"><span class="error-text">{{ row.failureCode || '' }} {{ row.failureMessage || '' }}</span></template></el-table-column>
+      <el-table-column label="操作" width="130" fixed="right"><template #default="{ row }"><el-button v-if="row.degradedBackupEligible" link type="warning" @click="degradedBackup(row)">降级备份</el-button></template></el-table-column>
       <el-table-column v-if="orderBackup" label="日志" width="130" fixed="right"><template #default="{ row }"><el-button link type="primary" @click="openBackupOrderLogs(row)">查看订单日志</el-button></template></el-table-column>
     </el-table>
     <el-pagination v-if="jobOrderTotal > 0" class="table-pagination" background layout="total, sizes, prev, pager, next"

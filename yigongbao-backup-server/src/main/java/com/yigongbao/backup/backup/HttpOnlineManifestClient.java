@@ -2,6 +2,7 @@ package com.yigongbao.backup.backup;
 
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.yigongbao.backup.remote.RemoteCallException;
 import com.yigongbao.backup.remote.RemoteHttpSupport;
 
 import java.security.MessageDigest;
@@ -21,7 +22,16 @@ public final class HttpOnlineManifestClient implements OnlineManifestClient {
 
     @Override
     public BackupManifest fetch(String orderId) {
-        JsonNode data = http.data("GET", "/internal/backup/v1/orders/" + http.encodeSegment(orderId) + "/manifest", "{}");
+        return fetchAt(orderId, "/internal/backup/v1/orders/" + http.encodeSegment(orderId) + "/manifest", false);
+    }
+
+    @Override
+    public BackupManifest fetchDegraded(String orderId) {
+        return fetchAt(orderId, "/internal/backup/v1/orders/" + http.encodeSegment(orderId) + "/manifest/degraded", true);
+    }
+
+    private BackupManifest fetchAt(String orderId, String path, boolean degraded) {
+        JsonNode data = http.data("GET", path, "{}");
         try {
             // YAML 中订单业务快照位于 data.order，不能再从旧版扁平字段读取。
             JsonNode legacyOrder = data == null ? null : data.get("order");
@@ -52,35 +62,86 @@ public final class HttpOnlineManifestClient implements OnlineManifestClient {
             String revision = text(data, "manifestRevision", "revision");
             String manifestSha = text(data, "manifestJcsSha256", "manifestSha256");
             String relationDigest = text(data, "objectIdentityDigest");
+            List<BackupManifest.RelationGap> gaps = new ArrayList<>();
+            JsonNode gapItems = data == null ? null : data.get("relationGaps");
+            if (gapItems != null && gapItems.isArray()) {
+                for (JsonNode gap : gapItems) {
+                    gaps.add(new BackupManifest.RelationGap(
+                            text(gap, "relationKind"), text(gap, "sourceRecordId"),
+                            text(gap, "relationOwnerKey"), text(gap, "relationValue"),
+                            text(gap, "originalFileId"), text(gap, "reasonCode"),
+                            text(gap, "reason"), text(gap, "relationHash")));
+                }
+            }
+            int schemaVersion = data == null ? 1 : data.path("manifestSchemaVersion").asInt(1);
+            String completeness = text(data, "backupCompleteness");
+            if (completeness == null) completeness = "COMPLETE";
+            int gapCount = data != null && data.has("relationGapCount")
+                    ? data.path("relationGapCount").asInt() : gaps.size();
             java.util.Map<String, Object> rawSnapshot = rawOrder == null
                     ? java.util.Map.of() : mapper.convertValue(rawOrder, java.util.Map.class);
             java.util.Map<String, Object> displaySnapshot = displayOrder == null
                     ? rawSnapshot : mapper.convertValue(displayOrder, java.util.Map.class);
-            return new BackupManifest(id == null ? orderId : id, created, List.copyOf(assets),
+            BackupManifest manifest = new BackupManifest(id == null ? orderId : id, created, List.copyOf(assets),
                     revision, manifestSha, relationDigest == null ? relationSetHash(items) : relationDigest,
-                    rawSnapshot, displaySnapshot);
+                    schemaVersion, completeness, gaps, gapCount, text(data, "relationGapHash"),
+                    text(data, "relationshipStateHash"), rawSnapshot, displaySnapshot);
+            if (degraded) requireDegradedV2(manifest);
+            return manifest;
+        } catch (RemoteCallException error) {
+            throw error;
         } catch (RuntimeException e) {
             throw new IllegalStateException("线上订单清单数据非法", e);
         }
+    }
+
+    private static void requireDegradedV2(BackupManifest manifest) {
+        boolean valid = manifest.manifestSchemaVersion() == 2
+                && "INCOMPLETE".equals(manifest.backupCompleteness())
+                && manifest.relationGapCount() > 0
+                && manifest.relationGaps().size() == manifest.relationGapCount()
+                && sha256(manifest.relationGapHash())
+                && sha256(manifest.relationshipStateHash());
+        if (!valid) {
+            throw new RemoteCallException("降级备份协议版本不兼容", 409, false,
+                    "VERSION_INCOMPATIBLE", null,
+                    "降级清单必须为 v2 INCOMPLETE 并包含完整关系缺口摘要", null);
+        }
+    }
+
+    private static boolean sha256(String value) {
+        return value != null && value.matches("[0-9a-f]{64}");
     }
 
     @Override
     public void confirm(String orderId, BackupManifest manifest) {
         String body;
         try {
-            body = mapper.writeValueAsString(java.util.Map.of(
-                    "manifestJcsSha256", manifest.manifestSha256(),
-                    "objectIdentityDigest", manifest.relationSetHash()));
+            java.util.Map<String, Object> command = new java.util.LinkedHashMap<>();
+            command.put("manifestJcsSha256", manifest.manifestSha256());
+            if ("INCOMPLETE".equals(manifest.backupCompleteness())) {
+                command.put("relationshipStateHash", manifest.relationshipStateHash());
+            } else {
+                command.put("objectIdentityDigest", manifest.relationSetHash());
+            }
+            body = mapper.writeValueAsString(command);
         } catch (Exception ex) {
             throw new IllegalStateException("清单确认参数序列化失败", ex);
         }
+        String mode = "INCOMPLETE".equals(manifest.backupCompleteness()) ? "/manifest/degraded/" : "/manifest/";
         http.data("POST", "/internal/backup/v1/orders/" + http.encodeSegment(orderId)
-                + "/manifest/" + http.encodeSegment(manifest.manifestRevision()) + "/confirm", body);
+                + mode + http.encodeSegment(manifest.manifestRevision()) + "/confirm", body);
     }
 
     @Override
     public void submitReceipt(String orderId, BackupManifest manifest, OrderBackupPipeline.Result result,
                               String idempotencyKey, int receiptVersion) {
+        submitReceipt(orderId, manifest, result, idempotencyKey, receiptVersion, java.time.Instant.now());
+    }
+
+    @Override
+    public void submitReceipt(String orderId, BackupManifest manifest, OrderBackupPipeline.Result result,
+                              String idempotencyKey, int receiptVersion, java.time.Instant completedAt) {
         try {
             long sourceSize = manifest.assets().stream().mapToLong(BackupManifest.Asset::size).sum();
             java.util.List<java.util.Map<String, Object>> objects = manifest.assets().stream().map(asset -> {
@@ -96,14 +157,20 @@ public final class HttpOnlineManifestClient implements OnlineManifestClient {
                 object.put("sha256", result.downloadedHashes().get(asset.assetId()));
                 return object;
             }).toList();
-            String body = mapper.writeValueAsString(java.util.Map.ofEntries(
-                    java.util.Map.entry("manifestRevision", manifest.manifestRevision()),
-                    java.util.Map.entry("manifestSha256", manifest.manifestSha256()),
-                    java.util.Map.entry("packageSha256", result.packageSha256()),
-                    java.util.Map.entry("fileCount", manifest.assets().size()),
-                    java.util.Map.entry("totalSize", sourceSize),
-                    java.util.Map.entry("completedAt", java.time.OffsetDateTime.now().toString()),
-                    java.util.Map.entry("objects", objects)));
+            java.util.Map<String, Object> receipt = new java.util.LinkedHashMap<>();
+            receipt.put("manifestRevision", manifest.manifestRevision());
+            receipt.put("manifestSha256", manifest.manifestSha256());
+            receipt.put("packageSha256", result.packageSha256());
+            receipt.put("fileCount", manifest.assets().size());
+            receipt.put("totalSize", sourceSize);
+            receipt.put("backupCompleteness", manifest.backupCompleteness());
+            receipt.put("relationGapCount", manifest.relationGapCount());
+            receipt.put("relationGapHash", manifest.relationGapHash());
+            receipt.put("relationshipStateHash", manifest.relationshipStateHash());
+            if (completedAt == null) throw new IllegalArgumentException("备份凭证完成时间不能为空");
+            receipt.put("completedAt", completedAt.toString());
+            receipt.put("objects", objects);
+            String body = mapper.writeValueAsString(receipt);
             http.data("PUT", "/internal/backup/v1/receipts/" + http.encodeSegment(orderId), body, idempotencyKey);
         } catch (RuntimeException ex) {
             throw ex;

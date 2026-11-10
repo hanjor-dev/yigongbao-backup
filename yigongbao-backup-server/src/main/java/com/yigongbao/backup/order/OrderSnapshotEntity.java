@@ -16,6 +16,12 @@ import java.time.LocalDateTime;
 public class OrderSnapshotEntity extends BaseEntity {
     /** REAL 为真实文件备份，METADATA_SIMULATION 为零字节占位模拟。 */
     private String backupMode;
+    /** COMPLETE/INCOMPLETE/NOT_APPLICABLE。 */
+    private String backupCompleteness;
+    private Integer manifestSchemaVersion;
+    private Integer relationGapCount;
+    private String relationGapHash;
+    private String relationshipStateHash;
     private Long sourceOrderId;
     private String orderCode;
     private String publicOrderCode;

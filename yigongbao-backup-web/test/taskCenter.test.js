@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { coldBatchCapabilities, coldImportDiagnostic, extractJobId, isTerminalJob, jobProgress, normalizePage, offlineStorageSummary, replaceJobById, storageMountState, storageState, storageVolumeView, supplementTaskState, taskFailureSummary } from '../src/taskCenter.js';
+import { canRetryFailedOrders, coldBatchCapabilities, coldImportDiagnostic, extractJobId, incompleteBackupLabel, isTerminalJob, jobProgress, normalizePage, offlineStorageSummary, replaceJobById, storageMountState, storageState, storageVolumeView, supplementTaskState, taskFailureSummary } from '../src/taskCenter.js';
 import { statusLabel, statusTone, workflowLabel } from '../src/components/StatusBadge.js';
 
 test('extractJobId handles command response envelope', () => {
@@ -202,4 +202,11 @@ test('workflowLabel localizes file steps and persisted log stages', () => {
   for (const [value, label] of Object.entries(cases)) assert.equal(workflowLabel(value), label, value);
   assert.equal(workflowLabel('BACKUP_ORDER_75'), '备份订单 75');
   assert.equal(workflowLabel('FUTURE_STAGE'), 'FUTURE_STAGE');
+});
+
+test('degraded backup remains separate from strict retry and exposes completeness label', () => {
+  assert.equal(canRetryFailedOrders({ jobType: 'ORDER_BACKUP', state: 'PARTIAL_FAILED', orderFailed: 1 }), true);
+  assert.equal(canRetryFailedOrders({ jobType: 'DEGRADED_BACKUP', state: 'FAILED', orderFailed: 1 }), false);
+  assert.equal(incompleteBackupLabel({ backupCompleteness: 'INCOMPLETE', relationGapCount: 2 }), '文件可能不完整 · 缺失关系 2');
+  assert.equal(incompleteBackupLabel({ backupCompleteness: 'COMPLETE' }), '');
 });

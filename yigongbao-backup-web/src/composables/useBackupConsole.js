@@ -1,5 +1,5 @@
 import { computed, ref, watch, onMounted, onUnmounted } from 'vue';
-import { coldImportDiagnostic, extractJobId, isTerminalJob, jobProgress, normalizePage, replaceJobById, storageState, supplementTaskState, taskFailureSummary } from '../taskCenter.js';
+import { canRetryFailedOrders, coldImportDiagnostic, extractJobId, isTerminalJob, jobProgress, normalizePage, replaceJobById, storageState, supplementTaskState, taskFailureSummary } from '../taskCenter.js';
 import { api, binary, saveBlob, uploadWithProgress } from '../api.js';
 import { createAuthStore } from '../stores/authStore.js';
 import { createRouteStore } from '../stores/routeStore.js';
@@ -832,6 +832,21 @@ export function useBackupConsole() {
     }
   }
 
+  async function degradedBackup(row) {
+    const job = selectedJob.value;
+    if (!job || !row?.degradedBackupEligible || !row?.sourceOrderId) return;
+    try {
+      const result = await api('/admin/backup/jobs/' + encodeURIComponent(job.id)
+        + '/orders/' + encodeURIComponent(row.sourceOrderId) + '/degraded-backup', {
+        method: 'POST',
+        headers: { 'Idempotency-Key': `degraded-backup-${job.id}-${row.sourceOrderId}` },
+      });
+      await openJob(extractJobId(result), '降级备份任务已提交');
+    } catch (error) {
+      notice.value = error.message || '降级备份任务创建失败';
+    }
+  }
+
   async function loadCold() {
     try {
       const [result, disks] = await Promise.all([api('/admin/cold-batches'), api('/admin/cold-batches/disks')]);
@@ -1388,6 +1403,8 @@ export function useBackupConsole() {
     selectJob,
     cancelJob,
     retryJob,
+    degradedBackup,
+    canRetryFailedOrders,
     loadCold,
     selectColdBatch,
     verifyColdBatch,

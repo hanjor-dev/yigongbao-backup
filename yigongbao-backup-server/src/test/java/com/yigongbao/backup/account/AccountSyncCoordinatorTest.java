@@ -20,17 +20,17 @@ class AccountSyncCoordinatorTest {
         when(configs.getBoolean("online.enabled", false)).thenReturn(true);
         when(configs.getBoolean("account.sync-enabled", true)).thenReturn(true);
         when(configs.getInt("account.sync-page-size", 200, 1)).thenReturn(200);
-        when(checkpoints.currentCursor()).thenReturn("2026-10-29T01:00:00Z|5");
+        when(checkpoints.begin()).thenReturn(new AccountSyncCheckpointService.RunState("2026-10-29T01:00:00Z|5", null));
         RemoteAccount account = new RemoteAccount(6L, "u6", "$2a$10$stored-hash", 1,
                 "U6", null, null, LocalDateTime.of(2026, 10, 29, 2, 0), false);
-        when(client.fetch("2026-10-29T01:00:00Z|5", 200))
-                .thenReturn(new RemoteAccountClient.Page(List.of(account), "2026-10-29T02:00:00Z|6", false));
+        when(client.fetch("2026-10-29T01:00:00Z|5", null, 200))
+                .thenReturn(new RemoteAccountClient.Page(List.of(account), "2026-10-29T02:00:00Z|6", false, "2026-10-29T02:00:00Z|6"));
         AccountSyncCoordinator coordinator = new AccountSyncCoordinator(client, checkpoints, configs);
 
         AccountSyncCoordinator.Result result = coordinator.synchronize(false);
 
         assertThat(result.status()).isEqualTo("SUCCEEDED");
-        verify(checkpoints).commitPage(List.of(account), "2026-10-29T02:00:00Z|6");
+        verify(checkpoints).commitPage(List.of(account), "2026-10-29T02:00:00Z|6", "2026-10-29T02:00:00Z|6");
         verify(checkpoints).complete(1);
     }
 
@@ -41,8 +41,8 @@ class AccountSyncCoordinatorTest {
         RuntimeConfigService configs = mock(RuntimeConfigService.class);
         when(configs.getBoolean(anyString(), anyBoolean())).thenReturn(true);
         when(configs.getInt(anyString(), anyInt(), anyInt())).thenReturn(200);
-        when(checkpoints.currentCursor()).thenReturn("cursor-before");
-        when(client.fetch("cursor-before", 200)).thenThrow(new IllegalStateException("remote down"));
+        when(checkpoints.begin()).thenReturn(new AccountSyncCheckpointService.RunState("cursor-before", null));
+        when(client.fetch("cursor-before", null, 200)).thenThrow(new IllegalStateException("remote down"));
         AccountSyncCoordinator coordinator = new AccountSyncCoordinator(client, checkpoints, configs);
 
         AccountSyncCoordinator.Result result = coordinator.synchronize(false);

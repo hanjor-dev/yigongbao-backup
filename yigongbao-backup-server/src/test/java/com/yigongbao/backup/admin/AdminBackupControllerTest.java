@@ -2,15 +2,48 @@ package com.yigongbao.backup.admin;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.yigongbao.backup.backup.ManualBackupJobHandler;
+import cn.dev33.satoken.stp.StpUtil;
+import org.mockito.MockedStatic;
 import org.junit.jupiter.api.Test;
 
 import java.util.List;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.mockito.ArgumentMatchers.*;
+import static org.mockito.Mockito.*;
 import com.yigongbao.backup.backup.BackupJobCreationService;
 
 /** 失败订单补偿任务必须继承原任务的执行模式。 */
 class AdminBackupControllerTest {
+    @Test
+    void explicitDegradedEndpointCreatesSingleIndependentTask() throws Exception {
+        com.yigongbao.backup.job.PersistentJobService jobs =
+                mock(com.yigongbao.backup.job.PersistentJobService.class);
+        BackupJobCreationService creation = mock(BackupJobCreationService.class);
+        com.yigongbao.backup.job.JobOrderEntity eligible = new com.yigongbao.backup.job.JobOrderEntity();
+        eligible.setSourceOrderId(7L); eligible.setFailureCode("RELATION_BROKEN");
+        when(jobs.requireDegradedBackupEligible(20L, 7L)).thenReturn(eligible);
+        com.yigongbao.backup.job.JobEntity created = new com.yigongbao.backup.job.JobEntity();
+        created.setId(30L); created.setJobType("DEGRADED_BACKUP");
+        when(creation.createForOrders(eq("DEGRADED_BACKUP"), anyString(), eq(9L), anyString(), eq(1)))
+                .thenReturn(created);
+        AdminBackupController controller = new AdminBackupController(jobs, creation,
+                mock(com.yigongbao.backup.job.JobExecutionLogQueryService.class),
+                mock(com.yigongbao.backup.backup.ScheduledBackupService.class), new ObjectMapper());
+
+        try (MockedStatic<StpUtil> auth = mockStatic(StpUtil.class)) {
+            auth.when(() -> StpUtil.checkRole("ADMIN")).thenAnswer(invocation -> null);
+            auth.when(StpUtil::getLoginIdAsLong).thenReturn(9L);
+            assertThat(controller.degradedBackup(20L, 7L).data().getJobType())
+                    .isEqualTo("DEGRADED_BACKUP");
+        }
+
+        verify(jobs).requireDegradedBackupEligible(20L, 7L);
+        verify(creation).createForOrders(eq("DEGRADED_BACKUP"),
+                eq(com.yigongbao.backup.job.JobIdempotency.key("DEGRADED_BACKUP", 9L, "20:7")), eq(9L),
+                argThat(json -> json.contains("7") && json.contains("REAL")), eq(1));
+    }
+
     @Test
     void retryAlsoUsesAtomicVolumeAwareJobCreation() {
         assertThat(java.util.Arrays.stream(AdminBackupController.class.getDeclaredFields())
