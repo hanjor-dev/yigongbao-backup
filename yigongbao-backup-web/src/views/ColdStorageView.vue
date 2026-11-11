@@ -3,9 +3,10 @@ import { computed, onMounted, onUnmounted, ref } from 'vue';
 import { useBackupContext } from '../composables/useBackupContext.js';
 import VolumeArchiveDetail from '../components/storage/VolumeArchiveDetail.vue';
 import ColdVolumeMountDialog from '../components/storage/ColdVolumeMountDialog.vue';
+import { confirmAction, promptAction } from '../uiFeedback.js';
 
 const { coldStorageArchives, selectedStorageArchive, coldStorageLoading, storageVolumes, storageCandidates,
-  loadColdStorage, openColdStorageArchive, scanColdMountCandidates, confirmColdVolumeMounted,
+  loadColdStorage, openColdStorageArchive, closeColdStorageArchive, scanColdMountCandidates, confirmColdVolumeMounted,
   prepareColdVolumeOffline, abandonStorageArchive, navigate } = useBackupContext();
 const coldVolumes = computed(() => storageVolumes.value.filter((volume) => volume.tier === 'COLD'));
 const activeArchives = computed(() => coldStorageArchives.value.filter((item) => ['REQUESTED', 'SWITCHED', 'MANIFEST_FROZEN', 'VERIFYING', 'COMMITTING'].includes(item.archive?.phase)));
@@ -19,7 +20,18 @@ const progress = (item) => { const total = Number(item.archive?.managedFileCount
 
 async function refresh() {
   await loadColdStorage();
-  if (selectedStorageArchive.value?.archive?.id) await openColdStorageArchive(selectedStorageArchive.value.archive.id, true);
+  if (selectedStorageArchive.value?.archive?.id) {
+    await openColdStorageArchive(selectedStorageArchive.value.archive.id, true,
+      selectedStorageArchive.value.items?.current || 1, selectedStorageArchive.value.items?.size || 20);
+  }
+}
+async function changeArchiveItemPage(current) {
+  const detail = selectedStorageArchive.value;
+  if (detail?.archive?.id) await openColdStorageArchive(detail.archive.id, true, current, detail.items?.size || 20);
+}
+async function changeArchiveItemSize(size) {
+  const detail = selectedStorageArchive.value;
+  if (detail?.archive?.id) await openColdStorageArchive(detail.archive.id, true, 1, size);
 }
 async function openMount(volume) {
   mountVolume.value = volume; mountDialog.value = true; await scanColdMountCandidates();
@@ -28,14 +40,14 @@ async function confirmMount(candidate) {
   if (await confirmColdVolumeMounted(mountVolume.value.id, candidate)) mountDialog.value = false;
 }
 async function prepareOffline(volume) {
-  if (confirm(`确认将冷备卷“${volume.displayName}”准备离线？请等待系统确认后再执行操作系统安全弹出。`)) await prepareColdVolumeOffline(volume.id);
+  if (await confirmAction(`确认将冷备卷“${volume.displayName}”准备离线？请等待系统确认后再执行操作系统安全弹出。`, { title: '准备离线' })) await prepareColdVolumeOffline(volume.id);
 }
 async function abandon(archive) {
-  const reason = prompt('请输入放弃原因', '管理员确认放弃本次失败尝试');
-  if (reason && await abandonStorageArchive(archive.id, reason)) { selectedStorageArchive.value = null; await loadColdStorage(); }
+  const reason = await promptAction('请输入放弃原因', { title: '放弃封存尝试', inputValue: '管理员确认放弃本次失败尝试', inputPlaceholder: '请输入放弃原因' });
+  if (reason && await abandonStorageArchive(archive.id, reason)) { closeColdStorageArchive(); await loadColdStorage(); }
 }
-onMounted(async () => { await loadColdStorage(); refreshTimer = window.setInterval(() => { if (activeArchives.value.length) refresh(); }, 5000); });
-onUnmounted(() => { if (refreshTimer) window.clearInterval(refreshTimer); });
+onMounted(async () => { closeColdStorageArchive(); await loadColdStorage(); refreshTimer = window.setInterval(() => { if (activeArchives.value.length) refresh(); }, 5000); });
+onUnmounted(() => { if (refreshTimer) window.clearInterval(refreshTimer); closeColdStorageArchive(); });
 </script>
 
 <template>
@@ -75,7 +87,7 @@ onUnmounted(() => { if (refreshTimer) window.clearInterval(refreshTimer); });
         <el-table-column label="操作" width="190" fixed="right"><template #default="{ row }"><el-button v-if="row.mountStatus === 'ONLINE'" size="small" type="warning" plain @click="prepareOffline(row)">准备离线</el-button><el-button v-else size="small" type="primary" plain @click="openMount(row)">接入原盘</el-button></template></el-table-column>
       </el-table>
     </el-card>
-    <VolumeArchiveDetail :detail="selectedStorageArchive" @close="selectedStorageArchive = null" @abandon="abandon" />
+    <VolumeArchiveDetail :detail="selectedStorageArchive" @close="closeColdStorageArchive" @abandon="abandon" @page-change="changeArchiveItemPage" @size-change="changeArchiveItemSize" />
     <ColdVolumeMountDialog v-model="mountDialog" :volume="mountVolume" :storage-candidates="storageCandidates" :loading="coldStorageLoading" @scan="scanColdMountCandidates" @confirm-mounted="confirmMount" />
   </div>
 </template>

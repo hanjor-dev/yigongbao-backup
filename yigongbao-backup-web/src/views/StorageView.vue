@@ -2,20 +2,22 @@
 import { computed, onMounted, ref } from 'vue';
 import { useBackupContext } from '../composables/useBackupContext.js';
 import { statusLabel } from '../components/StatusBadge.js';
-import { activeVolumeConfirmation, canSetAsActiveVolume, storageCapacityPresentation } from '../storageVolumeActions.js';
+import { activeVolumeConfirmation, canSetAsActiveVolume, canSetAsStandbyVolume, storageCapacityPresentation } from '../storageVolumeActions.js';
+import { confirmAction, promptAction, showWarningMessage } from '../uiFeedback.js';
 
 const { isAdmin, storageVolumes, storageCandidates, loadStorageVolumes, loadStorageVolumeDetail, scanStorageVolumes, registerStorageVolume, changeStorageVolumeState, previewStorageArchive, startStorageArchive, navigate } = useBackupContext();
 const hotActive = computed(() => storageVolumes.value.find((item) => item.tier === 'HOT' && item.writeStatus === 'ACTIVE'));
 const selectedVolume = ref(null);
+const standbyLoadingId = ref(null);
 const bytes = (value) => (value == null ? '不可用' : value < 1048576 ? `${(value / 1024).toFixed(1)} KB` : value < 1073741824 ? `${(value / 1048576).toFixed(1)} MB` : `${(value / 1073741824).toFixed(2)} GB`);
 const capacity = (row) => storageCapacityPresentation(row);
 async function activate(row) {
-  if (confirm(activeVolumeConfirmation(row, hotActive.value))) await changeStorageVolumeState(row.id, 'set-active');
+  if (await confirmAction(activeVolumeConfirmation(row, hotActive.value), { title: '设置活动卷' })) await changeStorageVolumeState(row.id, 'set-active');
 }
 async function failover(row) {
   const target = standbyVolumes.value[0];
-  if (!target) return alert('没有可接替的在线备用热备卷');
-  if (confirm(`确认故障切换至“${target.displayName}”？原活动卷必须已经不可用。`))
+  if (!target) return showWarningMessage('没有可接替的在线备用热备卷');
+  if (await confirmAction(`确认故障切换至“${target.displayName}”？原活动卷必须已经不可用。`, { title: '故障切换确认', type: 'error' }))
     await changeStorageVolumeState(row.id, 'failover', {
       standbyVolumeId: target.id,
     });
@@ -54,15 +56,24 @@ async function submitArchive() {
 }
 async function confirmMountedAt(row) {
   if (row.tier === 'COLD') { navigate('cold-storage'); return; }
-  const mountPath = prompt('请输入当前扫描到的物理盘挂载点（盘符变化时必须填写）', row.rootPath?.replace(/[\\/]yigongbao-backup$/, '') || '');
+  const mountPath = await promptAction('请输入当前扫描到的物理盘挂载点（盘符变化时必须填写）', { title: '确认挂载', inputValue: row.rootPath?.replace(/[\\/]yigongbao-backup$/, '') || '', inputPlaceholder: '例如 D:' });
   if (mountPath) await changeStorageVolumeState(row.id, 'confirm-mounted', { mountPath });
 }
 async function register(candidate) {
-  const name = prompt('请输入存储卷名称', candidate.mountPath);
+  const name = await promptAction('请输入存储卷名称', { title: '纳管存储卷', inputValue: candidate.mountPath, inputPlaceholder: '请输入便于识别的名称' });
   if (name) await registerStorageVolume(candidate, name);
 }
 async function operate(row, action, label) {
-  if (confirm(`确认${label}“${row.displayName}”？系统会检查运行任务和卷状态。`)) await changeStorageVolumeState(row.id, action);
+  if (await confirmAction(`确认${label}“${row.displayName}”？系统会检查运行任务和卷状态。`)) await changeStorageVolumeState(row.id, action);
+}
+async function setStandby(row) {
+  if (!await confirmAction(`确认将“${row.displayName}”设为备用卷？系统会检查卷标记、健康状态和写入能力。`, { title: '设置备用卷' })) return;
+  standbyLoadingId.value = row.id;
+  try {
+    await changeStorageVolumeState(row.id, 'set-standby');
+  } finally {
+    standbyLoadingId.value = null;
+  }
 }
 async function openDetail(row) {
   selectedVolume.value = await loadStorageVolumeDetail(row.id);
@@ -126,13 +137,10 @@ onMounted(loadStorageVolumes);
         <el-table-column prop="lastErrorMessage" label="最近异常" min-width="180"
           ><template #default="{ row }">{{ row.lastErrorMessage || '—' }}</template></el-table-column
         >
-        <el-table-column label="详情" width="90"
-          ><template #default="{ row }"><el-button size="small" link @click="openDetail(row)">卷详情</el-button></template></el-table-column
-        >
-        <el-table-column v-if="isAdmin" label="操作" width="460" fixed="right"
+        <el-table-column label="操作" :width="isAdmin ? 520 : 90" fixed="right"
           ><template #default="{ row }"
-            ><el-button size="small" @click="operate(row, 'probe', '重新探测')">重新探测</el-button><el-button v-if="canSetAsActiveVolume(row)" size="small" type="primary" plain @click="activate(row)">{{ row.tier === 'COLD' ? '转为热备活动卷' : '设为活动卷' }}</el-button><el-button v-if="row.tier === 'HOT' && row.writeStatus === 'ACTIVE' && row.mountStatus !== 'ONLINE'" size="small" type="danger" plain @click="failover(row)">故障切换</el-button><el-button v-if="row.mountStatus !== 'ONLINE'" size="small" @click="confirmMountedAt(row)">确认挂载</el-button><el-button v-if="row.tier === 'HOT' && row.writeStatus !== 'ACTIVE'" size="small" @click="operate(row, 'set-standby', '设为备用卷')">设为备用</el-button><el-button v-if="row.tier === 'HOT' && row.mountStatus === 'ONLINE'" size="small" @click="markCold(row)">整盘封存</el-button
-            ><el-button v-if="row.tier === 'COLD' && row.mountStatus === 'ONLINE'" size="small" type="warning" plain @click="operate(row, 'prepare-offline', '准备离线')">准备离线</el-button></template
+            ><el-button size="small" link type="primary" @click="openDetail(row)">详情</el-button><template v-if="isAdmin"><el-button size="small" @click="operate(row, 'probe', '重新探测')">重新探测</el-button><el-button v-if="canSetAsActiveVolume(row)" size="small" type="primary" plain @click="activate(row)">{{ row.tier === 'COLD' ? '转为热备活动卷' : '设为活动卷' }}</el-button><el-button v-if="row.tier === 'HOT' && row.writeStatus === 'ACTIVE' && row.mountStatus !== 'ONLINE'" size="small" type="danger" plain @click="failover(row)">故障切换</el-button><el-button v-if="row.mountStatus !== 'ONLINE'" size="small" @click="confirmMountedAt(row)">确认挂载</el-button><el-button v-if="canSetAsStandbyVolume(row)" :loading="standbyLoadingId === row.id" size="small" @click="setStandby(row)">设为备用</el-button><el-button v-if="row.tier === 'HOT' && row.mountStatus === 'ONLINE'" size="small" @click="markCold(row)">整盘封存</el-button
+            ><el-button v-if="row.tier === 'COLD' && row.mountStatus === 'ONLINE'" size="small" type="warning" plain @click="operate(row, 'prepare-offline', '准备离线')">准备离线</el-button></template></template
           ></el-table-column
         >
       </el-table>

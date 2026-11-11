@@ -9,6 +9,20 @@ export function canSetAsActiveVolume(volume) {
   return normalized(volume.tier) === 'COLD' && normalized(volume.writeStatus) === 'READ_ONLY';
 }
 
+/** 仅为尚未取得写权限的在线、空闲热备卷提供“设为备用”操作。 */
+export function canSetAsStandbyVolume(volume) {
+  if (!volume || normalized(volume.tier) !== 'HOT') return false;
+  if (normalized(volume.mountStatus) !== 'ONLINE') return false;
+  if (normalized(volume.adminStatus || 'ENABLED') !== 'ENABLED') return false;
+  if (normalized(volume.operationStatus || 'IDLE') !== 'IDLE') return false;
+  return ['READ_ONLY', 'DISABLED'].includes(normalized(volume.writeStatus));
+}
+
+/** 为需要明确完成反馈的存储卷动作提供用户可见文案。 */
+export function storageVolumeActionSuccessMessage(action) {
+  return action === 'set-standby' ? '存储卷已设为备用卷' : '';
+}
+
 /** 明确说明冷备盘复用不会清理历史文件，并展示新旧活动卷的状态变化。 */
 export function activeVolumeConfirmation(target, currentActive) {
   const targetName = target?.displayName || target?.volumeCode || '所选存储卷';

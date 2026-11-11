@@ -1,48 +1,172 @@
 <script setup>
 import { formatJobOrderCreatedAt, jobOrderPatientName, orderBusinessFields, storageVolumeView } from '../../taskCenter.js';
-import OrderBusinessFields from '../orders/OrderBusinessFields.vue';
-import { statusLabel, workflowLabel } from '../StatusBadge.js';
+import ExecutionLogPanel from '../jobs/ExecutionLogPanel.vue';
+import RestoreOrderDetailDrawer from './RestoreOrderDetailDrawer.vue';
+import { statusLabel } from '../StatusBadge.js';
 
-const props = defineProps({ task: Object, orders: { type: Array, default: () => [] }, orderFiles: { type: Object, default: () => ({}) }, orderFileLoading: { type: Object, default: () => ({}) }, orderCurrent: Number, orderSize: Number, orderTotal: Number, progress: Number, loading: Boolean, logVisible: Boolean, logTitle: String, logs: { type: Array, default: () => [] }, logCurrent: Number, logSize: Number, logTotal: Number, logLoading: Boolean });
-const emit = defineEmits(['cancel', 'retry', 'page-change', 'size-change', 'expand-order', 'file-page-change', 'file-size-change', 'open-task-logs', 'open-order-logs', 'log-page-change', 'log-size-change', 'update:log-visible']);
-const bytes = value => { const n = Number(value || 0); if (n < 1024) return `${n} B`; if (n < 1048576) return `${(n / 1024).toFixed(2)} KB`; if (n < 1073741824) return `${(n / 1048576).toFixed(2)} MB`; return `${(n / 1073741824).toFixed(2)} GB`; };
+defineProps({
+  modelValue: Boolean,
+  task: Object,
+  orders: { type: Array, default: () => [] },
+  orderCurrent: { type: Number, default: 1 },
+  orderSize: { type: Number, default: 20 },
+  orderTotal: { type: Number, default: 0 },
+  progress: { type: Number, default: 0 },
+  loading: Boolean,
+  detailTab: { type: String, default: 'orders' },
+  taskLogs: { type: Array, default: () => [] },
+  taskLogCurrent: { type: Number, default: 1 },
+  taskLogSize: { type: Number, default: 50 },
+  taskLogTotal: { type: Number, default: 0 },
+  taskLogLoading: Boolean,
+  selectedOrder: Object,
+  orderDetailVisible: Boolean,
+  orderDetailTab: { type: String, default: 'overview' },
+  orderFiles: { type: Array, default: () => [] },
+  orderFileCurrent: { type: Number, default: 1 },
+  orderFileSize: { type: Number, default: 20 },
+  orderFileTotal: { type: Number, default: 0 },
+  orderFileLoading: Boolean,
+  orderLogs: { type: Array, default: () => [] },
+  orderLogCurrent: { type: Number, default: 1 },
+  orderLogSize: { type: Number, default: 50 },
+  orderLogTotal: { type: Number, default: 0 },
+  orderLogLoading: Boolean
+});
+
+const emit = defineEmits([
+  'update:modelValue', 'close', 'cancel', 'retry', 'tab-change',
+  'page-change', 'size-change', 'open-order-detail',
+  'update:order-detail-visible', 'close-order-detail', 'order-tab-change',
+  'file-page-change', 'file-size-change', 'task-log-page-change', 'task-log-size-change',
+  'order-log-page-change', 'order-log-size-change'
+]);
+
+const bytes = value => {
+  const n = Number(value || 0);
+  if (n < 1024) return `${n} B`;
+  if (n < 1048576) return `${(n / 1024).toFixed(2)} KB`;
+  if (n < 1073741824) return `${(n / 1048576).toFixed(2)} MB`;
+  return `${(n / 1073741824).toFixed(2)} GB`;
+};
 const terminal = value => ['SUCCEEDED', 'FAILED', 'PARTIAL_FAILED', 'CANCELLED'].includes(String(value || '').toUpperCase());
 const business = row => orderBusinessFields(row.orderBusinessJson);
-const evidence = orderId => props.orderFiles[String(orderId)] || { records: [], total: 0, current: 1, size: 20 };
-const loadingFiles = orderId => Boolean(props.orderFileLoading[String(orderId)]);
-const displayFileName = row => { const leaf = String(row.objectKey || '').split('/').filter(Boolean).pop() || ''; const prefix = `${row.assetIdentity || ''}-`; return leaf.startsWith(prefix) ? leaf.slice(prefix.length) : (leaf || row.assetIdentity || '-'); };
-const logTone = level => ({ ERROR: 'is-error', WARN: 'is-warn', INFO: 'is-info' })[String(level || '').toUpperCase()] || 'is-info';
-const formatTime = value => value ? String(value).replace('T', ' ').replace(/\.\d+$/, '') : '-';
-const detail = value => { try { return JSON.stringify(typeof value === 'string' ? JSON.parse(value) : (value || {}), null, 2); } catch { return value || ''; } };
 const volume = (row, fallback = null) => storageVolumeView(row, fallback);
 </script>
 
 <template>
-  <el-card v-if="task" class="job-detail detail" shadow="never">
-    <template #header><div class="detail-heading"><div><h3>恢复任务 {{ task.id }}</h3></div><div class="detail-actions"><status-badge :value="task.state" /><el-button plain @click="emit('open-task-logs')">查看任务日志</el-button><el-button v-if="!terminal(task.state) && !task.cancelRequested" type="danger" plain @click="emit('cancel')">取消任务</el-button><el-button v-if="['FAILED','PARTIAL_FAILED','CANCELLED'].includes(task.state)" type="primary" plain @click="emit('retry')">重试任务</el-button></div></div></template>
-    <div class="job-progress-panel"><div class="progress-meta"><span>整体恢复进度</span><strong>{{ progress }}%</strong><span v-if="loading" class="muted">正在刷新…</span></div><el-progress :percentage="progress" :stroke-width="10" :status="task.state === 'SUCCEEDED' ? 'success' : task.state === 'FAILED' ? 'exception' : undefined" /></div>
-    <el-descriptions :column="4" border class="mb-16"><el-descriptions-item label="任务状态"><status-badge :value="task.state" /></el-descriptions-item><el-descriptions-item label="目标订单数">{{ task.orderTotal || 0 }}</el-descriptions-item><el-descriptions-item label="已上传包容量">{{ bytes(task.bytesCompleted) }}</el-descriptions-item><el-descriptions-item label="冲突策略">{{ statusLabel(task.conflictPolicy) }}</el-descriptions-item><el-descriptions-item label="源存储卷"><strong>{{ volume(task, task.targetStorageVolumeId).name }}</strong><span v-if="volume(task).current"> · 当前 {{ volume(task).current }}</span><span v-if="volume(task).historical"> · {{ volume(task).historical }}</span></el-descriptions-item></el-descriptions>
-    <el-alert v-if="task.failureCode || task.failureEvidence" type="error" :closable="false" show-icon class="mb-16" :title="`失败原因：${task.failureCode || ''} ${task.failureEvidence || ''}`" />
-    <h4>订单恢复明细</h4>
-    <el-table :data="orders" row-key="sourceOrderId" stripe border class="mb-16" empty-text="暂无订单恢复明细" @expand-change="(row, expandedRows) => emit('expand-order', row, expandedRows)">
-      <el-table-column type="expand"><template #default="{ row }"><div class="restore-order-expand"><OrderBusinessFields :value="row.orderBusinessJson" /><div class="restore-file-heading"><strong>压缩包内文件上传明细</strong><span class="muted">按需加载，仅展示本订单的文件级证据</span></div><el-table v-loading="loadingFiles(row.sourceOrderId)" :data="evidence(row.sourceOrderId).records" size="small" border empty-text="该历史任务未记录文件级上传明细"><el-table-column label="文件名" min-width="230" show-overflow-tooltip><template #default="{ row: file }">{{ displayFileName(file) }}</template></el-table-column><el-table-column prop="assetIdentity" label="资产 ID" min-width="180" show-overflow-tooltip /><el-table-column label="源存储卷" min-width="260"><template #default="{ row: file }"><div>{{ volume(file, file.storageVolumeId).name }}<span v-if="volume(file).current"> · 当前 {{ volume(file).current }}</span></div><small v-if="volume(file).historical" class="muted">{{ volume(file).historical }}</small><small v-if="file.storageKey" class="muted"> · {{ file.storageKey }}</small></template></el-table-column><el-table-column label="文件容量" width="145"><template #default="{ row: file }">{{ bytes(file.bytesTotal) }}</template></el-table-column><el-table-column label="已上传" width="145"><template #default="{ row: file }">{{ bytes(file.bytesDone) }}</template></el-table-column><el-table-column label="上传状态" width="130"><template #default="{ row: file }"><status-badge :value="file.status" /></template></el-table-column><el-table-column label="失败原因" min-width="240" show-overflow-tooltip><template #default="{ row: file }"><span class="error-text">{{ file.failureCode || '' }} {{ file.failureMessage || '' }}</span></template></el-table-column></el-table><el-pagination v-if="evidence(row.sourceOrderId).total" class="table-pagination nested-pagination" small background layout="total, prev, pager, next, sizes" :current-page="evidence(row.sourceOrderId).current" :page-size="evidence(row.sourceOrderId).size" :total="evidence(row.sourceOrderId).total" :page-sizes="[10,20,50,100]" @current-change="emit('file-page-change', row.sourceOrderId, $event)" @size-change="emit('file-size-change', row.sourceOrderId, $event)" /></div></template></el-table-column>
-      <el-table-column label="订单号" min-width="180"><template #default="{ row }">{{ row.orderCode || row.sourceOrderId }}</template></el-table-column><el-table-column label="创建时间" min-width="170"><template #default="{ row }">{{ formatJobOrderCreatedAt(row.orderCreatedAt) }}</template></el-table-column><el-table-column label="患者" min-width="120"><template #default="{ row }">{{ jobOrderPatientName(row) }}</template></el-table-column><el-table-column label="源存储卷" min-width="280"><template #default="{ row }"><div>{{ volume(row, row.storageVolumeId || row.sourceStorageVolumeId).name }}<span v-if="volume(row).current"> · 当前 {{ volume(row).current }}</span></div><small v-if="volume(row).historical" class="muted">{{ volume(row).historical }}</small><small class="muted"> · {{ row.storageKey || row.sourceStorageKey || '-' }}</small></template></el-table-column><el-table-column label="业务状态" width="140"><template #default="{ row }"><status-badge :value="business(row).statusName || row.sourceStatus" /></template></el-table-column><el-table-column label="恢复状态" width="140"><template #default="{ row }"><status-badge :value="row.status" /></template></el-table-column><el-table-column label="失败原因" min-width="250" show-overflow-tooltip><template #default="{ row }"><span class="error-text">{{ row.failureCode || '' }} {{ row.failureMessage || '' }}</span></template></el-table-column><el-table-column label="日志" width="120" fixed="right"><template #default="{ row }"><el-button link type="primary" @click="emit('open-order-logs', row)">查看订单日志</el-button></template></el-table-column>
-    </el-table>
-    <el-pagination v-if="orderTotal" class="table-pagination" background layout="total, sizes, prev, pager, next" :current-page="orderCurrent" :page-size="orderSize" :total="orderTotal" :page-sizes="[10,20,50,100]" @current-change="emit('page-change', $event)" @size-change="emit('size-change', $event)" />
-    <el-dialog :model-value="logVisible" :title="logTitle" width="min(980px, 92vw)" top="7vh" destroy-on-close @update:model-value="emit('update:log-visible', $event)">
-      <div v-loading="logLoading" class="log-console" aria-label="执行日志控制台"><div v-if="!logs.length" class="console-empty">暂无已持久化的执行日志。历史任务不会补写旧日志。</div><details v-for="entry in logs" :key="entry.id" class="console-entry" :class="logTone(entry.logLevel)"><summary><time>{{ formatTime(entry.occurredAt) }}</time><b>[{{ statusLabel(entry.logLevel || 'INFO') }}]</b><span>[{{ workflowLabel(entry.stage || '-') }}]</span><span>{{ entry.message }}</span></summary><pre v-if="entry.detailJson">{{ detail(entry.detailJson) }}</pre></details></div>
-      <template #footer><el-pagination v-if="logTotal" small background layout="total, sizes, prev, pager, next" :current-page="logCurrent" :page-size="logSize" :total="logTotal" :page-sizes="[20,50,100]" @current-change="emit('log-page-change', $event)" @size-change="emit('log-size-change', $event)" /></template>
-    </el-dialog>
-  </el-card>
+  <el-dialog
+    :model-value="modelValue"
+    class="job-detail-dialog"
+    width="96vw"
+    top="3vh"
+    append-to-body
+    :close-on-click-modal="false"
+    :destroy-on-close="false"
+    @update:model-value="emit('update:modelValue', $event)"
+    @closed="emit('close')"
+  >
+    <template #header>
+      <div v-if="task" class="job-detail-header">
+        <div class="job-detail-title"><span class="eyebrow">线上恢复任务详情</span><h3>任务 {{ task.id }}</h3></div>
+        <div class="detail-actions">
+          <status-badge :value="task.cancelRequested ? 'CANCELLED' : task.state" :label="task.cancelRequested ? '取消中' : undefined" />
+          <el-button v-if="!terminal(task.state) && !task.cancelRequested" type="danger" plain @click="emit('cancel')">取消任务</el-button>
+          <el-button v-if="['FAILED','PARTIAL_FAILED','CANCELLED'].includes(task.state)" type="primary" plain @click="emit('retry')">重试任务</el-button>
+        </div>
+      </div>
+    </template>
+
+    <div v-if="task" v-loading="loading" class="job-detail-body">
+      <section class="job-summary-panel">
+        <div class="progress-meta"><span>整体恢复进度</span><strong>{{ progress }}%</strong><span v-if="loading" class="muted">正在刷新…</span></div>
+        <el-progress :percentage="progress" :stroke-width="10" :status="task.state === 'SUCCEEDED' ? 'success' : task.state === 'FAILED' ? 'exception' : undefined" />
+        <el-descriptions :column="4" border class="job-summary-grid">
+          <el-descriptions-item label="任务状态"><status-badge :value="task.state" /></el-descriptions-item>
+          <el-descriptions-item label="目标订单数">{{ task.orderTotal || 0 }}</el-descriptions-item>
+          <el-descriptions-item label="已上传包容量">{{ bytes(task.bytesCompleted) }}</el-descriptions-item>
+          <el-descriptions-item label="冲突策略">{{ statusLabel(task.conflictPolicy) }}</el-descriptions-item>
+          <el-descriptions-item label="源存储卷">
+            <div class="summary-volume"><strong>{{ volume(task, task.targetStorageVolumeId).name }}</strong><span v-if="volume(task).current">当前：{{ volume(task).current }}</span><small v-if="volume(task).historical">任务时：{{ volume(task).historical }}</small></div>
+          </el-descriptions-item>
+        </el-descriptions>
+        <el-alert v-if="task.failureCode || task.failureEvidence" type="error" :closable="false" show-icon :title="`失败原因：${task.failureCode || ''} ${task.failureEvidence || ''}`" />
+      </section>
+
+      <el-tabs :model-value="detailTab" class="job-detail-tabs" @tab-change="emit('tab-change', $event)">
+        <el-tab-pane label="订单明细" name="orders">
+          <el-table :data="orders" row-key="sourceOrderId" stripe border empty-text="暂无订单恢复明细">
+            <el-table-column label="订单号" width="160"><template #default="{ row }">{{ row.orderCode || row.sourceOrderId }}</template></el-table-column>
+            <el-table-column label="创建时间" width="174"><template #default="{ row }">{{ formatJobOrderCreatedAt(row.orderCreatedAt) }}</template></el-table-column>
+            <el-table-column label="患者" width="130" show-overflow-tooltip><template #default="{ row }">{{ jobOrderPatientName(row) }}</template></el-table-column>
+            <el-table-column label="源存储卷 / 相对位置" min-width="300"><template #default="{ row }"><div class="order-volume"><strong>{{ volume(row, row.storageVolumeId || row.sourceStorageVolumeId).name }}</strong><span v-if="volume(row).current">当前：{{ volume(row).current }}</span></div><small v-if="volume(row).historical" class="table-muted">任务时：{{ volume(row).historical }}</small><small class="storage-key">{{ row.storageKey || row.sourceStorageKey || '-' }}</small></template></el-table-column>
+            <el-table-column label="业务状态" width="130"><template #default="{ row }"><status-badge :value="business(row).statusName || row.sourceStatus" /></template></el-table-column>
+            <el-table-column label="恢复状态" width="130"><template #default="{ row }"><status-badge :value="row.status" /></template></el-table-column>
+            <el-table-column label="失败原因" min-width="230" show-overflow-tooltip><template #default="{ row }"><span class="error-text">{{ row.failureCode || '' }} {{ row.failureMessage || '' }}</span></template></el-table-column>
+            <el-table-column label="操作" width="92" fixed="right"><template #default="{ row }"><el-button link type="primary" @click="emit('open-order-detail', row)">详情</el-button></template></el-table-column>
+          </el-table>
+          <el-pagination v-if="orderTotal > 0" class="table-pagination" background layout="total, sizes, prev, pager, next" :current-page="orderCurrent" :page-size="orderSize" :total="orderTotal" :page-sizes="[10,20,50,100]" @current-change="emit('page-change', $event)" @size-change="emit('size-change', $event)" />
+        </el-tab-pane>
+
+        <el-tab-pane label="任务日志" name="logs">
+          <ExecutionLogPanel
+            :records="taskLogs"
+            :loading="taskLogLoading"
+            :current="taskLogCurrent"
+            :size="taskLogSize"
+            :total="taskLogTotal"
+            @page-change="emit('task-log-page-change', $event)"
+            @size-change="emit('task-log-size-change', $event)"
+          />
+        </el-tab-pane>
+      </el-tabs>
+    </div>
+  </el-dialog>
+
+  <RestoreOrderDetailDrawer
+    :model-value="orderDetailVisible"
+    :order="selectedOrder"
+    :detail-tab="orderDetailTab"
+    :files="orderFiles"
+    :file-current="orderFileCurrent"
+    :file-size="orderFileSize"
+    :file-total="orderFileTotal"
+    :file-loading="orderFileLoading"
+    :logs="orderLogs"
+    :log-current="orderLogCurrent"
+    :log-size="orderLogSize"
+    :log-total="orderLogTotal"
+    :log-loading="orderLogLoading"
+    @update:model-value="emit('update:order-detail-visible', $event)"
+    @close="emit('close-order-detail')"
+    @tab-change="emit('order-tab-change', $event)"
+    @file-page-change="emit('file-page-change', $event)"
+    @file-size-change="emit('file-size-change', $event)"
+    @log-page-change="emit('order-log-page-change', $event)"
+    @log-size-change="emit('order-log-size-change', $event)"
+  />
 </template>
 
 <style scoped>
-.restore-order-expand { padding: 4px 10px 12px; background: var(--el-fill-color-lighter); }
-.restore-file-heading { display: flex; align-items: baseline; gap: 12px; margin: 16px 0 10px; }
-.nested-pagination { margin-top: 10px; justify-content: flex-end; }
-.log-console { min-height: 280px; max-height: 62vh; overflow: auto; padding: 14px; border-radius: 8px; background: #111827; color: #d1d5db; font: 12px/1.7 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; }
-.console-entry { border-bottom: 1px solid #273244; padding: 8px 0; }
-.console-entry summary { cursor: pointer; display: flex; gap: 8px; align-items: baseline; }
-.console-entry time { color: #94a3b8; white-space: nowrap; }.console-entry b { color: #60a5fa; }.console-entry.is-warn b { color: #fbbf24; }.console-entry.is-error b { color: #f87171; }.console-entry span:last-child { color: #e5e7eb; overflow-wrap: anywhere; }
-.console-entry pre { margin: 8px 0 0 20px; padding: 8px; white-space: pre-wrap; overflow-wrap: anywhere; color: #a5b4fc; background: #0b1120; border-radius: 4px; }.console-empty { color: #94a3b8; padding: 32px 0; text-align: center; }
+.job-detail-header { display: flex; align-items: center; justify-content: space-between; gap: 24px; padding-right: 28px; }
+.job-detail-title { min-width: 0; }
+.job-detail-title h3 { margin: 3px 0 0; font-size: 20px; line-height: 1.25; }
+.eyebrow { color: var(--el-text-color-secondary); font-size: 12px; letter-spacing: .08em; }
+.detail-actions { display: flex; flex-wrap: wrap; justify-content: flex-end; align-items: center; gap: 8px; }
+.detail-actions .el-button + .el-button { margin-left: 0; }
+.job-detail-body { min-height: 460px; }
+.job-summary-panel { display: grid; gap: 12px; padding: 2px 2px 16px; }
+.progress-meta { display: flex; gap: 6px; align-items: baseline; }
+.progress-meta strong { font-size: 18px; }
+.progress-meta .muted { margin-left: auto; }
+.job-summary-grid { margin-top: 2px; }
+.summary-volume, .order-volume { display: flex; flex-wrap: wrap; align-items: center; gap: 5px 9px; }
+.summary-volume small, .storage-key { display: block; width: 100%; overflow-wrap: anywhere; color: var(--el-text-color-secondary); }
+.job-detail-tabs { min-height: 360px; }
+.table-time { white-space: nowrap; font-variant-numeric: tabular-nums; }
+.table-pagination { margin-top: 16px; }
+@media (max-width: 900px) {
+  .job-detail-header { align-items: flex-start; flex-direction: column; gap: 12px; }
+  .detail-actions { justify-content: flex-start; }
+}
 </style>

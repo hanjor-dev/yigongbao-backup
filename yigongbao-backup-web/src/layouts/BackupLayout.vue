@@ -24,7 +24,6 @@ async function submitPassword() { passwordLoading.value = true; try { await chan
           <el-menu-item v-for="item in group.items" v-show="!item.admin || isAdmin" :key="item.key" :index="item.key"><el-icon><component :is="item.icon" /></el-icon><span>{{ item.label }}</span></el-menu-item>
         </template>
       </el-menu>
-      <div class="aside-footer"><span class="online-dot" /> 服务运行中</div>
     </el-aside>
     <el-container class="console-main">
       <el-header class="console-header"><div><h1>{{ groups.flatMap(g => g.items).find(i => i.key === page)?.label || '订单文件' }}</h1></div><div class="header-actions"><el-tag effect="plain" type="success"><span class="user-dot" /> {{ role === 'ADMIN' ? '系统管理员' : '普通用户' }}</el-tag><el-dropdown trigger="click"><el-button circle plain><el-icon><MoreFilled /></el-icon></el-button><template #dropdown><el-dropdown-menu><el-dropdown-item @click="passwordDialog = true"><el-icon><Lock /></el-icon>修改本地密码</el-dropdown-item><el-dropdown-item divided @click="logout"><el-icon><SwitchButton /></el-icon>退出登录</el-dropdown-item></el-dropdown-menu></template></el-dropdown></div></el-header>

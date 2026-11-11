@@ -2,7 +2,7 @@
 import { ref } from 'vue';
 import { Lock, User } from '@element-plus/icons-vue';
 import { useBackupContext } from '../composables/useBackupContext.js';
-const { username, password, notice, login } = useBackupContext();
+const { username, password, login } = useBackupContext();
 const loading = ref(false);
 async function submit() { loading.value = true; try { await login(); } finally { loading.value = false; } }
 </script>
@@ -16,7 +16,6 @@ async function submit() { loading.value = true; try { await login(); } finally {
       <el-form class="login-form" label-position="top" @submit.prevent="submit">
         <el-form-item label="账号"><el-input v-model.trim="username" size="large" autocomplete="username" placeholder="请输入本地账号" :prefix-icon="User" /></el-form-item>
         <el-form-item label="密码"><el-input v-model="password" size="large" type="password" show-password autocomplete="current-password" placeholder="请输入登录密码" :prefix-icon="Lock" /></el-form-item>
-        <el-alert v-if="notice" :title="notice" type="error" :closable="false" show-icon />
         <el-button native-type="submit" type="primary" size="large" class="login-submit" :loading="loading">进入备份中心 <el-icon><ArrowRight /></el-icon></el-button>
       </el-form>
       <div class="login-foot"><span class="online-dot" /> 本地服务已就绪 <span>HTTP · 内网安全域</span></div>

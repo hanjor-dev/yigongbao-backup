@@ -1,6 +1,9 @@
 package com.yigongbao.backup.admin;
 
 import cn.dev33.satoken.stp.StpUtil;
+import com.baomidou.mybatisplus.extension.plugins.pagination.Page;
+import com.yigongbao.backup.order.OrderSnapshotEntity;
+import com.yigongbao.backup.order.OrderSnapshotMapper;
 import com.yigongbao.backup.storage.archive.*;
 import com.yigongbao.backup.storage.lease.StorageVolumeReadLeaseService;
 import com.yigongbao.backup.storage.volume.*;
@@ -26,7 +29,7 @@ class AdminStorageVolumeArchiveControllerTest {
         AdminStorageVolumeArchiveController controller=new AdminStorageVolumeArchiveController(
                 mock(VolumeArchivePreviewService.class),mock(VolumeArchiveService.class),archiveMapper,
                 itemMapper,mock(StorageVolumeReadLeaseService.class),
-                mock(StorageVolumeLifecycleService.class),volumeMapper);
+                mock(StorageVolumeLifecycleService.class),volumeMapper,mock(OrderSnapshotMapper.class));
 
         try(MockedStatic<StpUtil> auth=mockStatic(StpUtil.class)) {
             List<AdminStorageVolumeArchiveController.ArchiveListItem> result=controller.listArchives().data();
@@ -38,6 +41,37 @@ class AdminStorageVolumeArchiveControllerTest {
             assertThat(result.get(1).verifiedFileCount()).isZero();
             verify(itemMapper,times(1)).selectList(any());
             verify(itemMapper,never()).selectCount(any());
+            auth.verify(()->StpUtil.checkRole("ADMIN"));
+        }
+    }
+
+    @Test void pagesArchiveItemsAndReturnsBusinessOrderCode() {
+        VolumeArchiveService archives=mock(VolumeArchiveService.class);
+        VolumeArchiveEntity archive=archive(7L,1L,2L,"SUCCEEDED");
+        when(archives.required(7L)).thenReturn(archive);
+        VolumeArchiveItemMapper itemMapper=mock(VolumeArchiveItemMapper.class);
+        VolumeArchiveItemEntity item=verified(7L); item.setSnapshotId(101L); item.setSourceOrderId(99L);
+        Page<VolumeArchiveItemEntity> page=new Page<>(2,50,81); page.setRecords(List.of(item));
+        when(itemMapper.selectPage(any(Page.class),any())).thenReturn(page);
+        OrderSnapshotMapper snapshotMapper=mock(OrderSnapshotMapper.class);
+        OrderSnapshotEntity snapshot=new OrderSnapshotEntity(); snapshot.setId(101L); snapshot.setOrderCode("YGB-2026-0001");
+        when(snapshotMapper.selectBatchIds(any())).thenReturn(List.of(snapshot));
+        AdminStorageVolumeArchiveController controller=new AdminStorageVolumeArchiveController(
+                mock(VolumeArchivePreviewService.class),archives,mock(VolumeArchiveMapper.class),itemMapper,
+                mock(StorageVolumeReadLeaseService.class),mock(StorageVolumeLifecycleService.class),
+                mock(StorageVolumeMapper.class),snapshotMapper);
+
+        try(MockedStatic<StpUtil> auth=mockStatic(StpUtil.class)) {
+            AdminStorageVolumeArchiveController.ArchiveDetail result=controller.detail(7L,2,50).data();
+            assertThat(result.items().current()).isEqualTo(2);
+            assertThat(result.items().size()).isEqualTo(50);
+            assertThat(result.items().total()).isEqualTo(81);
+            assertThat(result.items().records()).singleElement().satisfies(value -> {
+                assertThat(value.getOrderCode()).isEqualTo("YGB-2026-0001");
+                assertThat(value.getSourceOrderId()).isEqualTo(99L);
+            });
+            verify(itemMapper).selectPage(any(Page.class),any());
+            verify(itemMapper,never()).selectList(any());
             auth.verify(()->StpUtil.checkRole("ADMIN"));
         }
     }

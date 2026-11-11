@@ -12,6 +12,7 @@ import com.yigongbao.backup.storage.location.ArtifactCopyMapper;
 import com.yigongbao.backup.storage.reservation.SpaceReservationEntity;
 import com.yigongbao.backup.storage.reservation.SpaceReservationMapper;
 import lombok.RequiredArgsConstructor;
+import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
@@ -29,6 +30,7 @@ import java.util.UUID;
  */
 @Service
 @RequiredArgsConstructor
+@Slf4j
 public class StorageVolumeLifecycleService {
     private final StorageVolumeMapper volumeMapper;
     private final StorageVolumeDiscoveryService discoveryService;
@@ -211,6 +213,24 @@ public class StorageVolumeLifecycleService {
     @Transactional
     public StorageVolumeEntity changeTier(long volumeId, StorageVolumeStatus.Tier tier,
                                           StorageVolumeStatus.Write writeStatus, long operatorId) {
+        long startedAt = System.nanoTime();
+        log.info("存储卷状态变更开始｜存储卷ID={}｜目标分层={}｜目标写入状态={}｜操作人ID={}",
+                volumeId, tier, writeStatus, operatorId);
+        try {
+            StorageVolumeEntity entity = changeTierInternal(volumeId, tier, writeStatus, operatorId);
+            log.info("存储卷状态变更成功｜存储卷ID={}｜目标分层={}｜目标写入状态={}｜操作人ID={}｜执行耗时={}毫秒",
+                    volumeId, tier, writeStatus, operatorId, elapsedMillis(startedAt));
+            return entity;
+        } catch (RuntimeException failure) {
+            log.warn("存储卷状态变更失败｜存储卷ID={}｜目标分层={}｜目标写入状态={}｜操作人ID={}｜执行耗时={}毫秒｜异常类型={}｜异常原因={}",
+                    volumeId, tier, writeStatus, operatorId, elapsedMillis(startedAt),
+                    failure.getClass().getSimpleName(), failure.getMessage());
+            throw failure;
+        }
+    }
+
+    private StorageVolumeEntity changeTierInternal(long volumeId, StorageVolumeStatus.Tier tier,
+                                                    StorageVolumeStatus.Write writeStatus, long operatorId) {
         // 所有卷状态写入与 setActive 使用相同锁序，避免并发状态转换覆盖刚提交的 ACTIVE。
         StorageVolumeEntity currentActive = volumeMapper.findActiveForUpdate();
         if (currentActive != null && !java.util.Objects.equals(currentActive.getId(), volumeId)
@@ -244,6 +264,10 @@ public class StorageVolumeLifecycleService {
         volumeMapper.updateById(entity);
         audit(operatorId, "CHANGE_STATE", entity, "SUCCESS", null);
         return entity;
+    }
+
+    private static long elapsedMillis(long startedAt) {
+        return (System.nanoTime() - startedAt) / 1_000_000L;
     }
 
     /**

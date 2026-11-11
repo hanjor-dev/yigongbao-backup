@@ -2,8 +2,11 @@ package com.yigongbao.backup.admin;
 
 import cn.dev33.satoken.stp.StpUtil;
 import com.baomidou.mybatisplus.core.toolkit.Wrappers;
+import com.baomidou.mybatisplus.extension.plugins.pagination.Page;
 import com.yigongbao.backup.common.ApiResponse;
 import com.yigongbao.backup.job.JobEntity;
+import com.yigongbao.backup.order.OrderSnapshotEntity;
+import com.yigongbao.backup.order.OrderSnapshotMapper;
 import com.yigongbao.backup.storage.archive.*;
 import com.yigongbao.backup.storage.lease.StorageVolumeReadLeaseService;
 import com.yigongbao.backup.storage.volume.*;
@@ -26,6 +29,7 @@ public class AdminStorageVolumeArchiveController {
     private final VolumeArchiveMapper archiveMapper; private final VolumeArchiveItemMapper itemMapper;
     private final StorageVolumeReadLeaseService leases; private final StorageVolumeLifecycleService lifecycle;
     private final StorageVolumeMapper volumeMapper;
+    private final OrderSnapshotMapper snapshotMapper;
 
     @GetMapping("/{id}/archive-preview")
     public ApiResponse<VolumeArchivePreviewService.ArchivePreview> preview(@PathVariable long id,
@@ -71,10 +75,39 @@ public class AdminStorageVolumeArchiveController {
     }
 
     @GetMapping("/archives/{archiveId}")
-    public ApiResponse<ArchiveDetail> detail(@PathVariable long archiveId) { admin(); VolumeArchiveEntity archive=archives.required(archiveId);
-        List<VolumeArchiveItemEntity> items=itemMapper.selectList(Wrappers.<VolumeArchiveItemEntity>lambdaQuery()
-                .eq(VolumeArchiveItemEntity::getArchiveId,archiveId).eq(VolumeArchiveItemEntity::getIsDeleted,0).orderByAsc(VolumeArchiveItemEntity::getId));
-        return ApiResponse.ok(new ArchiveDetail(archive,items),requestId()); }
+    public ApiResponse<ArchiveDetail> detail(@PathVariable long archiveId,
+            @RequestParam(defaultValue="1") long current,@RequestParam(defaultValue="20") long size) {
+        admin();
+        VolumeArchiveEntity archive=archives.required(archiveId);
+        long safeCurrent=Math.max(1,current); long safeSize=Math.min(100,Math.max(1,size));
+        Page<VolumeArchiveItemEntity> items=itemMapper.selectPage(new Page<>(safeCurrent,safeSize),
+                Wrappers.<VolumeArchiveItemEntity>lambdaQuery()
+                        .eq(VolumeArchiveItemEntity::getArchiveId,archiveId)
+                        .eq(VolumeArchiveItemEntity::getIsDeleted,0)
+                        .orderByAsc(VolumeArchiveItemEntity::getId));
+        fillOrderCodes(items.getRecords());
+        return ApiResponse.ok(new ArchiveDetail(archive,ArchiveItemPage.from(items)),requestId());
+    }
+
+    private void fillOrderCodes(List<VolumeArchiveItemEntity> items) {
+        List<Long> snapshotIds=items.stream().map(VolumeArchiveItemEntity::getSnapshotId)
+                .filter(Objects::nonNull).distinct().toList();
+        Map<Long,String> bySnapshotId=snapshotIds.isEmpty()?Map.of():snapshotMapper.selectBatchIds(snapshotIds).stream()
+                .filter(value->value.getId()!=null&&value.getOrderCode()!=null)
+                .collect(Collectors.toMap(OrderSnapshotEntity::getId,OrderSnapshotEntity::getOrderCode,(left,right)->left));
+        items.forEach(item->item.setOrderCode(bySnapshotId.get(item.getSnapshotId())));
+        List<Long> unresolvedSourceIds=items.stream().filter(item->item.getOrderCode()==null)
+                .map(VolumeArchiveItemEntity::getSourceOrderId).filter(Objects::nonNull).distinct().toList();
+        if(unresolvedSourceIds.isEmpty()) return;
+        Map<Long,String> bySourceId=snapshotMapper.selectList(Wrappers.<OrderSnapshotEntity>lambdaQuery()
+                        .in(OrderSnapshotEntity::getSourceOrderId,unresolvedSourceIds)
+                        .eq(OrderSnapshotEntity::getIsDeleted,0).orderByDesc(OrderSnapshotEntity::getId)).stream()
+                .filter(value->value.getSourceOrderId()!=null&&value.getOrderCode()!=null)
+                .collect(Collectors.toMap(OrderSnapshotEntity::getSourceOrderId,OrderSnapshotEntity::getOrderCode,
+                        (newest,older)->newest));
+        items.stream().filter(item->item.getOrderCode()==null)
+                .forEach(item->item.setOrderCode(bySourceId.get(item.getSourceOrderId())));
+    }
 
     @PostMapping("/archives/{archiveId}/abandon")
     public ApiResponse<VolumeArchiveEntity> abandon(@PathVariable long archiveId,@RequestBody(required=false) AbandonCommand command) {
@@ -92,7 +125,11 @@ public class AdminStorageVolumeArchiveController {
     public record ArchiveCommand(Long successorVolumeId,String archiveNote,String offlineLabelNote,String physicalLocation,String idempotencyKey){}
     public record FailoverCommand(long standbyVolumeId){}
     public record AbandonCommand(String reason){}
-    public record ArchiveDetail(VolumeArchiveEntity archive,List<VolumeArchiveItemEntity> items){}
+    public record ArchiveDetail(VolumeArchiveEntity archive,ArchiveItemPage items){}
+    public record ArchiveItemPage(List<VolumeArchiveItemEntity> records,long total,long current,long size,long pages){
+        static ArchiveItemPage from(Page<VolumeArchiveItemEntity> page){return new ArchiveItemPage(
+                page.getRecords(),page.getTotal(),page.getCurrent(),page.getSize(),page.getPages());}
+    }
     public record ArchiveListItem(VolumeArchiveEntity archive,VolumeSummary sourceVolume,VolumeSummary successorVolume,
                                   long verifiedFileCount){}
     public record VolumeSummary(Long id,String volumeCode,String displayName,String tier,String mountStatus,

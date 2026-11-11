@@ -37,6 +37,22 @@ test('cold storage page shows archive attempts media inventory and file-level fa
   assert.match(page, /PREPARE_FAILED[^\]]*VERIFY_FAILED[^\]]*COMMIT_FAILED[^\]]*CANCELLED/s);
 });
 
+test('archive file verification uses server pagination and opens only after an explicit detail action', () => {
+  const page = read('../src/views/ColdStorageView.vue');
+  const detail = read('../src/components/storage/VolumeArchiveDetail.vue');
+  const consoleSource = read('../src/composables/useBackupConsole.js');
+
+  assert.match(consoleSource, /archives\/\$\{encodeURIComponent\(archiveId\)\}\?current=\$\{current\}&size=\$\{size\}/);
+  assert.doesNotMatch(consoleSource, /cold-storage-archive-focus/);
+  assert.doesNotMatch(consoleSource.match(/async function loadColdStorage[\s\S]*?\n  }/s)?.[0] || '', /openColdStorageArchive/);
+  assert.match(page, /closeColdStorageArchive\(\)/);
+  assert.match(detail, /detail\.items\.records/);
+  assert.match(detail, /el-pagination/);
+  assert.match(detail, /label="订单编号"/);
+  assert.match(detail, /row\.orderCode/);
+  assert.doesNotMatch(detail, /label="订单 ID"/);
+});
+
 test('cold media remount selects a scanned candidate instead of accepting a free-form path', () => {
   assert.equal(existsSync(new URL('../src/components/storage/ColdVolumeMountDialog.vue', import.meta.url)), true);
   const dialog = read('../src/components/storage/ColdVolumeMountDialog.vue');

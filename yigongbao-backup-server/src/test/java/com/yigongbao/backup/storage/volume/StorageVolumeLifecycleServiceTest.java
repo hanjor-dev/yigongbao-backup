@@ -1,5 +1,8 @@
 package com.yigongbao.backup.storage.volume;
 
+import ch.qos.logback.classic.Logger;
+import ch.qos.logback.classic.spi.ILoggingEvent;
+import ch.qos.logback.core.read.ListAppender;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.yigongbao.backup.audit.AuditLogService;
 import com.yigongbao.backup.job.JobMapper;
@@ -8,6 +11,7 @@ import com.yigongbao.backup.config.RuntimeConfigService;
 import com.yigongbao.backup.storage.location.ArtifactCopyMapper;
 import com.yigongbao.backup.storage.reservation.SpaceReservationMapper;
 import org.junit.jupiter.api.Test;
+import org.slf4j.LoggerFactory;
 
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.assertj.core.api.Assertions.assertThat;
@@ -24,6 +28,60 @@ import static org.mockito.Mockito.never;
 
 /** 存储卷状态机的关键安全边界测试。 */
 class StorageVolumeLifecycleServiceTest {
+
+    @Test
+    void logsStandbyTransitionStartAndSuccessWithOperationalContext() {
+        StorageVolumeMapper mapper = mock(StorageVolumeMapper.class);
+        StorageVolumeMarkerService markers = mock(StorageVolumeMarkerService.class);
+        StorageVolumeHealthService health = mock(StorageVolumeHealthService.class);
+        StorageVolumeEntity volume = transitionVolume(6L);
+        when(mapper.findByIdForUpdate(6L)).thenReturn(volume);
+        when(markers.verify(any(), any()))
+                .thenReturn(new StorageVolumeMarkerService.VerificationResult(true, true, null));
+        when(health.probe(volume)).thenReturn(new StorageVolumeHealthService.HealthSnapshot(
+                true, true, 100L, 80L, null, null, 1L));
+        StorageVolumeLifecycleService service = service(mapper, markers, health, mock(JobMapper.class),
+                mock(JobOrderMapper.class), mock(ArtifactCopyMapper.class), mock(SpaceReservationMapper.class),
+                mock(RuntimeConfigService.class));
+        ListAppender<ILoggingEvent> appender = attachAppender();
+
+        try {
+            service.changeTier(6L, StorageVolumeStatus.Tier.HOT, StorageVolumeStatus.Write.STANDBY, 100L);
+        } finally {
+            detachAppender(appender);
+        }
+
+        String logs = formattedLogs(appender);
+        assertThat(logs).contains("存储卷状态变更开始", "存储卷状态变更成功", "存储卷ID=6",
+                "目标分层=HOT", "目标写入状态=STANDBY", "操作人ID=100", "执行耗时=");
+    }
+
+    @Test
+    void logsStandbyTransitionFailureWithReason() {
+        StorageVolumeMapper mapper = mock(StorageVolumeMapper.class);
+        StorageVolumeMarkerService markers = mock(StorageVolumeMarkerService.class);
+        StorageVolumeEntity volume = transitionVolume(7L);
+        when(mapper.findByIdForUpdate(7L)).thenReturn(volume);
+        when(markers.verify(any(), any()))
+                .thenReturn(new StorageVolumeMarkerService.VerificationResult(true, false, "卷标记不匹配"));
+        StorageVolumeLifecycleService service = service(mapper, markers, mock(StorageVolumeHealthService.class),
+                mock(JobMapper.class), mock(JobOrderMapper.class), mock(ArtifactCopyMapper.class),
+                mock(SpaceReservationMapper.class), mock(RuntimeConfigService.class));
+        ListAppender<ILoggingEvent> appender = attachAppender();
+
+        try {
+            assertThatThrownBy(() -> service.changeTier(7L, StorageVolumeStatus.Tier.HOT,
+                    StorageVolumeStatus.Write.STANDBY, 101L))
+                    .isInstanceOf(StorageVolumeOperationException.class);
+        } finally {
+            detachAppender(appender);
+        }
+
+        String logs = formattedLogs(appender);
+        assertThat(logs).contains("存储卷状态变更开始", "存储卷状态变更失败", "存储卷ID=7",
+                "目标写入状态=STANDBY", "操作人ID=101", "异常类型=StorageVolumeOperationException",
+                "异常原因=存储卷卷标记校验失败：卷标记不匹配", "执行耗时=");
+    }
 
     @Test
     void firstHealthyManagedVolumeBecomesActiveAutomatically() throws Exception {
@@ -347,5 +405,37 @@ class StorageVolumeLifecycleServiceTest {
             SpaceReservationMapper reservations, RuntimeConfigService configs) {
         return new StorageVolumeLifecycleService(mapper, mock(StorageVolumeDiscoveryService.class), markers, health,
                 mock(AuditLogService.class), new ObjectMapper(), jobs, jobOrders, copies, reservations, configs);
+    }
+
+    private static StorageVolumeEntity transitionVolume(long id) {
+        StorageVolumeEntity volume = new StorageVolumeEntity();
+        volume.setId(id);
+        volume.setTier("HOT");
+        volume.setMountStatus("ONLINE");
+        volume.setWriteStatus("READ_ONLY");
+        volume.setAdminStatus("ENABLED");
+        volume.setOperationStatus("IDLE");
+        volume.setRootPath("D:/managed-" + id);
+        volume.setMarkerJson("{\"volumeId\":\"00000000-0000-0000-0000-00000000000" + id + "\"}");
+        volume.setIsDeleted(0);
+        return volume;
+    }
+
+    private static ListAppender<ILoggingEvent> attachAppender() {
+        Logger logger = (Logger) LoggerFactory.getLogger(StorageVolumeLifecycleService.class);
+        ListAppender<ILoggingEvent> appender = new ListAppender<>();
+        appender.start();
+        logger.addAppender(appender);
+        return appender;
+    }
+
+    private static void detachAppender(ListAppender<ILoggingEvent> appender) {
+        Logger logger = (Logger) LoggerFactory.getLogger(StorageVolumeLifecycleService.class);
+        logger.detachAppender(appender);
+    }
+
+    private static String formattedLogs(ListAppender<ILoggingEvent> appender) {
+        return appender.list.stream().map(ILoggingEvent::getFormattedMessage)
+                .collect(java.util.stream.Collectors.joining("\n"));
     }
 }

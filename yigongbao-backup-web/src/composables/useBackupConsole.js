@@ -4,6 +4,9 @@ import { api, binary, saveBlob, uploadWithProgress } from '../api.js';
 import { buildJobFilePageUrl, createDetailRequestGuard, createSectionLoadTracker } from '../jobDetailState.js';
 import { createAuthStore } from '../stores/authStore.js';
 import { createRouteStore } from '../stores/routeStore.js';
+import { storageVolumeActionSuccessMessage } from '../storageVolumeActions.js';
+import { normalizeStorageArchiveDetail } from '../storageArchiveDetail.js';
+import { confirmAction } from '../uiFeedback.js';
 
 /**
  * 备份控制台领域状态与服务动作。
@@ -436,7 +439,7 @@ export function useBackupConsole() {
       notice.value = '所选订单中包含存储卷不可访问的订单，请取消选择后重试';
       return;
     }
-    if (!confirm('确认批量线上恢复？线上已删除订单将自动跳过。')) return;
+    if (!await confirmAction('确认批量线上恢复？线上已删除订单将自动跳过。', { title: '批量恢复确认' })) return;
     try {
       const result = await api('/admin/restores/batch', {
         method: 'POST',
@@ -484,7 +487,7 @@ export function useBackupConsole() {
 
   async function executeCleanup() {
     const taskId = cleanupResult.value?.taskId;
-    if (!taskId || !confirm('确认提交 COS 清理授权执行？')) return;
+    if (!taskId || !await confirmAction('确认提交 COS 清理授权执行？', { title: 'COS 清理确认', type: 'error' })) return;
     try {
       const result = await api('/admin/cleanup/permit-poll', {
         method: 'POST',
@@ -747,6 +750,8 @@ export function useBackupConsole() {
         method: 'POST',
         body: body == null ? (suffix === '/state' ? JSON.stringify(body) : undefined) : JSON.stringify(body),
       });
+      const successMessage = storageVolumeActionSuccessMessage(action);
+      if (successMessage) notice.value = successMessage;
       await loadStorageVolumes();
     } catch (error) {
       notice.value = error.message || '更新存储卷状态失败';
@@ -770,22 +775,16 @@ export function useBackupConsole() {
       notice.value = '整盘封存任务已提交；校验完成前请勿拔盘';
       route.navigate('cold-storage');
       await loadColdStorage();
-      if (result.data?.id) {
-        const attempt = coldStorageArchives.value.find((item) => String(item.archive?.jobId) === String(result.data.id));
-        if (attempt?.archive?.id) {
-          sessionStorage.setItem('cold-storage-archive-focus', String(attempt.archive.id));
-          await openColdStorageArchive(attempt.archive.id);
-        }
-      }
       return result.data || null;
     } catch (error) {
       notice.value = error.message || '整盘封存启动失败';
       return null;
     }
   }
-  async function loadStorageArchiveDetail(archiveId) {
+  async function loadStorageArchiveDetail(archiveId, current = 1, size = 20) {
     try {
-      return (await api(`/admin/storage-volumes/archives/${encodeURIComponent(archiveId)}`)).data || null;
+      const detail = (await api(`/admin/storage-volumes/archives/${encodeURIComponent(archiveId)}?current=${current}&size=${size}`)).data || null;
+      return normalizeStorageArchiveDetail(detail, current, size);
     } catch (error) {
       notice.value = error.message || '加载封存明细失败';
       return null;
@@ -800,23 +799,23 @@ export function useBackupConsole() {
       ]);
       coldStorageArchives.value = archiveResult.data || [];
       storageVolumes.value = volumeResult.data || [];
-      const focused = sessionStorage.getItem('cold-storage-archive-focus');
-      if (focused && !selectedStorageArchive.value) await openColdStorageArchive(focused, true);
     } catch (error) {
       notice.value = error.message || '加载冷备管理信息失败';
     } finally {
       coldStorageLoading.value = false;
     }
   }
-  async function openColdStorageArchive(archiveId, silent = false) {
+  async function openColdStorageArchive(archiveId, silent = false, current = 1, size = 20) {
     try {
-      selectedStorageArchive.value = await loadStorageArchiveDetail(archiveId);
-      if (selectedStorageArchive.value) sessionStorage.setItem('cold-storage-archive-focus', String(archiveId));
+      selectedStorageArchive.value = await loadStorageArchiveDetail(archiveId, current, size);
       return selectedStorageArchive.value;
     } catch (error) {
       if (!silent) notice.value = error.message || '加载封存任务详情失败';
       return null;
     }
+  }
+  function closeColdStorageArchive() {
+    selectedStorageArchive.value = null;
   }
   async function scanColdMountCandidates() {
     await scanStorageVolumes();
@@ -865,7 +864,7 @@ export function useBackupConsole() {
   /** 管理员主动执行一次候选扫描；服务端仍复用自动备份的筛选、排重与任务幂等规则。 */
   async function runScheduledBackupNow() {
     if (scheduledBackupRunning.value) return;
-    if (!confirm('确认立即执行一次自动备份扫描？该操作会跳过今日计划时间限制，但仍仅处理符合备份条件且尚未完成备份的订单。')) return;
+    if (!await confirmAction('确认立即执行一次自动备份扫描？该操作会跳过今日计划时间限制，但仍仅处理符合备份条件且尚未完成备份的订单。', { title: '立即执行备份扫描' })) return;
     scheduledBackupRunning.value = true;
     try {
       await api('/admin/backup/schedule/run-now', {
@@ -1051,7 +1050,7 @@ export function useBackupConsole() {
   }
 
   async function cancelJob(job = selectedJob.value) {
-    if (!job || isTerminalJob(job) || !confirm('确认取消该任务？')) return;
+    if (!job || isTerminalJob(job) || !await confirmAction('确认取消该任务？', { title: '取消任务' })) return;
     try {
       await api('/admin/jobs/' + encodeURIComponent(job.id) + '/cancel', {
         method: 'POST',
@@ -1124,7 +1123,7 @@ export function useBackupConsole() {
       notice.value = '只有写出完成的冷备批次才能校验';
       return;
     }
-    if (!confirm('确认校验该冷备批次？校验未通过时不会允许删除热备文件。')) return;
+    if (!await confirmAction('确认校验该冷备批次？校验未通过时不会允许删除热备文件。', { title: '校验冷备批次' })) return;
     coldBusy.value = true;
     try {
       const result = await api('/admin/cold-batches/' + encodeURIComponent(batch.id) + '/verify', { method: 'POST', body: '{}' });
@@ -1153,7 +1152,7 @@ export function useBackupConsole() {
       notice.value = '请填写该批次全部热备订单包相对路径，系统只允许整批清理';
       return;
     }
-    if (!confirm('确认清理该冷备批次对应的全部热备文件？此操作不可撤销，系统不会支持单订单删除。')) return;
+    if (!await confirmAction('确认清理该冷备批次对应的全部热备文件？此操作不可撤销，系统不会支持单订单删除。', { title: '整批清理热备文件', type: 'error' })) return;
     coldBusy.value = true;
     try {
       const result = await api('/admin/cold-batches/' + encodeURIComponent(batch.id) + '/hot-cleanup-confirm', {
@@ -1635,6 +1634,7 @@ export function useBackupConsole() {
     abandonStorageArchive,
     loadColdStorage,
     openColdStorageArchive,
+    closeColdStorageArchive,
     scanColdMountCandidates,
     confirmColdVolumeMounted,
     prepareColdVolumeOffline,

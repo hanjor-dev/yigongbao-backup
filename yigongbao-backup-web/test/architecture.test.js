@@ -15,7 +15,6 @@ test('application shell exposes refs as top-level template bindings', () => {
   const app = fs.readFileSync(path.join(root, 'src', 'App.vue'), 'utf8');
   assert.match(app, /const \{ token, notice, page \} = backup/);
   assert.match(app, /v-if="!token"/);
-  assert.match(app, /\{\{ notice \}\}/);
 });
 
 test('frontend keeps page views separate from the application shell', () => {
@@ -55,12 +54,14 @@ test('restore task page passes unwrapped arrays to Element Plus tables', () => {
   assert.doesNotMatch(restoreView, /:tasks="restore\.tasks"/);
 });
 
-test('restore task detail provides task and order execution log entry points', () => {
+test('restore task detail embeds task and order execution logs in their detail tabs', () => {
   const detail = fs.readFileSync(path.join(root, 'src', 'components', 'restores', 'RestoreTaskDetail.vue'), 'utf8');
+  const drawer = fs.readFileSync(path.join(root, 'src', 'components', 'restores', 'RestoreOrderDetailDrawer.vue'), 'utf8');
   const composable = fs.readFileSync(path.join(root, 'src', 'composables', 'useRestoreTasks.js'), 'utf8');
-  assert.match(detail, /查看任务日志/);
-  assert.match(detail, /查看订单日志/);
-  assert.match(detail, /el-dialog/);
-  assert.match(composable, /\$\{base\}\/logs\?current=/);
-  assert.match(composable, /\$\{base\}\/orders\/\$\{encodeURIComponent\(scope\.sourceOrderId\)\}\/logs/);
+  assert.match(detail, /label="任务日志" name="logs"/);
+  assert.match(detail, /<ExecutionLogPanel/);
+  assert.match(drawer, /label="执行日志" name="logs"/);
+  assert.match(drawer, /<ExecutionLogPanel/);
+  assert.match(composable, /\/logs\?current=\$\{encodeURIComponent\(page\)\}/);
+  assert.match(composable, /\/orders\/\$\{encodeURIComponent\(selectedOrder\.value\.sourceOrderId\)\}\/logs/);
 });

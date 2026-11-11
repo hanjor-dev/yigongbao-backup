@@ -77,7 +77,7 @@ watch(selectedConfigCategory, () => {
         <el-table-column prop="value" label="当前值" min-width="180" show-overflow-tooltip />
         <el-table-column prop="valueType" label="类型" width="110" />
         <el-table-column label="生效时间" width="130"><template #default="{ row }"><el-tag size="small" effect="plain">{{ effectiveText(row) }}</el-tag></template></el-table-column>
-        <el-table-column label="说明" min-width="260">
+        <el-table-column label="说明" width="100">
           <template #default="{ row }">
             <el-tooltip v-if="row.description" :content="row.description" placement="top-start"><span class="help-icon">?</span></el-tooltip>
             <span v-else class="muted">暂无说明</span>
