@@ -21,7 +21,7 @@ onMounted(async () => {
 </script>
 
 <template>
-  <div class="page-stack"><section class="page-heading"><div><div class="eyebrow">ONLINE RESTORE</div><h2>线上恢复</h2><p>跟踪热备订单包上传、线上校验与文件链接回写结果。恢复入口位于“订单文件”页。</p></div><el-button type="primary" plain @click="refresh">刷新任务</el-button></section>
+  <div class="page-stack"><section class="page-heading"><div><h2>线上恢复</h2><p>跟踪热备订单包上传、线上校验与文件链接回写结果。恢复入口位于“订单文件”页。</p></div><el-button type="primary" plain @click="refresh">刷新任务</el-button></section>
     <el-alert title="每个订单的 ZIP 包会独立准备、上传并提交。任一关联文件失败则该订单恢复失败；线上已删除订单会自动跳过。" type="info" show-icon :closable="false" />
     <el-alert v-if="message" class="mb-16" type="warning" show-icon :closable="false" :title="message" />
     <el-card shadow="never" class="table-card mb-16"><template #header>线上恢复任务列表</template><RestoreTaskTable :tasks="tasks" :current="current" :size="size" :total="total" @select="selectTask" @page-change="changePage" @size-change="changeSize" /></el-card>

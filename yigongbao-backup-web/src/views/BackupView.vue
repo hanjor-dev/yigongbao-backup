@@ -9,7 +9,7 @@ const { loadJobs, runScheduledBackupNow, scheduledBackupRunning } = useBackupCon
 <template>
   <div class="page-stack">
     <section class="page-heading">
-      <div><div class="eyebrow">AUTOMATIC BACKUP</div><h2>订单备份</h2><p>系统在每个计划时间自动汇总全部增量正式订单，并生成一个可追踪的备份任务。</p></div>
+      <div><h2>订单备份</h2><p>系统在每个计划时间自动汇总全部增量正式订单，并生成一个可追踪的备份任务。</p></div>
       <div class="toolbar-actions">
         <el-button :loading="scheduledBackupRunning" type="primary" @click="runScheduledBackupNow">立即执行扫描</el-button>
         <el-button plain @click="loadJobs">刷新任务</el-button>

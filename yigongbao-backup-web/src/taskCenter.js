@@ -18,12 +18,78 @@ export function jobProgress(job) {
   return 0;
 }
 
+const jobCount = value => Number(value ?? 0) || 0;
+
+const jobBytes = value => {
+  const size = Number(value || 0);
+  if (size < 1024) return `${size} B`;
+  if (size < 1048576) return `${(size / 1024).toFixed(2)} KB`;
+  if (size < 1073741824) return `${(size / 1048576).toFixed(2)} MB`;
+  return `${(size / 1073741824).toFixed(2)} GB`;
+};
+
+/** 为任务列表生成逐行订单统计，避免紧凑列中使用斜杠拼接。 */
+export function jobOrderSummaryRows(job) {
+  const completed = jobCount(job?.orderCompleted);
+  const failed = jobCount(job?.orderFailed);
+  const total = jobCount(job?.orderTotal);
+  return [
+    { text: `成功${completed}`, tone: 'success' },
+    { text: `失败${failed}`, tone: 'danger' },
+    { text: `待处理${Math.max(0, total - completed - failed)}`, tone: 'default' },
+    { text: `共${total}`, tone: 'default' },
+  ];
+}
+
+/** 为任务列表生成逐行文件统计，并保留元数据模拟任务的 Manifest 口径。 */
+export function jobFileSummaryRows(job) {
+  if (String(job?.executionMode || '').toUpperCase() === 'METADATA_SIMULATION') {
+    return [
+      { text: `Manifest成功${jobCount(job?.manifestSucceeded)}`, tone: 'success' },
+      { text: `Manifest失败${jobCount(job?.manifestFailed)}`, tone: 'danger' },
+      { text: `预计文件${jobCount(job?.expectedFileTotal)}`, tone: 'default' },
+    ];
+  }
+  const total = jobCount(job?.fileTotal);
+  if (total <= 0) return [{ text: '未获取文件清单', tone: 'muted' }];
+  return [
+    { text: `成功${jobCount(job?.fileCompleted)}`, tone: 'success' },
+    { text: `失败${jobCount(job?.fileFailed)}`, tone: 'danger' },
+    { text: `共${total}`, tone: 'default' },
+  ];
+}
+
+/** 为任务列表生成源文件与 ZIP 两行容量摘要。 */
+export function jobCapacitySummaryRows(job) {
+  return [
+    `源文件 ${jobBytes(job?.expectedBytes)}`,
+    `ZIP ${jobBytes(job?.packageBytes)}`,
+  ];
+}
+
 /** 将数据库中的完整订单业务 JSON 转成可安全迭代的键值对象。 */
 export function orderBusinessFields(value) {
   if (!value) return {};
   if (typeof value === 'object' && !Array.isArray(value)) return value;
   try { const parsed = JSON.parse(value); return parsed && typeof parsed === 'object' && !Array.isArray(parsed) ? parsed : {}; }
   catch (_) { return {}; }
+}
+
+/** 任务订单明细使用稳定的秒级时间格式，去除 ISO 分隔符和多余毫秒。 */
+export function formatJobOrderCreatedAt(value) {
+  if (!value) return '-';
+  const text = String(value).trim();
+  const localIso = text.match(/^(\d{4}-\d{2}-\d{2})[T ](\d{2}:\d{2}:\d{2})/);
+  if (localIso) return `${localIso[1]} ${localIso[2]}`;
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return text || '-';
+  const pad = part => String(part).padStart(2, '0');
+  return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())} ${pad(date.getHours())}:${pad(date.getMinutes())}:${pad(date.getSeconds())}`;
+}
+
+/** 任务订单明细优先展示业务快照中的患者姓名，并兼容旧的平铺字段。 */
+export function jobOrderPatientName(row) {
+  return orderBusinessFields(row?.orderBusinessJson).patientName || row?.patientName || '-';
 }
 
 export function isTerminalJob(job) {

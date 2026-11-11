@@ -267,6 +267,29 @@ paths:
         '200': {$ref: '#/components/responses/ItemSucceeded'}
         '403': {$ref: '#/components/responses/Forbidden'}
         '404': {$ref: '#/components/responses/NotFound'}
+  /api/v1/admin/jobs/{id}/files:
+    get:
+      operationId: pageJobFiles
+      description: 分页查询任务文件证据；可按来源订单收窄，单页最多 100 条。
+      parameters:
+        - {$ref: '#/components/parameters/Id'}
+        - name: current
+          in: query
+          schema: {type: integer, format: int64, minimum: 1, default: 1}
+        - name: size
+          in: query
+          schema: {type: integer, format: int64, minimum: 1, maximum: 100, default: 20}
+        - name: sourceOrderId
+          in: query
+          required: false
+          schema: {type: integer, format: int64, minimum: 1}
+      responses:
+        '200':
+          description: 任务文件分页结果
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/JobFilePageEnvelope'}
+        '403': {$ref: '#/components/responses/Forbidden'}
   /api/v1/admin/jobs/{id}/retry:
     post:
       operationId: retryJob
@@ -767,6 +790,36 @@ components:
         - type: object
           properties:
             data: {$ref: '#/components/schemas/OrderPageData'}
+    JobFile:
+      type: object
+      additionalProperties: true
+      required: [id, jobId, sourceOrderId, step, status]
+      properties:
+        id: {type: integer, format: int64}
+        jobId: {type: integer, format: int64}
+        sourceOrderId: {type: integer, format: int64}
+        assetIdentity: {type: string, nullable: true}
+        step: {type: string}
+        status: {type: string}
+        bytesDone: {type: integer, format: int64, minimum: 0}
+        bytesTotal: {type: integer, format: int64, minimum: 0}
+        storageVolumeId: {type: integer, format: int64, nullable: true}
+        storageKey: {type: string, nullable: true}
+    JobFilePageData:
+      type: object
+      required: [records, total, size, current, pages]
+      properties:
+        records: {type: array, items: {$ref: '#/components/schemas/JobFile'}}
+        total: {type: integer, format: int64, minimum: 0}
+        size: {type: integer, format: int64, minimum: 1, maximum: 100}
+        current: {type: integer, format: int64, minimum: 1}
+        pages: {type: integer, format: int64, minimum: 0}
+    JobFilePageEnvelope:
+      allOf:
+        - {$ref: '#/components/schemas/SuccessBase'}
+        - type: object
+          properties:
+            data: {$ref: '#/components/schemas/JobFilePageData'}
     OrderEnvelope:
       allOf:
         - {$ref: '#/components/schemas/SuccessBase'}

@@ -12,7 +12,15 @@ const volume = row => storageVolumeView(row, row.targetStorageVolumeId);
   <el-table :data="tasks" class="data-table" row-key="id" highlight-current-row @row-click="emit('select', $event)">
     <el-table-column label="任务编号" min-width="205"><template #default="{ row }"><div class="mono">{{ row.jobNo || `#${row.id}` }}</div><small class="muted">任务 ID：{{ row.id }}</small></template></el-table-column>
     <el-table-column label="提交时间" min-width="175"><template #default="{ row }">{{ time(row.requestedAt) }}</template></el-table-column>
-    <el-table-column label="源存储卷" min-width="220"><template #default="{ row }"><div>{{ volume(row).name }}</div><small v-if="volume(row).current" class="muted">当前：{{ volume(row).current }}</small><small v-if="volume(row).historical" class="muted">{{ volume(row).historical }}</small></template></el-table-column>
+    <el-table-column label="源存储卷" min-width="220">
+      <template #default="{ row }">
+        <div class="restore-volume-stack">
+          <div class="restore-volume-name">{{ volume(row).name }}</div>
+          <div v-if="volume(row).current" class="restore-volume-line">当前：{{ volume(row).current }}</div>
+          <div v-if="volume(row).historical" class="restore-volume-line">{{ volume(row).historical }}</div>
+        </div>
+      </template>
+    </el-table-column>
     <el-table-column label="状态" width="150"><template #default="{ row }"><status-badge :value="row.cancelRequested ? 'CANCELLED' : row.state" :label="row.cancelRequested ? '取消中' : undefined" /></template></el-table-column>
     <el-table-column label="恢复进度" width="175"><template #default="{ row }"><el-progress :percentage="jobProgress(row)" :stroke-width="7" /></template></el-table-column>
     <el-table-column label="订单结果" min-width="230"><template #default="{ row }"><span class="success-text">成功 {{ row.orderCompleted || 0 }}</span> / <span class="error-text">失败 {{ row.orderFailed || 0 }}</span> / 跳过 {{ row.orderSkipped || 0 }} / 共 {{ row.orderTotal || 0 }}</template></el-table-column>
@@ -23,3 +31,26 @@ const volume = row => storageVolumeView(row, row.targetStorageVolumeId);
   </el-table>
   <el-pagination v-if="total" class="table-pagination" background layout="total, sizes, prev, pager, next" :current-page="current" :page-size="size" :total="total" :page-sizes="[10,20,50,100]" @current-change="emit('page-change', $event)" @size-change="emit('size-change', $event)" />
 </template>
+
+<style scoped>
+.restore-volume-stack {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 4px;
+}
+
+.restore-volume-name {
+  color: var(--navy-2);
+  font-weight: 700;
+  line-height: 1.4;
+}
+
+.restore-volume-line {
+  width: 100%;
+  color: var(--muted);
+  font-size: 12px;
+  line-height: 1.45;
+  overflow-wrap: anywhere;
+}
+</style>

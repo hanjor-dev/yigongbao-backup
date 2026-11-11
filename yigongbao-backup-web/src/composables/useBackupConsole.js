@@ -1,6 +1,7 @@
 import { computed, ref, watch, onMounted, onUnmounted } from 'vue';
 import { canRetryFailedOrders, coldImportDiagnostic, extractJobId, isTerminalJob, jobProgress, normalizePage, replaceJobById, storageState, supplementTaskState, taskFailureSummary } from '../taskCenter.js';
 import { api, binary, saveBlob, uploadWithProgress } from '../api.js';
+import { buildJobFilePageUrl, createDetailRequestGuard, createSectionLoadTracker } from '../jobDetailState.js';
 import { createAuthStore } from '../stores/authStore.js';
 import { createRouteStore } from '../stores/routeStore.js';
 
@@ -69,20 +70,36 @@ export function useBackupConsole() {
   const jobTotal = ref(0);
   const selectedJobId = ref(null);
   const selectedJob = ref(null);
+  const jobDetailVisible = ref(false);
+  const jobDetailTab = ref('orders');
   const jobOrders = ref([]);
   const jobOrderPage = ref(1);
   const jobOrderSize = ref(20);
   const jobOrderTotal = ref(0);
   const jobFiles = ref([]);
+  const jobFilePage = ref(1);
+  const jobFileSize = ref(20);
+  const jobFileTotal = ref(0);
+  const jobFileLoading = ref(false);
   const jobLoading = ref(false);
-  const jobLogVisible = ref(false);
-  const jobLogTitle = ref('');
+  const selectedJobOrder = ref(null);
+  const jobOrderDetailVisible = ref(false);
+  const jobOrderDetailTab = ref('overview');
+  const jobOrderFiles = ref([]);
+  const jobOrderFilePage = ref(1);
+  const jobOrderFileSize = ref(20);
+  const jobOrderFileTotal = ref(0);
+  const jobOrderFileLoading = ref(false);
   const jobLogRecords = ref([]);
   const jobLogCurrent = ref(1);
   const jobLogSize = ref(50);
   const jobLogTotal = ref(0);
   const jobLogLoading = ref(false);
-  const jobLogScope = ref(null);
+  const orderLogRecords = ref([]);
+  const orderLogCurrent = ref(1);
+  const orderLogSize = ref(50);
+  const orderLogTotal = ref(0);
+  const orderLogLoading = ref(false);
   const scheduledBackupRunning = ref(false);
   const coldBatches = ref([]);
   const coldDisks = ref([]);
@@ -105,7 +122,6 @@ export function useBackupConsole() {
   const configCategories = ref([]);
   const selectedConfigCategory = ref('');
   const overview = ref(null);
-  const auditRows = ref([]);
   const accounts = ref([]);
   const accountPage = ref(1);
   const accountSize = ref(20);
@@ -119,12 +135,25 @@ export function useBackupConsole() {
   const configVersion = ref(0);
   let jobPollTimer = null;
   let supplementPollTimer = null;
+  let jobLoadingCount = 0;
+  const detailRequestGuard = createDetailRequestGuard();
+  const detailSectionTracker = createSectionLoadTracker();
 
   function stopJobPolling() {
     if (jobPollTimer) {
       clearInterval(jobPollTimer);
       jobPollTimer = null;
     }
+  }
+
+  function beginJobLoading() {
+    jobLoadingCount += 1;
+    jobLoading.value = true;
+  }
+
+  function endJobLoading() {
+    jobLoadingCount = Math.max(0, jobLoadingCount - 1);
+    jobLoading.value = jobLoadingCount > 0;
   }
 
   function stopSupplementPolling() {
@@ -163,8 +192,11 @@ export function useBackupConsole() {
   function startJobPolling() {
     stopJobPolling();
     jobPollTimer = setInterval(async () => {
-      if (page.value !== 'backup' || !selectedJobId.value) return;
-      await loadJobDetails(selectedJobId.value, true);
+      if (page.value !== 'backup' || !jobDetailVisible.value || !selectedJobId.value) return;
+      await Promise.all([
+        loadJobSummary(selectedJobId.value, true),
+        loadJobOrders(selectedJobId.value, true),
+      ]);
     }, 3000);
   }
 
@@ -173,10 +205,11 @@ export function useBackupConsole() {
       notice.value = '操作已提交，但服务端未返回任务编号';
       return;
     }
-    selectedJobId.value = String(jobId);
+    prepareJobDetail(jobId);
+    jobDetailVisible.value = page.value === 'backup';
     notice.value = message;
     await loadJobDetails(selectedJobId.value);
-    if (page.value === 'backup') startJobPolling();
+    if (page.value === 'backup' && selectedJob.value && !isTerminalJob(selectedJob.value)) startJobPolling();
   }
 
   async function login() {
@@ -480,13 +513,85 @@ export function useBackupConsole() {
     loadJobs(1);
   }
 
-  async function loadJobDetails(jobId = selectedJobId.value, silent = false) {
-    if (!jobId) return;
+  function resetJobDetailCollections() {
+    jobDetailTab.value = 'orders';
+    jobOrders.value = [];
+    jobOrderPage.value = 1;
+    jobOrderTotal.value = 0;
+    jobFiles.value = [];
+    jobFilePage.value = 1;
+    jobFileTotal.value = 0;
+    jobFileLoading.value = false;
+    jobLogRecords.value = [];
+    jobLogCurrent.value = 1;
+    jobLogTotal.value = 0;
+    jobLogLoading.value = false;
+    selectedJobOrder.value = null;
+    jobOrderDetailVisible.value = false;
+    jobOrderDetailTab.value = 'overview';
+    jobOrderFiles.value = [];
+    jobOrderFilePage.value = 1;
+    jobOrderFileTotal.value = 0;
+    jobOrderFileLoading.value = false;
+    orderLogRecords.value = [];
+    orderLogCurrent.value = 1;
+    orderLogTotal.value = 0;
+    orderLogLoading.value = false;
+  }
+
+  function prepareJobDetail(jobId) {
+    stopJobPolling();
     selectedJobId.value = String(jobId);
-    jobLoading.value = true;
+    detailRequestGuard.openTask(jobId);
+    detailSectionTracker.resetAll();
+    resetJobDetailCollections();
+  }
+
+  function closeJobOrderDetail() {
+    detailRequestGuard.closeOrder();
+    detailSectionTracker.reset('order-files');
+    detailSectionTracker.reset('order-logs');
+    jobOrderDetailVisible.value = false;
+    selectedJobOrder.value = null;
+    jobOrderDetailTab.value = 'overview';
+    jobOrderFiles.value = [];
+    jobOrderFilePage.value = 1;
+    jobOrderFileTotal.value = 0;
+    jobOrderFileLoading.value = false;
+    orderLogRecords.value = [];
+    orderLogCurrent.value = 1;
+    orderLogTotal.value = 0;
+    orderLogLoading.value = false;
+  }
+
+  function closeJobDetail() {
+    stopJobPolling();
+    detailRequestGuard.closeTask();
+    detailSectionTracker.resetAll();
+    jobDetailVisible.value = false;
+    selectedJobId.value = null;
+    selectedJob.value = null;
+    resetJobDetailCollections();
+  }
+
+  function handleJobDetailError(error, silent, token) {
+    if (!detailRequestGuard.isCurrentTaskRequest(token)) return;
+    if (error?.message?.includes('任务不存在')) {
+      closeJobDetail();
+      notice.value = '任务已不存在，已关闭任务详情';
+    } else if (!silent) {
+      notice.value = error?.message || '任务详情加载失败';
+    }
+  }
+
+  async function loadJobSummary(jobId = selectedJobId.value, silent = false) {
+    if (!jobId) return;
+    const token = detailRequestGuard.beginTaskRequest('summary');
+    beginJobLoading();
     try {
-      const [jobResult, orderResult, fileResult] = await Promise.all([api('/admin/jobs/' + encodeURIComponent(jobId)), api('/admin/jobs/' + encodeURIComponent(jobId) + `/orders?current=${encodeURIComponent(jobOrderPage.value)}&size=${encodeURIComponent(jobOrderSize.value)}`), api('/admin/jobs/' + encodeURIComponent(jobId) + '/files')]);
-      selectedJob.value = jobResult.data || null;
+      const result = await api('/admin/jobs/' + encodeURIComponent(jobId));
+      if (!detailRequestGuard.isCurrentTaskRequest(token)) return;
+      selectedJob.value = result.data || null;
       jobs.value = replaceJobById(jobs.value, selectedJob.value);
       if (selectedJob.value?.jobType === 'CLEANUP_DRY_RUN' && selectedJob.value?.resultJson) {
         try {
@@ -495,26 +600,81 @@ export function useBackupConsole() {
           notice.value = 'COS 清理试运行结果格式异常';
         }
       }
-      const orderPageData = normalizePage(orderResult.data);
-      jobOrders.value = orderPageData.records;
-      jobOrderPage.value = orderPageData.current;
-      jobOrderSize.value = orderPageData.size;
-      jobOrderTotal.value = orderPageData.total;
-      jobFiles.value = fileResult.data || [];
       if (selectedJob.value && isTerminalJob(selectedJob.value)) stopJobPolling();
     } catch (error) {
-      if (error?.message?.includes('任务不存在')) {
-        stopJobPolling();
-        selectedJobId.value = null;
-        selectedJob.value = null;
-        jobOrders.value = [];
-        jobFiles.value = [];
-        notice.value = '任务已不存在，已清除当前任务选择';
-      } else if (!silent) {
-        notice.value = error.message || '任务详情加载失败';
-      }
+      handleJobDetailError(error, silent, token);
     } finally {
-      jobLoading.value = false;
+      endJobLoading();
+    }
+  }
+
+  async function loadJobOrders(jobId = selectedJobId.value, silent = false) {
+    if (!jobId) return;
+    const token = detailRequestGuard.beginTaskRequest('orders');
+    beginJobLoading();
+    try {
+      const result = await api('/admin/jobs/' + encodeURIComponent(jobId)
+        + `/orders?current=${encodeURIComponent(jobOrderPage.value)}&size=${encodeURIComponent(jobOrderSize.value)}`);
+      if (!detailRequestGuard.isCurrentTaskRequest(token)) return;
+      const pageData = normalizePage(result.data);
+      jobOrders.value = pageData.records;
+      jobOrderPage.value = pageData.current;
+      jobOrderSize.value = pageData.size;
+      jobOrderTotal.value = pageData.total;
+    } catch (error) {
+      handleJobDetailError(error, silent, token);
+    } finally {
+      endJobLoading();
+    }
+  }
+
+  async function loadJobDetails(jobId = selectedJobId.value, silent = false) {
+    if (!jobId) return;
+    await Promise.all([loadJobSummary(jobId, silent), loadJobOrders(jobId, silent)]);
+  }
+
+  async function loadJobFiles(current = jobFilePage.value) {
+    if (!selectedJobId.value) return;
+    const token = detailRequestGuard.beginTaskRequest('files');
+    jobFileLoading.value = true;
+    try {
+      const result = await api(buildJobFilePageUrl(
+        selectedJobId.value, current, jobFileSize.value,
+      ));
+      if (!detailRequestGuard.isCurrentTaskRequest(token)) return;
+      const pageData = normalizePage(result.data);
+      jobFiles.value = pageData.records;
+      jobFilePage.value = pageData.current;
+      jobFileSize.value = pageData.size;
+      jobFileTotal.value = pageData.total;
+      detailSectionTracker.markLoaded('task-files', selectedJobId.value);
+    } catch (error) {
+      if (detailRequestGuard.isCurrentTaskRequest(token)) notice.value = error.message || '任务文件明细加载失败';
+    } finally {
+      if (detailRequestGuard.isCurrentTaskRequest(token)) jobFileLoading.value = false;
+    }
+  }
+
+  async function loadOrderFiles(current = jobOrderFilePage.value) {
+    const sourceOrderId = selectedJobOrder.value?.sourceOrderId;
+    if (!selectedJobId.value || !sourceOrderId) return;
+    const token = detailRequestGuard.beginOrderRequest('files');
+    jobOrderFileLoading.value = true;
+    try {
+      const result = await api(buildJobFilePageUrl(
+        selectedJobId.value, current, jobOrderFileSize.value, sourceOrderId,
+      ));
+      if (!detailRequestGuard.isCurrentOrderRequest(token)) return;
+      const pageData = normalizePage(result.data);
+      jobOrderFiles.value = pageData.records;
+      jobOrderFilePage.value = pageData.current;
+      jobOrderFileSize.value = pageData.size;
+      jobOrderFileTotal.value = pageData.total;
+      detailSectionTracker.markLoaded('order-files', `${selectedJobId.value}:${sourceOrderId}`);
+    } catch (error) {
+      if (detailRequestGuard.isCurrentOrderRequest(token)) notice.value = error.message || '订单文件明细加载失败';
+    } finally {
+      if (detailRequestGuard.isCurrentOrderRequest(token)) jobOrderFileLoading.value = false;
     }
   }
 
@@ -741,64 +901,138 @@ export function useBackupConsole() {
 
   function changeJobOrderPage(pageNumber) {
     jobOrderPage.value = pageNumber;
-    loadJobDetails(selectedJobId.value);
+    loadJobOrders(selectedJobId.value);
   }
 
   function changeJobOrderSize(size) {
     jobOrderSize.value = size;
     jobOrderPage.value = 1;
-    loadJobDetails(selectedJobId.value);
+    loadJobOrders(selectedJobId.value);
   }
 
-  /** 读取任务或指定订单的持久化执行日志；服务端已做敏感信息脱敏。 */
-  async function loadBackupExecutionLogs(scope, current = jobLogCurrent.value) {
-    if (!selectedJobId.value || !scope) return;
+  function changeJobFilePage(pageNumber) {
+    jobFilePage.value = pageNumber;
+    loadJobFiles(pageNumber);
+  }
+
+  function changeJobFileSize(size) {
+    jobFileSize.value = size;
+    jobFilePage.value = 1;
+    loadJobFiles(1);
+  }
+
+  function changeJobOrderFilePage(pageNumber) {
+    jobOrderFilePage.value = pageNumber;
+    loadOrderFiles(pageNumber);
+  }
+
+  function changeJobOrderFileSize(size) {
+    jobOrderFileSize.value = size;
+    jobOrderFilePage.value = 1;
+    loadOrderFiles(1);
+  }
+
+  /** 读取任务级持久化日志；与订单日志维护独立分页状态。 */
+  async function loadTaskLogs(current = jobLogCurrent.value) {
+    if (!selectedJobId.value) return;
+    const token = detailRequestGuard.beginTaskRequest('logs');
     jobLogLoading.value = true;
     try {
       const base = `/admin/backup/jobs/${encodeURIComponent(selectedJobId.value)}`;
-      const url = scope.type === 'order' ? `${base}/orders/${encodeURIComponent(scope.sourceOrderId)}/logs?current=${encodeURIComponent(current)}&size=${encodeURIComponent(jobLogSize.value)}` : `${base}/logs?current=${encodeURIComponent(current)}&size=${encodeURIComponent(jobLogSize.value)}`;
-      const result = await api(url);
+      const result = await api(`${base}/logs?current=${encodeURIComponent(current)}&size=${encodeURIComponent(jobLogSize.value)}`);
+      if (!detailRequestGuard.isCurrentTaskRequest(token)) return;
       const pageData = normalizePage(result.data);
       jobLogRecords.value = pageData.records;
       jobLogCurrent.value = pageData.current;
       jobLogSize.value = pageData.size;
       jobLogTotal.value = pageData.total;
+      detailSectionTracker.markLoaded('task-logs', selectedJobId.value);
     } catch (error) {
-      notice.value = error.message || '备份执行日志加载失败';
+      if (detailRequestGuard.isCurrentTaskRequest(token)) notice.value = error.message || '任务执行日志加载失败';
     } finally {
-      jobLogLoading.value = false;
+      if (detailRequestGuard.isCurrentTaskRequest(token)) jobLogLoading.value = false;
     }
   }
 
+  /** 读取订单级持久化日志；抽屉切换订单后旧响应不会回写。 */
+  async function loadOrderLogs(current = orderLogCurrent.value) {
+    const sourceOrderId = selectedJobOrder.value?.sourceOrderId;
+    if (!selectedJobId.value || !sourceOrderId) return;
+    const token = detailRequestGuard.beginOrderRequest('logs');
+    orderLogLoading.value = true;
+    try {
+      const base = `/admin/backup/jobs/${encodeURIComponent(selectedJobId.value)}`;
+      const result = await api(`${base}/orders/${encodeURIComponent(sourceOrderId)}/logs?current=${encodeURIComponent(current)}&size=${encodeURIComponent(orderLogSize.value)}`);
+      if (!detailRequestGuard.isCurrentOrderRequest(token)) return;
+      const pageData = normalizePage(result.data);
+      orderLogRecords.value = pageData.records;
+      orderLogCurrent.value = pageData.current;
+      orderLogSize.value = pageData.size;
+      orderLogTotal.value = pageData.total;
+      detailSectionTracker.markLoaded('order-logs', `${selectedJobId.value}:${sourceOrderId}`);
+    } catch (error) {
+      if (detailRequestGuard.isCurrentOrderRequest(token)) notice.value = error.message || '订单执行日志加载失败';
+    } finally {
+      if (detailRequestGuard.isCurrentOrderRequest(token)) orderLogLoading.value = false;
+    }
+  }
+
+  async function changeJobDetailTab(value) {
+    jobDetailTab.value = value;
+    if (value === 'files' && detailSectionTracker.shouldLoad('task-files', selectedJobId.value)) {
+      await loadJobFiles(1);
+    }
+    if (value === 'logs' && detailSectionTracker.shouldLoad('task-logs', selectedJobId.value)) {
+      await loadTaskLogs(1);
+    }
+  }
+
+  async function openJobOrderDetail(order, tab = 'overview') {
+    if (!order?.sourceOrderId) return;
+    closeJobOrderDetail();
+    selectedJobOrder.value = order;
+    jobOrderDetailVisible.value = true;
+    jobOrderDetailTab.value = tab;
+    detailRequestGuard.openOrder(order.sourceOrderId);
+    if (tab !== 'overview') await changeJobOrderDetailTab(tab);
+  }
+
+  async function changeJobOrderDetailTab(value) {
+    jobOrderDetailTab.value = value;
+    const key = `${selectedJobId.value}:${selectedJobOrder.value?.sourceOrderId || ''}`;
+    if (value === 'files' && detailSectionTracker.shouldLoad('order-files', key)) await loadOrderFiles(1);
+    if (value === 'logs' && detailSectionTracker.shouldLoad('order-logs', key)) await loadOrderLogs(1);
+  }
+
   async function openBackupTaskLogs() {
-    jobLogScope.value = { type: 'task' };
-    jobLogTitle.value = `备份任务 ${selectedJobId.value || ''} 执行日志`;
-    jobLogCurrent.value = 1;
-    jobLogVisible.value = true;
-    await loadBackupExecutionLogs(jobLogScope.value, 1);
+    await changeJobDetailTab('logs');
   }
 
   async function openBackupOrderLogs(order) {
-    jobLogScope.value = { type: 'order', sourceOrderId: order.sourceOrderId };
-    jobLogTitle.value = `订单 ${order.orderCode || order.sourceOrderId} 执行日志`;
-    jobLogCurrent.value = 1;
-    jobLogVisible.value = true;
-    await loadBackupExecutionLogs(jobLogScope.value, 1);
+    await openJobOrderDetail(order, 'logs');
   }
 
   async function changeBackupLogPage(value) {
-    await loadBackupExecutionLogs(jobLogScope.value, value);
+    await loadTaskLogs(value);
   }
   async function changeBackupLogSize(value) {
     jobLogSize.value = value;
-    await loadBackupExecutionLogs(jobLogScope.value, 1);
+    await loadTaskLogs(1);
+  }
+  async function changeOrderLogPage(value) {
+    await loadOrderLogs(value);
+  }
+  async function changeOrderLogSize(value) {
+    orderLogSize.value = value;
+    await loadOrderLogs(1);
   }
 
-  function selectJob(job) {
-    selectedJobId.value = String(job.id);
-    jobOrderPage.value = 1;
-    loadJobDetails(job.id);
-    startJobPolling();
+  async function selectJob(job) {
+    prepareJobDetail(job.id);
+    selectedJob.value = job;
+    jobDetailVisible.value = true;
+    await loadJobDetails(job.id);
+    if (selectedJob.value && !isTerminalJob(selectedJob.value)) startJobPolling();
   }
 
   async function cancelJob(job = selectedJob.value) {
@@ -1057,15 +1291,6 @@ export function useBackupConsole() {
     }
   }
 
-  async function loadAudit() {
-    try {
-      const result = await api('/admin/audit?limit=100');
-      auditRows.value = result.data || [];
-    } catch (error) {
-      notice.value = error.message || '审计日志加载失败';
-    }
-  }
-
   async function loadAccounts(pageNumber = accountPage.value) {
     try {
       const [accountsResult, syncResult] = await Promise.all([api(`/admin/accounts?current=${encodeURIComponent(pageNumber)}&size=${encodeURIComponent(accountSize.value)}`), api('/admin/accounts/sync/status')]);
@@ -1166,13 +1391,13 @@ export function useBackupConsole() {
   }
 
   function logout() {
-    stopJobPolling();
+    closeJobDetail();
     auth.logout();
     route.navigate('orders');
   }
 
   function handleAuthExpired() {
-    stopJobPolling();
+    closeJobDetail();
     auth.handleAuthExpired();
     route.navigate('orders');
     notice.value = '登录已失效，请重新登录';
@@ -1185,7 +1410,7 @@ export function useBackupConsole() {
     if (token.value) await loadCurrentPage();
   });
   onUnmounted(() => {
-    stopJobPolling();
+    closeJobDetail();
     stopSupplementPolling();
     window.removeEventListener('backup-auth-expired', handleAuthExpired);
     window.removeEventListener('hashchange', handleHashChange);
@@ -1201,6 +1426,7 @@ export function useBackupConsole() {
       route.navigate('orders');
       return;
     }
+    if (target !== 'backup' && jobDetailVisible.value) closeJobDetail();
     route.navigate(target);
     if (target === 'orders') {
       Promise.all([loadOrderFilterOptions(), loadOrders(1)]);
@@ -1211,9 +1437,7 @@ export function useBackupConsole() {
     if (target === 'restore') return;
     if (target === 'overview') {
       loadOverview();
-      loadAudit();
     }
-    if (target === 'audit') loadAudit();
     if (target === 'accounts') loadAccounts();
     if (target === 'configs') loadConfigs();
     if (target === 'storage' || target === 'storage-volumes') {
@@ -1238,10 +1462,7 @@ export function useBackupConsole() {
         await loadColdStorage();
         break;
       case 'overview':
-        await Promise.all([loadOverview(), loadAudit()]);
-        break;
-      case 'audit':
-        await loadAudit();
+        await loadOverview();
         break;
       case 'configs':
         await loadConfigs();
@@ -1299,22 +1520,38 @@ export function useBackupConsole() {
     jobTotal,
     selectedJobId,
     selectedJob,
+    jobDetailVisible,
+    jobDetailTab,
     jobOrders,
     jobOrderPage,
     jobOrderSize,
     jobOrderTotal,
     jobFiles,
+    jobFilePage,
+    jobFileSize,
+    jobFileTotal,
+    jobFileLoading,
     jobLoading,
+    selectedJobOrder,
+    jobOrderDetailVisible,
+    jobOrderDetailTab,
+    jobOrderFiles,
+    jobOrderFilePage,
+    jobOrderFileSize,
+    jobOrderFileTotal,
+    jobOrderFileLoading,
     jobProgress,
     overview,
-    auditRows,
-    jobLogVisible,
-    jobLogTitle,
     jobLogRecords,
     jobLogCurrent,
     jobLogSize,
     jobLogTotal,
     jobLogLoading,
+    orderLogRecords,
+    orderLogCurrent,
+    orderLogSize,
+    orderLogTotal,
+    orderLogLoading,
     scheduledBackupRunning,
     coldBatches,
     coldDisks,
@@ -1386,20 +1623,36 @@ export function useBackupConsole() {
     confirmColdVolumeMounted,
     prepareColdVolumeOffline,
     loadOverview,
-    loadAudit,
     dryCleanup,
     executeCleanup,
     loadJobs,
     runScheduledBackupNow,
     changeJobPage,
     changeJobSize,
+    loadJobSummary,
+    loadJobOrders,
     loadJobDetails,
+    loadJobFiles,
+    loadOrderFiles,
+    loadTaskLogs,
+    loadOrderLogs,
+    closeJobDetail,
+    changeJobDetailTab,
+    openJobOrderDetail,
+    closeJobOrderDetail,
+    changeJobOrderDetailTab,
     changeJobOrderPage,
     changeJobOrderSize,
+    changeJobFilePage,
+    changeJobFileSize,
+    changeJobOrderFilePage,
+    changeJobOrderFileSize,
     openBackupTaskLogs,
     openBackupOrderLogs,
     changeBackupLogPage,
     changeBackupLogSize,
+    changeOrderLogPage,
+    changeOrderLogSize,
     selectJob,
     cancelJob,
     retryJob,

@@ -8,7 +8,7 @@ const passwordLoading = ref(false);
 const groups = [
   { title: '工作台', items: [{ key: 'overview', label: '管理概览', icon: 'DataAnalysis', admin: true }, { key: 'orders', label: '订单文件', icon: 'Files' }] },
   { title: '运营中心', items: [{ key: 'backup', label: '订单备份', icon: 'Download', admin: true }, { key: 'restore', label: '线上恢复', icon: 'Upload', admin: true }, { key: 'cold-storage', label: '冷备管理', icon: 'Box', admin: true }, { key: 'cleanup', label: 'COS 清理', icon: 'Delete', admin: true }] },
-  { title: '系统管理', items: [{ key: 'accounts', label: '本地账号', icon: 'User', admin: true }, { key: 'storage-volumes', label: '存储卷管理', icon: 'Coin', admin: true }, { key: 'configs', label: '系统配置', icon: 'Setting', admin: true }, { key: 'audit', label: '审计日志', icon: 'DocumentChecked', admin: true }] }
+  { title: '系统管理', items: [{ key: 'accounts', label: '本地账号', icon: 'User', admin: true }, { key: 'storage-volumes', label: '存储卷管理', icon: 'Coin', admin: true }, { key: 'configs', label: '系统配置', icon: 'Setting', admin: true }] }
 ];
 async function submitPassword() { passwordLoading.value = true; try { await changeSelfPassword(); passwordDialog.value = false; } finally { passwordLoading.value = false; } }
 </script>
@@ -27,7 +27,7 @@ async function submitPassword() { passwordLoading.value = true; try { await chan
       <div class="aside-footer"><span class="online-dot" /> 服务运行中</div>
     </el-aside>
     <el-container class="console-main">
-      <el-header class="console-header"><div><div class="header-kicker">LOCAL DATA VAULT</div><h1>{{ groups.flatMap(g => g.items).find(i => i.key === page)?.label || '订单文件' }}</h1></div><div class="header-actions"><el-tag effect="plain" type="success"><span class="user-dot" /> {{ role === 'ADMIN' ? '系统管理员' : '普通用户' }}</el-tag><el-dropdown trigger="click"><el-button circle plain><el-icon><MoreFilled /></el-icon></el-button><template #dropdown><el-dropdown-menu><el-dropdown-item @click="passwordDialog = true"><el-icon><Lock /></el-icon>修改本地密码</el-dropdown-item><el-dropdown-item divided @click="logout"><el-icon><SwitchButton /></el-icon>退出登录</el-dropdown-item></el-dropdown-menu></template></el-dropdown></div></el-header>
+      <el-header class="console-header"><div><h1>{{ groups.flatMap(g => g.items).find(i => i.key === page)?.label || '订单文件' }}</h1></div><div class="header-actions"><el-tag effect="plain" type="success"><span class="user-dot" /> {{ role === 'ADMIN' ? '系统管理员' : '普通用户' }}</el-tag><el-dropdown trigger="click"><el-button circle plain><el-icon><MoreFilled /></el-icon></el-button><template #dropdown><el-dropdown-menu><el-dropdown-item @click="passwordDialog = true"><el-icon><Lock /></el-icon>修改本地密码</el-dropdown-item><el-dropdown-item divided @click="logout"><el-icon><SwitchButton /></el-icon>退出登录</el-dropdown-item></el-dropdown-menu></template></el-dropdown></div></el-header>
       <el-main class="console-content"><slot /></el-main>
     </el-container>
   </el-container>

@@ -5,7 +5,6 @@ import { BACKUP_CONTEXT } from './composables/useBackupContext.js';
 import BackupLayout from './layouts/BackupLayout.vue';
 import LoginView from './views/LoginView.vue';
 import OverviewView from './views/OverviewView.vue';
-import AuditView from './views/AuditView.vue';
 import OrdersView from './views/OrdersView.vue';
 import StorageView from './views/StorageView.vue';
 import AccountsView from './views/AccountsView.vue';
@@ -21,7 +20,6 @@ const { token, notice, page } = backup;
 
 const pageViews = {
   overview: OverviewView,
-  audit: AuditView,
   orders: OrdersView,
   storage: StorageView,
   'storage-volumes': StorageView,

@@ -33,7 +33,7 @@ watch(selectedConfigCategory, () => {
 <template>
   <div class="page-stack">
     <section class="page-heading">
-      <div><div class="eyebrow">SYSTEM CONTROL</div><h2>系统配置</h2><p>备份业务配置统一保存到数据库，修改将保留版本号并在运行时生效。</p></div>
+      <div><h2>系统配置</h2><p>备份业务配置统一保存到数据库，修改将保留版本号并在运行时生效。</p></div>
     </section>
     <div class="config-layout">
       <el-card shadow="never" class="category-card">

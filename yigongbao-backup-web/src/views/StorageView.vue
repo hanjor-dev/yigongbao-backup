@@ -2,13 +2,14 @@
 import { computed, onMounted, ref } from 'vue';
 import { useBackupContext } from '../composables/useBackupContext.js';
 import { statusLabel } from '../components/StatusBadge.js';
+import { activeVolumeConfirmation, canSetAsActiveVolume } from '../storageVolumeActions.js';
 
 const { isAdmin, storageVolumes, storageCandidates, loadStorageVolumes, loadStorageVolumeDetail, scanStorageVolumes, registerStorageVolume, changeStorageVolumeState, previewStorageArchive, startStorageArchive, navigate } = useBackupContext();
 const hotActive = computed(() => storageVolumes.value.find((item) => item.tier === 'HOT' && item.writeStatus === 'ACTIVE'));
 const selectedVolume = ref(null);
 const bytes = (value) => (value == null ? '不可用' : value < 1048576 ? `${(value / 1024).toFixed(1)} KB` : value < 1073741824 ? `${(value / 1048576).toFixed(1)} MB` : `${(value / 1073741824).toFixed(2)} GB`);
 async function activate(row) {
-  if (confirm(`确认切换活动热备卷至“${row.displayName}”？原活动卷将转为只读。`)) await changeStorageVolumeState(row.id, 'set-active');
+  if (confirm(activeVolumeConfirmation(row, hotActive.value))) await changeStorageVolumeState(row.id, 'set-active');
 }
 async function failover(row) {
   const target = standbyVolumes.value[0];
@@ -72,7 +73,6 @@ onMounted(loadStorageVolumes);
   <div class="page-stack">
     <section class="page-heading">
       <div>
-        <div class="eyebrow">STORAGE VOLUMES</div>
         <h2>存储卷管理</h2>
         <p>统一管理 Windows 本地盘、映射 NAS 与离线冷备盘。文件位置由存储卷台账决定，不再通过配置填写路径。</p>
       </div>
@@ -128,7 +128,7 @@ onMounted(loadStorageVolumes);
         >
         <el-table-column v-if="isAdmin" label="操作" width="460" fixed="right"
           ><template #default="{ row }"
-            ><el-button size="small" @click="operate(row, 'probe', '重新探测')">重新探测</el-button><el-button v-if="row.tier === 'HOT' && row.mountStatus === 'ONLINE' && row.writeStatus !== 'ACTIVE'" size="small" type="primary" plain @click="activate(row)">设为活动卷</el-button><el-button v-if="row.tier === 'HOT' && row.writeStatus === 'ACTIVE' && row.mountStatus !== 'ONLINE'" size="small" type="danger" plain @click="failover(row)">故障切换</el-button><el-button v-if="row.mountStatus !== 'ONLINE'" size="small" @click="confirmMountedAt(row)">确认挂载</el-button><el-button v-if="row.tier === 'HOT' && row.writeStatus !== 'ACTIVE'" size="small" @click="operate(row, 'set-standby', '设为备用卷')">设为备用</el-button><el-button v-if="row.tier === 'HOT' && row.mountStatus === 'ONLINE'" size="small" @click="markCold(row)">整盘封存</el-button
+            ><el-button size="small" @click="operate(row, 'probe', '重新探测')">重新探测</el-button><el-button v-if="canSetAsActiveVolume(row)" size="small" type="primary" plain @click="activate(row)">{{ row.tier === 'COLD' ? '转为热备活动卷' : '设为活动卷' }}</el-button><el-button v-if="row.tier === 'HOT' && row.writeStatus === 'ACTIVE' && row.mountStatus !== 'ONLINE'" size="small" type="danger" plain @click="failover(row)">故障切换</el-button><el-button v-if="row.mountStatus !== 'ONLINE'" size="small" @click="confirmMountedAt(row)">确认挂载</el-button><el-button v-if="row.tier === 'HOT' && row.writeStatus !== 'ACTIVE'" size="small" @click="operate(row, 'set-standby', '设为备用卷')">设为备用</el-button><el-button v-if="row.tier === 'HOT' && row.mountStatus === 'ONLINE'" size="small" @click="markCold(row)">整盘封存</el-button
             ><el-button v-if="row.tier === 'COLD' && row.mountStatus === 'ONLINE'" size="small" type="warning" plain @click="operate(row, 'prepare-offline', '准备离线')">准备离线</el-button></template
           ></el-table-column
         >

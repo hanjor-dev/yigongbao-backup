@@ -251,6 +251,7 @@ public final class LocalOrderRestoreService {
             if (manifestSha == null || manifestSha.isBlank()) manifestSha = sha256(bytes);
             String revision = text(root, "manifestRevision", "revision");
             if (revision == null || revision.isBlank()) revision = manifestSha;
+            int schemaVersion = root.path("manifestSchemaVersion").asInt(1);
             JsonNode assets = root.path("assets");
             List<String> identities = new ArrayList<>();
             List<JsonNode> relations = new ArrayList<>();
@@ -272,7 +273,7 @@ public final class LocalOrderRestoreService {
                         restoreAssets.add(new OnlineRestoreClient.RestoreAsset(identity,
                                 text(asset, "originalFilename", "fileName"), asset.path("size").asLong(-1),
                                 text(asset, "sha256"), platform, sourceObjectKey,
-                                mapper.convertValue(asset.path("relations"), new com.fasterxml.jackson.core.type.TypeReference<List<Map<String, Object>>>() {})));
+                                restoreRelations(asset.path("relations"), schemaVersion)));
                     }
                 }
             }
@@ -282,7 +283,6 @@ public final class LocalOrderRestoreService {
             if (relationSetHash == null || relationSetHash.isBlank()) {
                 relationSetHash = sha256(mapper.writeValueAsBytes(relations));
             }
-            int schemaVersion = root.path("manifestSchemaVersion").asInt(1);
             String completeness = text(root, "backupCompleteness");
             if (completeness == null || completeness.isBlank()) completeness = "COMPLETE";
             String relationshipStateHash = schemaVersion >= 2 ? text(root, "relationshipStateHash") : null;
@@ -307,6 +307,23 @@ public final class LocalOrderRestoreService {
         } catch (IOException ex) {
             throw new IOException("读取恢复包 manifest.json 失败", ex);
         }
+    }
+
+    /**
+     * v2 关系摘要按固定字段投影生成。线上全局 NON_NULL 序列化会省略空 relationValue，
+     * 恢复时补回显式 null，兼容已生成的 ZIP 及尚未升级的线上恢复端。
+     */
+    private List<Map<String, Object>> restoreRelations(JsonNode relations, int schemaVersion) {
+        List<Map<String, Object>> values = mapper.convertValue(relations,
+                new com.fasterxml.jackson.core.type.TypeReference<List<Map<String, Object>>>() {});
+        if (schemaVersion < 2) return values;
+        List<Map<String, Object>> normalized = new ArrayList<>(values.size());
+        for (Map<String, Object> value : values) {
+            Map<String, Object> relation = new java.util.LinkedHashMap<>(value);
+            relation.putIfAbsent("relationValue", null);
+            normalized.add(relation);
+        }
+        return List.copyOf(normalized);
     }
 
     /** 从 ZIP 读取并校验 manifest 根节点，供只读清单展示复用。 */

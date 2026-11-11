@@ -11,7 +11,7 @@ function time(value) {
 <template>
   <div class="page-stack">
     <section class="page-heading">
-      <div><div class="eyebrow">IDENTITY</div><h2>本地账号</h2><p>账号资料从线上增量同步，本地密码与启停状态独立管理。</p></div>
+      <div><h2>本地账号</h2><p>账号资料从线上增量同步，本地密码与启停状态独立管理。</p></div>
       <div class="heading-actions"><el-button @click="loadAccounts()"><el-icon><Refresh /></el-icon>刷新</el-button><el-button type="primary" :loading="accountSyncRunning" :disabled="!accountSyncStatus?.syncEnabled || !accountSyncStatus?.onlineEnabled" @click="syncAccountsNow">立即同步</el-button></div>
     </section>
     <el-alert v-if="accountSyncStatus && (!accountSyncStatus.syncEnabled || !accountSyncStatus.onlineEnabled)" type="warning" show-icon :closable="false" title="账号同步当前不可执行" description="请同时开启账号同步和线上通信，并确认线上连接认证配置完整。" />

@@ -13,7 +13,13 @@ public class AdminJobController {
  /** 查询任务状态和进度。 */
  @GetMapping("/{id}") public ApiResponse<Job> get(@PathVariable("id") long id){admin(); return ApiResponse.ok(jobs.get(id),rid());}
  @GetMapping("/{id}/orders") public ApiResponse<PersistentJobService.JobOrderPage> orders(@PathVariable("id") long id, @RequestParam(name="current", defaultValue="1") long current, @RequestParam(name="size", defaultValue="20") long size){admin();return ApiResponse.ok(jobs.listOrders(id,current,size),rid());}
- @GetMapping("/{id}/files") public ApiResponse<java.util.List<JobFileEntity>> files(@PathVariable("id") long id){admin();return ApiResponse.ok(jobs.listFiles(id),rid());}
+ @GetMapping("/{id}/files") public ApiResponse<PersistentJobService.JobFilePage> files(
+         @PathVariable("id") long id,
+         @RequestParam(name="current", defaultValue="1") long current,
+         @RequestParam(name="size", defaultValue="20") long size,
+         @RequestParam(name="sourceOrderId", required=false) Long sourceOrderId){
+  admin();return ApiResponse.ok(jobs.listFiles(id,sourceOrderId,current,size),rid());
+ }
  /** 以租约方式领取任务，避免多个执行器重复处理。 */
  @PostMapping("/{id}/claim") public ApiResponse<Job> claim(@PathVariable("id") long id,@RequestBody ClaimCommand c){admin();return ApiResponse.ok(jobs.claim(id,c.owner(),Duration.ofSeconds(c.leaseSeconds())),rid());}
  @PostMapping("/{id}/cancel") public ApiResponse<Void> cancel(@PathVariable("id") long id){admin();if(!volumeArchives.cancelQueuedJob(id,StpUtil.getLoginIdAsLong()))coordinator.requestCancel(id);return ApiResponse.ok(null,rid());}

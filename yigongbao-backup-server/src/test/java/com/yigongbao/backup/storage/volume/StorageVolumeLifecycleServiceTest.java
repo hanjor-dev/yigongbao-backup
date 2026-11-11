@@ -196,6 +196,52 @@ class StorageVolumeLifecycleServiceTest {
     }
 
     @Test
+    void promotesReconnectedIdleColdVolumeAndDemotesCurrentHotVolume() {
+        StorageVolumeMapper mapper = mock(StorageVolumeMapper.class);
+        StorageVolumeMarkerService markers = mock(StorageVolumeMarkerService.class);
+        StorageVolumeHealthService health = mock(StorageVolumeHealthService.class);
+        RuntimeConfigService configs = mock(RuntimeConfigService.class);
+        JobMapper jobs = mock(JobMapper.class);
+        SpaceReservationMapper reservations = mock(SpaceReservationMapper.class);
+        ArtifactCopyMapper copies = mock(ArtifactCopyMapper.class);
+
+        StorageVolumeEntity current = new StorageVolumeEntity();
+        current.setId(1L); current.setTier("HOT"); current.setMountStatus("ONLINE");
+        current.setWriteStatus("ACTIVE"); current.setOperationStatus("IDLE"); current.setIsDeleted(0);
+        StorageVolumeEntity cold = new StorageVolumeEntity();
+        cold.setId(2L); cold.setTier("COLD"); cold.setMountStatus("ONLINE");
+        cold.setWriteStatus("READ_ONLY"); cold.setOperationStatus("IDLE"); cold.setAdminStatus("ENABLED");
+        cold.setRootPath("E:/yigongbao-backup");
+        cold.setMarkerJson("{\"volumeId\":\"00000000-0000-0000-0000-000000000002\"}"); cold.setIsDeleted(0);
+
+        when(mapper.findActiveForUpdate()).thenReturn(current);
+        when(mapper.findByIdForUpdate(2L)).thenReturn(cold);
+        when(markers.verify(org.mockito.ArgumentMatchers.any(), org.mockito.ArgumentMatchers.any()))
+                .thenReturn(new StorageVolumeMarkerService.VerificationResult(true, true, null));
+        when(health.probe(cold)).thenReturn(new StorageVolumeHealthService.HealthSnapshot(
+                true, true, 100L, 80L, null, null, 1L));
+        when(configs.getInt("storage.volume-switch.threshold-percent", 90, 1)).thenReturn(90);
+        when(jobs.selectCount(org.mockito.ArgumentMatchers.any())).thenReturn(0L);
+        // 历史冷备文件仍然保留在该卷；它们不能成为重新启用原盘的阻塞条件。
+        when(copies.selectCount(org.mockito.ArgumentMatchers.any())).thenReturn(12L);
+        StorageVolumeLifecycleService service = service(mapper, markers, health, jobs, mock(JobOrderMapper.class),
+                copies, reservations, configs);
+
+        java.util.concurrent.atomic.AtomicReference<StorageVolumeEntity> result = new java.util.concurrent.atomic.AtomicReference<>();
+        org.assertj.core.api.Assertions.assertThatCode(() -> result.set(service.setActive(2L, 100L)))
+                .doesNotThrowAnyException();
+        StorageVolumeEntity activated = result.get();
+
+        assertThat(current.getTier()).isEqualTo("HOT");
+        assertThat(current.getWriteStatus()).isEqualTo("READ_ONLY");
+        assertThat(activated.getTier()).isEqualTo("HOT");
+        assertThat(activated.getWriteStatus()).isEqualTo("ACTIVE");
+        assertThat(activated.getOperationStatus()).isEqualTo("IDLE");
+        verify(mapper).updateById(current);
+        verify(mapper).updateById(cold);
+    }
+
+    @Test
     void rejectsDisablingVolumeReferencedByActiveArtifact() {
         StorageVolumeMapper mapper = mock(StorageVolumeMapper.class);
         ArtifactCopyMapper copies = mock(ArtifactCopyMapper.class);

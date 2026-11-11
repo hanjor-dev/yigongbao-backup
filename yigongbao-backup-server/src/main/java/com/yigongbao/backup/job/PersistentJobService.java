@@ -332,6 +332,20 @@ public class PersistentJobService {
         return enrichCurrentVolumes(listFilesRaw(jobId));
     }
 
+    /** 分页读取任务文件证据；可按来源订单收窄，用于任务详情和订单详情共用。 */
+    public JobFilePage listFiles(long jobId, Long sourceOrderId, long current, long size) {
+        if (fileMapper == null) throw new IllegalStateException("任务文件明细持久化未配置");
+        if ((sourceOrderId != null && sourceOrderId < 1) || current < 1 || size < 1 || size > 100) {
+            throw new IllegalArgumentException("文件明细分页参数非法");
+        }
+        Page<JobFileEntity> page = fileMapper.selectPage(Page.of(current, size),
+                Wrappers.<JobFileEntity>lambdaQuery().eq(JobFileEntity::getJobId, jobId)
+                        .eq(sourceOrderId != null, JobFileEntity::getSourceOrderId, sourceOrderId)
+                        .orderByAsc(JobFileEntity::getId));
+        return new JobFilePage(enrichCurrentVolumes(page.getRecords()), page.getTotal(), page.getCurrent(),
+                page.getSize(), page.getPages());
+    }
+
     private List<JobFileEntity> listFilesRaw(long jobId) {
         return fileMapper.selectList(Wrappers.<JobFileEntity>lambdaQuery().eq(JobFileEntity::getJobId, jobId)
                 .orderByAsc(JobFileEntity::getId));

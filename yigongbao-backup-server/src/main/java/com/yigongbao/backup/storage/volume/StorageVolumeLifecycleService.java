@@ -262,11 +262,15 @@ public class StorageVolumeLifecycleService {
                 ? currentActive : volumeMapper.findByIdForUpdate(volumeId);
         // 兼容不经过 MyBatis 代理的单元测试桩。
         if (entity == null) entity = required(volumeId);
-        if (!StorageVolumeStatus.Tier.HOT.name().equals(entity.getTier())
-                || !StorageVolumeStatus.Mount.ONLINE.name().equals(entity.getMountStatus())) {
-            throw new StorageVolumeOperationException("只有在线 HOT 卷可设为活动卷");
+        boolean reconnectedColdVolume = StorageVolumeStatus.Tier.COLD.name().equals(entity.getTier())
+                && StorageVolumeStatus.Write.READ_ONLY.name().equals(entity.getWriteStatus());
+        boolean eligibleTier = StorageVolumeStatus.Tier.HOT.name().equals(entity.getTier()) || reconnectedColdVolume;
+        if (!eligibleTier || !StorageVolumeStatus.Mount.ONLINE.name().equals(entity.getMountStatus())) {
+            throw new StorageVolumeOperationException("只有在线 HOT 卷或已重新接入的 COLD/READ_ONLY 卷可设为活动卷");
         }
-        if (entity.getOperationStatus() != null && !StorageVolumeStatus.Operation.IDLE.name().equals(entity.getOperationStatus()))
+        if (!StorageVolumeStatus.Admin.ENABLED.name().equals(defaultAdmin(entity)))
+            throw new StorageVolumeOperationException("已停用的存储卷不能设为活动卷");
+        if (!StorageVolumeStatus.Operation.IDLE.name().equals(defaultOperation(entity)))
             throw new StorageVolumeOperationException("目标卷正在执行其他生命周期操作");
         StorageVolumeMarkerService.VerificationResult marker = markerService.verify(Path.of(entity.getRootPath()), markerId(entity));
         if (!marker.valid()) throw new StorageVolumeOperationException("目标卷标记校验失败：" + marker.reason());
@@ -298,9 +302,10 @@ public class StorageVolumeLifecycleService {
         }
         entity.setTier(StorageVolumeStatus.Tier.HOT.name());
         entity.setWriteStatus(StorageVolumeStatus.Write.ACTIVE.name());
+        entity.setOperationStatus(StorageVolumeStatus.Operation.IDLE.name());
         entity.setUpdateBy(operatorId);
         volumeMapper.updateById(entity);
-        audit(operatorId, "SET_ACTIVE", entity, "SUCCESS", null);
+        audit(operatorId, reconnectedColdVolume ? "PROMOTE_COLD_TO_ACTIVE" : "SET_ACTIVE", entity, "SUCCESS", null);
         return entity;
     }
 

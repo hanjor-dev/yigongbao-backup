@@ -41,7 +41,7 @@ onUnmounted(() => { if (refreshTimer) window.clearInterval(refreshTimer); });
 <template>
   <div class="page-stack cold-storage-page">
     <section class="page-heading">
-      <div><div class="eyebrow">OFFLINE MEDIA VAULT</div><h2>冷备管理</h2><p>管理整盘封存校验、离线介质定位和原冷备盘重新接入。这里的接入不会复制或移动订单文件。</p></div>
+      <div><h2>冷备管理</h2><p>管理整盘封存校验、离线介质定位和原冷备盘重新接入。这里的接入不会复制或移动订单文件。</p></div>
       <div class="heading-actions"><el-button :loading="coldStorageLoading" @click="refresh"><el-icon><Refresh /></el-icon>刷新状态</el-button><el-button @click="navigate('storage-volumes')">返回存储卷管理</el-button></div>
     </section>
     <section class="cold-metrics">

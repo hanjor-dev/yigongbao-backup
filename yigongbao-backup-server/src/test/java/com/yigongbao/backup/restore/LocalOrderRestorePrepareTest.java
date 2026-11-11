@@ -80,4 +80,41 @@ class LocalOrderRestorePrepareTest {
             assertThat(captured.get().assets()).extracting(OnlineRestoreClient.RestoreAsset::assetIdentity).containsExactly("10");
         } finally { Files.deleteIfExists(zip); }
     }
+
+    @Test
+    void v2PrepareRestoresOmittedNullableRelationFieldsBeforeSending() throws Exception {
+        Path zip = Files.createTempFile("restore-v2-null-relation", ".zip");
+        try (ZipOutputStream out = new ZipOutputStream(Files.newOutputStream(zip))) {
+            out.putNextEntry(new ZipEntry("manifest.json"));
+            out.write(("{\"manifestSchemaVersion\":2,\"backupCompleteness\":\"COMPLETE\"," +
+                    "\"manifestRevision\":\"rev-2\",\"manifestSha256\":\"" + "a".repeat(64) + "\"," +
+                    "\"relationSetHash\":\"" + "b".repeat(64) + "\",\"relationshipStateHash\":\"" + "c".repeat(64) + "\"," +
+                    "\"assets\":[{\"assetId\":\"10\",\"fileName\":\"a.txt\",\"size\":1,\"platform\":\"COS\"," +
+                    "\"relations\":[{\"relationKind\":\"DESIGN_MODEL\",\"sourceRecordId\":\"1\"," +
+                    "\"relationOwnerKey\":\"owner\",\"relationVersion\":\"0\",\"relationHash\":\"hash\"," +
+                    "\"originalFileId\":\"10\",\"originalUrl\":\"orders/a.txt\"}]}]}" ).getBytes());
+            out.closeEntry();
+            out.putNextEntry(new ZipEntry("files/10-a.txt")); out.write(1); out.closeEntry();
+        }
+        AtomicReference<OnlineRestoreClient.RestoreRequest> captured = new AtomicReference<>();
+        OnlineRestoreClient client = new OnlineRestoreClient() {
+            public Session prepare(String orderId) { throw new AssertionError(); }
+            public Session prepare(String orderId, RestoreRequest request) {
+                captured.set(request);
+                return new Session("s", List.of("10"));
+            }
+            public void upload(Session session, String assetName, InputStream data) { }
+            public void commit(Session session) { }
+            public void abort(Session session) { }
+        };
+
+        try {
+            new LocalOrderRestoreService(client).restore(zip, "42");
+            var relation = captured.get().assets().getFirst().relations().getFirst();
+            assertThat(relation).containsKey("relationValue");
+            assertThat(relation.get("relationValue")).isNull();
+        } finally {
+            Files.deleteIfExists(zip);
+        }
+    }
 }

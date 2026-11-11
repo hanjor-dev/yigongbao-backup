@@ -3,6 +3,7 @@ package com.yigongbao.backup.job;
 import com.yigongbao.backup.order.OrderPackageMapper;
 import com.yigongbao.backup.storage.volume.StorageVolumeEntity;
 import com.yigongbao.backup.storage.volume.StorageVolumeMapper;
+import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
 import com.baomidou.mybatisplus.extension.plugins.pagination.Page;
 import org.junit.jupiter.api.Test;
 
@@ -16,6 +17,82 @@ import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.Mockito.*;
 
 class PersistentJobServiceTest {
+    @Test
+    void taskFilePageReturnsOnlyRequestedPageAndProjectsCurrentVolumes() {
+        JobMapper jobs = mock(JobMapper.class);
+        JobOrderMapper orders = mock(JobOrderMapper.class);
+        JobFileMapper files = mock(JobFileMapper.class);
+        StorageVolumeMapper volumes = mock(StorageVolumeMapper.class);
+        JobFileEntity file = new JobFileEntity();
+        file.setId(12L); file.setJobId(99L); file.setSourceOrderId(75L);
+        file.setStorageVolumeId(7L); file.setStorageVolumeName("任务时卷"); file.setStorageTier("HOT");
+        when(files.selectPage(any(Page.class), any())).thenAnswer(invocation -> {
+            Page<JobFileEntity> page = invocation.getArgument(0);
+            assertThat(page.getCurrent()).isEqualTo(2L);
+            assertThat(page.getSize()).isEqualTo(20L);
+            page.setRecords(List.of(file)); page.setTotal(41L);
+            return page;
+        });
+        StorageVolumeEntity current = new StorageVolumeEntity();
+        current.setId(7L); current.setDisplayName("当前冷备卷"); current.setTier("COLD");
+        current.setMountStatus("ONLINE"); current.setOperationStatus("IDLE");
+        when(volumes.selectBatchIds(anyCollection())).thenReturn(List.of(current));
+        PersistentJobService service = new PersistentJobService(jobs, orders, files, null, volumes);
+
+        PersistentJobService.JobFilePage result = service.listFiles(99L, null, 2L, 20L);
+
+        assertThat(result.records()).containsExactly(file);
+        assertThat(result.total()).isEqualTo(41L);
+        assertThat(result.current()).isEqualTo(2L);
+        assertThat(result.size()).isEqualTo(20L);
+        assertThat(result.pages()).isEqualTo(3L);
+        assertThat(result.records().getFirst().getCurrentStorageVolumeName()).isEqualTo("当前冷备卷");
+        verify(files).selectPage(any(Page.class), any());
+        verify(files, never()).selectList(any());
+        verify(volumes).selectBatchIds(anyCollection());
+    }
+
+    @Test
+    void taskFilePageCanBeRestrictedToOneOrderInsideTheTask() {
+        com.baomidou.mybatisplus.core.metadata.TableInfoHelper.initTableInfo(
+                new org.apache.ibatis.builder.MapperBuilderAssistant(
+                        new com.baomidou.mybatisplus.core.MybatisConfiguration(), "taskFilePageTest"),
+                JobFileEntity.class);
+        JobFileMapper files = mock(JobFileMapper.class);
+        when(files.selectPage(any(Page.class), any())).thenAnswer(invocation -> {
+            Page<JobFileEntity> page = invocation.getArgument(0);
+            page.setRecords(List.of()); page.setTotal(0L);
+            return page;
+        });
+        PersistentJobService service = new PersistentJobService(mock(JobMapper.class), mock(JobOrderMapper.class), files);
+
+        service.listFiles(99L, 75L, 1L, 20L);
+
+        @SuppressWarnings("unchecked")
+        org.mockito.ArgumentCaptor<LambdaQueryWrapper<JobFileEntity>> wrapperCaptor =
+                org.mockito.ArgumentCaptor.forClass(LambdaQueryWrapper.class);
+        verify(files).selectPage(any(Page.class), wrapperCaptor.capture());
+        assertThat(wrapperCaptor.getValue().getSqlSegment().toLowerCase())
+                .contains("job_id").contains("source_order_id").contains("order by").contains("id asc");
+        assertThat(wrapperCaptor.getValue().getParamNameValuePairs().values())
+                .containsExactlyInAnyOrder(99L, 75L);
+    }
+
+    @Test
+    void taskFilePageRejectsUnsafePaginationParameters() {
+        PersistentJobService service = new PersistentJobService(
+                mock(JobMapper.class), mock(JobOrderMapper.class), mock(JobFileMapper.class));
+
+        org.assertj.core.api.Assertions.assertThatThrownBy(() -> service.listFiles(99L, null, 0L, 20L))
+                .isInstanceOf(IllegalArgumentException.class).hasMessageContaining("分页参数非法");
+        org.assertj.core.api.Assertions.assertThatThrownBy(() -> service.listFiles(99L, null, 1L, 0L))
+                .isInstanceOf(IllegalArgumentException.class).hasMessageContaining("分页参数非法");
+        org.assertj.core.api.Assertions.assertThatThrownBy(() -> service.listFiles(99L, null, 1L, 101L))
+                .isInstanceOf(IllegalArgumentException.class).hasMessageContaining("分页参数非法");
+        org.assertj.core.api.Assertions.assertThatThrownBy(() -> service.listFiles(99L, 0L, 1L, 20L))
+                .isInstanceOf(IllegalArgumentException.class).hasMessageContaining("分页参数非法");
+    }
+
     @Test
     void degradedBackupEligibilityRequiresStrictRealRelationFailureWithoutAvailableSnapshot() {
         JobMapper jobs = mock(JobMapper.class);

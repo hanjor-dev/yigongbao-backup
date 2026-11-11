@@ -30,10 +30,33 @@ test('accounts page uses server pagination and exposes local status labels', () 
   assert.match(view, /已禁用/);
 });
 
-test('audit page localizes actions and reads the API resultCode field', () => {
-  const view = fs.readFileSync(path.join(root, 'src', 'views', 'AuditView.vue'), 'utf8');
-  assert.match(view, /statusLabel\(row\.action \|\| row\.operation\)/);
-  assert.match(view, /row\.resultCode \|\| row\.result \|\| row\.status/);
+test('removed audit route falls back to the orders page', async () => {
+  const previousLocalStorage = globalThis.localStorage;
+  const previousWindow = globalThis.window;
+  const values = new Map([['backup-current-page', 'audit']]);
+  globalThis.localStorage = {
+    getItem: (key) => values.get(key) ?? null,
+    setItem: (key, value) => values.set(key, value)
+  };
+  globalThis.window = {
+    location: { hash: '#audit' },
+    history: { replaceState: (_state, _title, hash) => { globalThis.window.location.hash = hash; } }
+  };
+
+  try {
+    const { createRouteStore } = await import('../src/stores/routeStore.js');
+    const route = createRouteStore();
+    assert.equal(route.page.value, 'orders');
+
+    route.navigate('audit');
+    assert.equal(route.page.value, 'orders');
+    assert.equal(globalThis.window.location.hash, '#orders');
+  } finally {
+    if (previousLocalStorage === undefined) delete globalThis.localStorage;
+    else globalThis.localStorage = previousLocalStorage;
+    if (previousWindow === undefined) delete globalThis.window;
+    else globalThis.window = previousWindow;
+  }
 });
 
 test('application refresh loads data for the current accounts route', () => {
