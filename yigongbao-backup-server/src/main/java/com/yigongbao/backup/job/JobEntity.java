@@ -14,7 +14,7 @@ public class JobEntity extends BaseEntity {
     private Long progressCurrent;
     private Long progressTotal;
     private String configSnapshotJson;
-    /** 创建订单备份任务时锁定的目标卷；恢复任务不使用该字段。 */
+    /** 创建订单备份任务时锁定的目标卷；创建时无可用卷的失败任务允许为空，恢复任务不使用该字段。 */
     private Long targetStorageVolumeId;
     private String resultJson;
     private Long requestedBy;

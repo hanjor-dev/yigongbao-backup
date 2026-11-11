@@ -132,7 +132,8 @@ public final class JobDispatcher {
                 return true;
             }
             context.failure(failure);
-            int effectiveRetries = failure instanceof com.yigongbao.backup.remote.RemoteCallException remote && !remote.retryable()
+            int effectiveRetries = failure instanceof JobPreconditionException
+                    || failure instanceof com.yigongbao.backup.remote.RemoteCallException remote && !remote.retryable()
                     ? 0 : retries;
             coordinator.failOrRetry(job.getId(), owner, token, effectiveRetries, failure);
             int nextRetry = value(job.getRetryCount()) + 1;

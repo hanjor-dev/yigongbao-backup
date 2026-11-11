@@ -250,7 +250,7 @@ public class StorageVolumeLifecycleService {
      * 显式切换唯一活动热备卷。
      * 任何仍向原 ACTIVE 卷写入的任务都会阻止切换，已创建任务因已固化目标卷而不受影响。
      */
-    @Transactional
+    @Transactional(noRollbackFor = StorageVolumeUnavailableException.class)
     public StorageVolumeEntity setActive(long volumeId, long operatorId) {
         // 与新任务创建使用同一行锁顺序：先锁当前 ACTIVE，再锁目标卷。
         // 因此切卷不可能插入到“选择活动卷”和“任务固化目标卷”之间。
@@ -265,9 +265,9 @@ public class StorageVolumeLifecycleService {
         boolean reconnectedColdVolume = StorageVolumeStatus.Tier.COLD.name().equals(entity.getTier())
                 && StorageVolumeStatus.Write.READ_ONLY.name().equals(entity.getWriteStatus());
         boolean eligibleTier = StorageVolumeStatus.Tier.HOT.name().equals(entity.getTier()) || reconnectedColdVolume;
-        if (!eligibleTier || !StorageVolumeStatus.Mount.ONLINE.name().equals(entity.getMountStatus())) {
-            throw new StorageVolumeOperationException("只有在线 HOT 卷或已重新接入的 COLD/READ_ONLY 卷可设为活动卷");
-        }
+        if (!eligibleTier) throw new StorageVolumeOperationException("只有 HOT 卷或已重新接入的 COLD/READ_ONLY 卷可设为活动卷");
+        if (!StorageVolumeStatus.Mount.ONLINE.name().equals(entity.getMountStatus()))
+            throw new StorageVolumeUnavailableException("目标卷不在线，只有在线 HOT 卷或已重新接入且在线的 COLD/READ_ONLY 卷可设为活动卷");
         if (!StorageVolumeStatus.Admin.ENABLED.name().equals(defaultAdmin(entity)))
             throw new StorageVolumeOperationException("已停用的存储卷不能设为活动卷");
         if (!StorageVolumeStatus.Operation.IDLE.name().equals(defaultOperation(entity)))
@@ -275,13 +275,13 @@ public class StorageVolumeLifecycleService {
         StorageVolumeMarkerService.VerificationResult marker = markerService.verify(Path.of(entity.getRootPath()), markerId(entity));
         if (!marker.valid()) throw new StorageVolumeOperationException("目标卷标记校验失败：" + marker.reason());
         StorageVolumeHealthService.HealthSnapshot health = healthService.probe(entity);
-        if (!health.accessible()) throw new StorageVolumeOperationException("目标卷不可访问：" + health.errorMessage());
-        if (!health.writable()) throw new StorageVolumeOperationException("目标卷不可写");
+        if (!health.accessible()) throw new StorageVolumeUnavailableException("目标卷不可访问：" + health.errorMessage());
+        if (!health.writable()) throw new StorageVolumeUnavailableException("目标卷不可写");
         int threshold = configs.getInt("storage.volume-switch.threshold-percent", 90, 1);
         if (threshold < 1) threshold = 90;
         if (health.totalBytes() <= 0 || health.usableBytes() <= 0
                 || (health.totalBytes() - health.usableBytes()) * 100L >= health.totalBytes() * threshold) {
-            throw new StorageVolumeOperationException("目标卷容量不足或已达切换阈值");
+            throw new StorageVolumeUnavailableException("目标卷容量不足或已达切换阈值");
         }
         updateCapacitySnapshot(entity, health);
         entity.setLastProbedAt(LocalDateTime.now());

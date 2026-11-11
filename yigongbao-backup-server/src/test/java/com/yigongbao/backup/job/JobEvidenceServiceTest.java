@@ -32,6 +32,20 @@ class JobEvidenceServiceTest {
         verify(orders, times(5)).insert(argThat((JobOrderEntity row) -> "PENDING".equals(row.getStatus())));
     }
 
+    @Test void marksEveryScheduledOrderFailedWhenTaskPreflightCannotStart() {
+        JobOrderMapper orders = mock(JobOrderMapper.class);
+        when(orders.selectOne(any())).thenReturn(null);
+        JobEvidenceService service = new JobEvidenceService(orders, mock(JobFileMapper.class), mock(StorageVolumeMapper.class));
+
+        service.failOrders(99L, List.of(1L, 2L, 3L),
+                new JobPreconditionException("STORAGE_VOLUME_UNAVAILABLE", "没有可写的活动热备卷"));
+
+        verify(orders, times(3)).insert(argThat((JobOrderEntity row) ->
+                "FAILED".equals(row.getStatus())
+                        && "STORAGE_VOLUME_UNAVAILABLE".equals(row.getFailureCode())
+                        && "没有可写的活动热备卷".equals(row.getFailureMessage())));
+    }
+
     @Test void storesOrderBusinessSnapshotOnTaskDetail() {
         JobOrderMapper orders = mock(JobOrderMapper.class);
         JobOrderEntity row = new JobOrderEntity(); row.setId(1L); row.setJobId(99L); row.setSourceOrderId(5L);

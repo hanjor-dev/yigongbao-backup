@@ -2,6 +2,8 @@ package com.yigongbao.backup.admin;
 
 import cn.dev33.satoken.stp.StpUtil;
 import com.yigongbao.backup.common.ApiResponse;
+import com.yigongbao.backup.config.ConfigService;
+import com.yigongbao.backup.config.PersistentConfigService;
 import com.yigongbao.backup.storage.volume.DiscoveredStorageVolume;
 import com.yigongbao.backup.storage.volume.StorageVolumeEntity;
 import com.yigongbao.backup.storage.volume.StorageVolumeLifecycleService;
@@ -42,15 +44,19 @@ public class AdminStorageVolumeController {
     private final SpaceReservationMapper reservationMapper;
     private final AuditLogMapper auditLogMapper;
     private final AuditLogService auditLogService;
+    private final PersistentConfigService configs;
 
     /** 已纳管卷清单；管理页不再从配置中的路径文本推导实际存储位置。 */
     @GetMapping
     public ApiResponse<List<StorageVolumeView>> list() {
         admin();
+        int hotThreshold = capacityThreshold("storage.threshold.hot.percent", 75);
+        int coldThreshold = capacityThreshold("storage.threshold.cold.percent", 80);
         return ApiResponse.ok(volumeMapper.selectList(com.baomidou.mybatisplus.core.toolkit.Wrappers
                 .<StorageVolumeEntity>lambdaQuery().eq(StorageVolumeEntity::getIsDeleted, 0)
                 .orderByAsc(StorageVolumeEntity::getTier).orderByAsc(StorageVolumeEntity::getPriority)).stream()
-                .map(StorageVolumeView::from).toList(), requestId());
+                .map(volume -> StorageVolumeView.from(volume,
+                        "COLD".equals(volume.getTier()) ? coldThreshold : hotThreshold)).toList(), requestId());
     }
 
     /** 卷详情包含身份标记、当前引用和最近审计，不再使用前端占位说明。 */
@@ -80,8 +86,22 @@ public class AdminStorageVolumeController {
                         .eq(AuditLogEntity::getObjectId, String.valueOf(id)).eq(AuditLogEntity::getIsDeleted, 0)
                         .orderByDesc(AuditLogEntity::getOccurredAt).orderByDesc(AuditLogEntity::getId).last("LIMIT 20"))
                 .stream().map(StorageVolumeAuditView::from).toList();
-        return ApiResponse.ok(new StorageVolumeDetailView(StorageVolumeView.from(volume), volume.getVolumeFingerprint(),
+        int threshold = "COLD".equals(volume.getTier())
+                ? capacityThreshold("storage.threshold.cold.percent", 80)
+                : capacityThreshold("storage.threshold.hot.percent", 75);
+        return ApiResponse.ok(new StorageVolumeDetailView(StorageVolumeView.from(volume, threshold), volume.getVolumeFingerprint(),
                 volume.getMarkerJson(), activeCopies, orderPackageCount, orderPackageBytes, runningTasks, reservations, audits), requestId());
+    }
+
+    private int capacityThreshold(String key, int fallback) {
+        ConfigService.Entry entry = configs.get(key);
+        if (entry == null || entry.value() == null) return fallback;
+        try {
+            int value = Integer.parseInt(entry.value());
+            return value >= 1 && value <= 100 ? value : fallback;
+        } catch (NumberFormatException ignored) {
+            return fallback;
+        }
     }
 
     /** 扫描服务账号当前可见的候选盘；该接口不会修改目录和数据库。 */
@@ -191,16 +211,23 @@ public class AdminStorageVolumeController {
     public record StorageVolumeView(Long id, String volumeCode, String displayName, String rootPath, String tier,
                                     String mountStatus, String writeStatus, Integer priority, java.time.LocalDateTime lastProbedAt,
                                     String lastErrorMessage, Long totalBytes, Long usableBytes, Long usedBytes,
+                                    Double usedPercent, Integer warningThresholdPercent, Boolean capacityWarning,
                                     String adminStatus, String operationStatus, String archiveNote, String offlineLabelNote,
                                     String physicalLocation, java.time.LocalDateTime archivedAt,
                                     java.time.LocalDateTime orderCreatedFrom, java.time.LocalDateTime orderCreatedTo,
                                     Long archivedOrderCount, Long archivedFileCount, Long archivedBytes) {
-        static StorageVolumeView from(StorageVolumeEntity value) {
+        static StorageVolumeView from(StorageVolumeEntity value, int warningThresholdPercent) {
             Long total = value.getTotalBytes();
             Long usable = value.getUsableBytes();
+            boolean capacityKnown = total != null && total > 0 && usable != null && usable >= 0;
+            Long used = total == null || usable == null ? null : Math.max(0L, Math.min(total, total - usable));
+            Double usedPercent = capacityKnown
+                    ? Math.round(used * 1000.0d / total) / 10.0d : null;
+            Boolean capacityWarning = capacityKnown
+                    ? used * 100.0d >= total * (double) warningThresholdPercent : null;
             return new StorageVolumeView(value.getId(), value.getVolumeCode(), value.getDisplayName(), value.getRootPath(), value.getTier(),
                     value.getMountStatus(), value.getWriteStatus(), value.getPriority(), value.getLastProbedAt(), value.getLastErrorMessage(),
-                    total, usable, total == null || usable == null ? null : total - usable,
+                    total, usable, used, usedPercent, warningThresholdPercent, capacityWarning,
                     value.getAdminStatus(), value.getOperationStatus(), value.getArchiveNote(), value.getOfflineLabelNote(),
                     value.getPhysicalLocation(), value.getArchivedAt(), value.getOrderCreatedFrom(), value.getOrderCreatedTo(),
                     value.getArchivedOrderCount(), value.getArchivedFileCount(), value.getArchivedBytes());

@@ -30,11 +30,11 @@
 .order-filter-grid { display:grid; grid-template-columns:repeat(12,minmax(0,1fr)); gap:0 13px; align-items:end; }
 .order-filter .el-form-item { grid-column:span 2; min-width:0; margin:0 0 15px; }
 .order-filter .keyword-filter { grid-column:span 4; }
-.order-filter .physical-filter { grid-column:span 2; }
-.order-filter .storage-filter { grid-column:span 6; }
+.order-filter .physical-filter { grid-column:span 1; }
+.order-filter .storage-filter { grid-column:span 7; }
 .order-filter .el-input,.order-filter .el-select,.order-filter .el-date-editor { width:100%; }
 .order-filter .el-form-item__label { padding-bottom:5px; color:#738197; font-size:11px; font-weight:700; }
-.filter-triple { display:flex; gap:6px; }
+.filter-triple { display:flex; width:100%; gap:6px; }
 .filter-triple .el-select { flex:1; min-width:0; }
 .filter-actions { grid-column:span 2; display:flex; align-items:center; gap:8px; padding-bottom:15px; }
 .data-table { --el-table-header-bg-color:#f7f9fc; --el-table-row-hover-bg-color:#f5f8ff; --el-table-border-color:#edf0f5; border-radius:10px; overflow:hidden; }

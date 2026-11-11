@@ -2,12 +2,13 @@
 import { computed, onMounted, ref } from 'vue';
 import { useBackupContext } from '../composables/useBackupContext.js';
 import { statusLabel } from '../components/StatusBadge.js';
-import { activeVolumeConfirmation, canSetAsActiveVolume } from '../storageVolumeActions.js';
+import { activeVolumeConfirmation, canSetAsActiveVolume, storageCapacityPresentation } from '../storageVolumeActions.js';
 
 const { isAdmin, storageVolumes, storageCandidates, loadStorageVolumes, loadStorageVolumeDetail, scanStorageVolumes, registerStorageVolume, changeStorageVolumeState, previewStorageArchive, startStorageArchive, navigate } = useBackupContext();
 const hotActive = computed(() => storageVolumes.value.find((item) => item.tier === 'HOT' && item.writeStatus === 'ACTIVE'));
 const selectedVolume = ref(null);
 const bytes = (value) => (value == null ? '不可用' : value < 1048576 ? `${(value / 1024).toFixed(1)} KB` : value < 1073741824 ? `${(value / 1048576).toFixed(1)} MB` : `${(value / 1073741824).toFixed(2)} GB`);
+const capacity = (row) => storageCapacityPresentation(row);
 async function activate(row) {
   if (confirm(activeVolumeConfirmation(row, hotActive.value))) await changeStorageVolumeState(row.id, 'set-active');
 }
@@ -117,8 +118,10 @@ onMounted(loadStorageVolumes);
           ></el-table-column
         >
         <el-table-column prop="priority" label="优先级" width="90" />
-        <el-table-column label="容量（已用 / 可用 / 总）" min-width="230"
-          ><template #default="{ row }">{{ bytes(row.usedBytes) }} / {{ bytes(row.usableBytes) }} / {{ bytes(row.totalBytes) }}</template></el-table-column
+        <el-table-column label="容量（已用 / 可用 / 总）" min-width="250"
+          ><template #default="{ row }"
+            ><div class="capacity-cell__summary">{{ bytes(row.usedBytes) }} / {{ bytes(row.usableBytes) }} / {{ bytes(row.totalBytes) }}</div>
+            <div class="capacity-cell__meta"><span>已用占比 {{ capacity(row).percent }}</span><el-tag size="small" effect="light" :type="capacity(row).tone">{{ capacity(row).status }}</el-tag></div></template></el-table-column
         >
         <el-table-column prop="lastErrorMessage" label="最近异常" min-width="180"
           ><template #default="{ row }">{{ row.lastErrorMessage || '—' }}</template></el-table-column
@@ -193,3 +196,18 @@ onMounted(loadStorageVolumes);
     >
   </div>
 </template>
+
+<style scoped>
+.capacity-cell__summary {
+  white-space: nowrap;
+}
+
+.capacity-cell__meta {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-top: 6px;
+  color: var(--el-text-color-secondary);
+  font-size: 12px;
+}
+</style>

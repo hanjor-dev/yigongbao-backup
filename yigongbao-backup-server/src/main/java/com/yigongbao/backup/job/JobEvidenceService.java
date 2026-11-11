@@ -25,6 +25,13 @@ public class JobEvidenceService {
                 .forEach(orderId -> order(jobId, orderId, null, "PENDING", null));
     }
 
+    /** 执行前置条件失败时，将整批目标标记为失败，使列表统计和失败重试都有完整范围。 */
+    public void failOrders(long jobId, List<Long> sourceOrderIds, Throwable failure) {
+        if (sourceOrderIds == null) return;
+        sourceOrderIds.stream().filter(java.util.Objects::nonNull).distinct()
+                .forEach(orderId -> order(jobId, orderId, null, "FAILED", failure));
+    }
+
     public void order(long jobId, Long sourceId, Long snapshotId, String status, Throwable failure) {
         JobOrderEntity row = findOrder(jobId, sourceId);
         if (row == null) {
@@ -136,6 +143,7 @@ public class JobEvidenceService {
     private static void evidence(JobFileEntity row,Throwable e){row.setFailureCode(failureCode(e));row.setFailureMessage(e==null?null:safe(e));}
     private static String failureCode(Throwable e){
         if(e==null)return null;
+        if(e instanceof JobPreconditionException precondition)return precondition.code();
         if(e instanceof RemoteCallException remote&&remote.code()!=null&&!remote.code().isBlank())return remote.code();
         return e.getClass().getSimpleName();
     }

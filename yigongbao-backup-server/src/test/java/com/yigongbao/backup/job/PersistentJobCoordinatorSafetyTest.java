@@ -56,6 +56,68 @@ class PersistentJobCoordinatorSafetyTest {
     }
 
     @Test
+    void creationCanPersistAStoragePreflightFailureBeforeExecution() {
+        JobMapper mapper = mock(JobMapper.class);
+        doAnswer(invocation -> {
+            JobEntity inserted = invocation.getArgument(0);
+            inserted.setId(99L);
+            return 1;
+        }).when(mapper).insert(any(JobEntity.class));
+        when(mapper.update(any(), any())).thenReturn(1);
+        PersistentJobCoordinator coordinator = new PersistentJobCoordinator(mapper);
+
+        PersistentJobCoordinator.CreationResult reservation = coordinator.reserve(
+                "ORDER_BACKUP", "scheduled:20261111", 0L, "{}");
+        JobEntity created = coordinator.completeCreation(reservation.job(), null,
+                "STORAGE_VOLUME_UNAVAILABLE", "没有可写的活动热备卷");
+
+        assertThat(created.getStatus()).isEqualTo("CREATED");
+        assertThat(created.getTargetStorageVolumeId()).isNull();
+        assertThat(created.getFailureCode()).isEqualTo("STORAGE_VOLUME_UNAVAILABLE");
+        assertThat(created.getFailureMessage()).isEqualTo("没有可写的活动热备卷");
+        verify(mapper).insert(same(created));
+    }
+
+    @Test
+    void leaseRecoveryPreservesOriginalStoragePreflightFailure() {
+        JobMapper mapper = mock(JobMapper.class);
+        JobEntity expired = running(31L, "dead-worker", 7L);
+        expired.setVersion(0); expired.setRetryCount(0); expired.setTargetStorageVolumeId(null);
+        expired.setFailureCode("STORAGE_VOLUME_UNAVAILABLE");
+        expired.setFailureMessage("活动热备存储卷不可用或剩余空间不足");
+        expired.setLeaseUntil(LocalDateTime.now().minusSeconds(1));
+        when(mapper.selectList(any())).thenReturn(List.of(expired));
+        when(mapper.update(any(), any())).thenReturn(1);
+
+        assertThat(new PersistentJobCoordinator(mapper).recoverExpired(3)).isEqualTo(1);
+
+        verify(mapper).update(isNull(), argThat(update -> {
+            var values = ((com.baomidou.mybatisplus.core.conditions.AbstractWrapper<?, ?, ?>) update)
+                    .getParamNameValuePairs();
+            return values.containsValue("CREATED") && !values.containsValue("LEASE_EXPIRED");
+        }));
+    }
+
+    @Test
+    void preconditionFailureKeepsItsStableFailureCodeAtTerminalState() {
+        JobMapper mapper = mock(JobMapper.class);
+        JobEntity running = running(30L, "worker", 6L);
+        when(mapper.selectById(30L)).thenReturn(running);
+        when(mapper.update(any(), any())).thenReturn(1);
+
+        new PersistentJobCoordinator(mapper).failOrRetry(30L, "worker", 6L, 0,
+                new JobPreconditionException("STORAGE_VOLUME_UNAVAILABLE", "没有可写的活动热备卷"));
+
+        verify(mapper).update(isNull(), argThat(update -> {
+            var values = ((com.baomidou.mybatisplus.core.conditions.AbstractWrapper<?, ?, ?>) update)
+                    .getParamNameValuePairs();
+            return values.containsValue("STORAGE_VOLUME_UNAVAILABLE")
+                    && values.containsValue("没有可写的活动热备卷")
+                    && values.containsValue("FAILED");
+        }));
+    }
+
+    @Test
     void runningArchiveCancellationIsLeftForHandlerToCleanUpBeforeTerminalState() {
         JobMapper mapper = mock(JobMapper.class);
         JobEntity running = running(20L, "worker", 4L);

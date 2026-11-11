@@ -15,6 +15,7 @@ public final class JobExecutionContext {
     public void safePoint(String step,long progress){coordinator.safePoint(id,owner,token,step,progress);coordinator.heartbeat(id,owner,token,lease);}
     public void result(String json){coordinator.storeResult(id,owner,token,json);}
     public void initializeOrders(List<Long> orderIds){if(evidence!=null)evidence.initializeOrders(id,orderIds);}
+    public void failOrders(List<Long> orderIds,Throwable failure){if(evidence!=null)evidence.failOrders(id,orderIds,failure);}
     public void orderStarted(Long source,Long snapshot){currentOrder=source;currentSnapshot=snapshot;if(evidence!=null)evidence.order(id,source,snapshot,"RUNNING",null);}
     public void orderRetrying(Long source,long seconds){currentOrder=source;if(evidence!=null)evidence.order(id,source,currentSnapshot,"RETRYING",new IllegalStateException("将在"+seconds+"秒后重试"));}
     public void orderQueuedForRetry(Long source,Throwable failure){currentOrder=source;if(evidence!=null)evidence.order(id,source,currentSnapshot,"RETRY_PENDING",failure);currentOrder=null;currentSnapshot=null;}

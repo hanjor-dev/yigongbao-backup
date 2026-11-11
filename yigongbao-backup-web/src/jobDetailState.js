@@ -103,3 +103,13 @@ export function buildJobFilePageUrl(jobId, current, size, sourceOrderId = null) 
   if (sourceOrderId != null) params.set('sourceOrderId', String(sourceOrderId));
   return `/admin/jobs/${encodeURIComponent(jobId)}/files?${params.toString()}`;
 }
+
+/** 文件表只展示业务订单编号，不以内部来源订单ID降级代替。 */
+export function jobFileOrderCode(row) {
+  return row?.orderCode || '-';
+}
+
+/** 原始文件名缺失时显示空值标记，资产ID仍由独立列展示。 */
+export function jobFileOriginalFilename(row) {
+  return row?.originalFilename || '-';
+}

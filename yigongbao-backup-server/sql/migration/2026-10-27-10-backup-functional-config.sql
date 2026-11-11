@@ -31,8 +31,8 @@ FROM (
  SELECT 'backup.schedule.interval-minutes','INTEGER','30' UNION ALL SELECT 'backup.schedule.reconcile-interval-hours','INTEGER','24' UNION ALL
  SELECT 'backup.candidate.page-size','INTEGER','100' UNION ALL SELECT 'backup.candidate.lookback-seconds','INTEGER','300' UNION ALL
  SELECT 'backup.order.exclude-statuses','STRING','DRAFT,DELETED,CANCELLED' UNION ALL SELECT 'backup.order.skip-file-changes-after-backup','BOOLEAN','true' UNION ALL
- SELECT 'backup.order.classic-case-protection','BOOLEAN','true' UNION ALL SELECT 'storage.threshold.hot.percent','INTEGER','85' UNION ALL
- SELECT 'storage.threshold.cold.percent','INTEGER','90' UNION ALL SELECT 'storage.reserve-percent','INTEGER','10' UNION ALL
+ SELECT 'backup.order.classic-case-protection','BOOLEAN','true' UNION ALL SELECT 'storage.threshold.hot.percent','INTEGER','75' UNION ALL
+ SELECT 'storage.threshold.cold.percent','INTEGER','80' UNION ALL SELECT 'storage.reserve-percent','INTEGER','10' UNION ALL
  SELECT 'cold.max-import-bytes','LONG','4398046511104' UNION ALL SELECT 'cold.require-manifest','BOOLEAN','true' UNION ALL
  SELECT 'cold.require-sha256','BOOLEAN','true' UNION ALL SELECT 'cleanup.enabled','BOOLEAN','true' UNION ALL
  SELECT 'cleanup.retention-days','INTEGER','180' UNION ALL SELECT 'cleanup.dry-run-required','BOOLEAN','true' UNION ALL

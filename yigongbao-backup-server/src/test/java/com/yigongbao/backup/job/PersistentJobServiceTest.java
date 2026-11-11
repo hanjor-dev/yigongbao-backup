@@ -18,6 +18,28 @@ import static org.mockito.Mockito.*;
 
 class PersistentJobServiceTest {
     @Test
+    void taskFilePageToleratesOrderEvidenceWithoutBusinessOrderCode() {
+        JobOrderMapper orders = mock(JobOrderMapper.class);
+        JobFileMapper files = mock(JobFileMapper.class);
+        JobFileEntity file = new JobFileEntity();
+        file.setJobId(99L); file.setSourceOrderId(75L); file.setAssetIdentity("asset-1");
+        when(files.selectPage(any(Page.class), any())).thenAnswer(invocation -> {
+            Page<JobFileEntity> page = invocation.getArgument(0);
+            page.setRecords(List.of(file)); page.setTotal(1L);
+            return page;
+        });
+        JobOrderEntity pendingOrder = new JobOrderEntity();
+        pendingOrder.setJobId(99L); pendingOrder.setSourceOrderId(75L);
+        when(orders.selectList(any())).thenReturn(List.of(pendingOrder));
+        PersistentJobService service = new PersistentJobService(mock(JobMapper.class), orders, files);
+
+        PersistentJobService.JobFilePage result = service.listFiles(99L, null, 1L, 20L);
+
+        assertThat(result.records()).containsExactly(file);
+        assertThat(result.records().getFirst()).extracting("orderCode").isNull();
+    }
+
+    @Test
     void taskFilePageReturnsOnlyRequestedPageAndProjectsCurrentVolumes() {
         JobMapper jobs = mock(JobMapper.class);
         JobOrderMapper orders = mock(JobOrderMapper.class);
@@ -26,6 +48,8 @@ class PersistentJobServiceTest {
         JobFileEntity file = new JobFileEntity();
         file.setId(12L); file.setJobId(99L); file.setSourceOrderId(75L);
         file.setStorageVolumeId(7L); file.setStorageVolumeName("任务时卷"); file.setStorageTier("HOT");
+        file.setAssetIdentity("20769211132306472961");
+        file.setStorageKey("orders/20261110/20260707000021.zip!/files/20769211132306472961-下颌.stl");
         when(files.selectPage(any(Page.class), any())).thenAnswer(invocation -> {
             Page<JobFileEntity> page = invocation.getArgument(0);
             assertThat(page.getCurrent()).isEqualTo(2L);
@@ -37,6 +61,9 @@ class PersistentJobServiceTest {
         current.setId(7L); current.setDisplayName("当前冷备卷"); current.setTier("COLD");
         current.setMountStatus("ONLINE"); current.setOperationStatus("IDLE");
         when(volumes.selectBatchIds(anyCollection())).thenReturn(List.of(current));
+        JobOrderEntity order = new JobOrderEntity();
+        order.setJobId(99L); order.setSourceOrderId(75L); order.setOrderCode("20260707000021");
+        when(orders.selectList(any())).thenReturn(List.of(order));
         PersistentJobService service = new PersistentJobService(jobs, orders, files, null, volumes);
 
         PersistentJobService.JobFilePage result = service.listFiles(99L, null, 2L, 20L);
@@ -47,6 +74,9 @@ class PersistentJobServiceTest {
         assertThat(result.size()).isEqualTo(20L);
         assertThat(result.pages()).isEqualTo(3L);
         assertThat(result.records().getFirst().getCurrentStorageVolumeName()).isEqualTo("当前冷备卷");
+        assertThat(result.records().getFirst())
+                .extracting("orderCode", "originalFilename")
+                .containsExactly("20260707000021", "下颌.stl");
         verify(files).selectPage(any(Page.class), any());
         verify(files, never()).selectList(any());
         verify(volumes).selectBatchIds(anyCollection());

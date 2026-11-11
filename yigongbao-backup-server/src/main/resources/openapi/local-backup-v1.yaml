@@ -798,6 +798,8 @@ components:
         id: {type: integer, format: int64}
         jobId: {type: integer, format: int64}
         sourceOrderId: {type: integer, format: int64}
+        orderCode: {type: string, nullable: true}
+        originalFilename: {type: string, nullable: true}
         assetIdentity: {type: string, nullable: true}
         step: {type: string}
         status: {type: string}

@@ -40,7 +40,7 @@ Run: `mvn -pl yigongbao-backup-server -Dtest=BackupExecutionModeProviderTest tes
 
 - [ ] **Step 3: 实现枚举、环境读取与启动校验**
 
-配置键仅映射 `BACKUP_EXECUTION_MODE`、`BACKUP_SIMULATION_ROOT`、`BACKUP_DEV_CANDIDATE_LIMIT`；不得加入数据库配置初始化数据。
+部署环境仅保留 `BACKUP_EXECUTION_MODE`、`BACKUP_SIMULATION_ROOT`；单个任务订单上限由数据库配置 `backup.schedule.max-orders-per-run` 动态维护。
 
 - [ ] **Step 4: 更新环境变量示例及中文说明**
 

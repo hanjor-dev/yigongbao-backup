@@ -12,6 +12,7 @@ import com.yigongbao.backup.storage.api.SpaceReservationService;
 import com.yigongbao.backup.common.BusinessLogFormatter;
 import com.yigongbao.backup.config.RuntimeConfigService;
 import com.yigongbao.backup.job.PartialJobFailureException;
+import com.yigongbao.backup.job.JobPreconditionException;
 import com.yigongbao.backup.remote.RemoteCallException;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.ObjectProvider;
@@ -35,23 +36,38 @@ public class ManualBackupJobHandler implements JobHandler {
     private final BackupStageService backupStages;
     private final RuntimeConfigService configs;
     private final BackupExecutionModeProvider executionModes;
+    private final BackupTargetPreflightService targetPreflight;
 
     /** 生产注入构造器显式标注，避免兼容构造器存在时 Spring 误判为无参创建。 */
     @Autowired
     public ManualBackupJobHandler(ObjectProvider<OnlineManifestClient> manifests, ObjectProvider<CosObjectClient> cosClients,
                                   VolumeArtifactStore store, ObjectMapper mapper, SpaceReservationService reservations,
                                   BackupEvidenceService backupEvidence, BackupStageService backupStages, RuntimeConfigService configs,
-                                  BackupExecutionModeProvider executionModes) {
+                                  BackupExecutionModeProvider executionModes, BackupTargetPreflightService targetPreflight) {
         this.manifests = manifests; this.cosClients = cosClients; this.store = store; this.mapper = mapper;
         this.reservations = reservations; this.backupEvidence = backupEvidence; this.backupStages = backupStages; this.configs = configs;
-        this.executionModes = executionModes;
+        this.executionModes = executionModes; this.targetPreflight = targetPreflight;
+    }
+
+    public ManualBackupJobHandler(ObjectProvider<OnlineManifestClient> manifests, ObjectProvider<CosObjectClient> cosClients,
+                                  VolumeArtifactStore store, ObjectMapper mapper, SpaceReservationService reservations,
+                                  BackupEvidenceService backupEvidence, BackupStageService backupStages, RuntimeConfigService configs,
+                                  BackupExecutionModeProvider executionModes) {
+        this(manifests, cosClients, store, mapper, reservations, backupEvidence, backupStages, configs, executionModes, null);
     }
 
     public ManualBackupJobHandler(ObjectProvider<OnlineManifestClient> manifests, ObjectProvider<CosObjectClient> cosClients,
                                   VolumeArtifactStore store, ObjectMapper mapper, SpaceReservationService reservations,
                                   BackupEvidenceService backupEvidence, RuntimeConfigService configs,
                                   BackupExecutionModeProvider executionModes) {
-        this(manifests, cosClients, store, mapper, reservations, backupEvidence, null, configs, executionModes);
+        this(manifests, cosClients, store, mapper, reservations, backupEvidence, null, configs, executionModes, null);
+    }
+
+    public ManualBackupJobHandler(ObjectProvider<OnlineManifestClient> manifests, ObjectProvider<CosObjectClient> cosClients,
+                                  VolumeArtifactStore store, ObjectMapper mapper, SpaceReservationService reservations,
+                                  BackupEvidenceService backupEvidence, RuntimeConfigService configs,
+                                  BackupExecutionModeProvider executionModes, BackupTargetPreflightService targetPreflight) {
+        this(manifests, cosClients, store, mapper, reservations, backupEvidence, null, configs, executionModes, targetPreflight);
     }
 
     /** 保留旧单根目录构造器，供历史单元测试和未迁移任务兼容；生产容器注入多卷接口。 */
@@ -60,7 +76,7 @@ public class ManualBackupJobHandler implements JobHandler {
                                   BackupEvidenceService backupEvidence, RuntimeConfigService configs,
                                   BackupExecutionModeProvider executionModes) {
         this(manifests, cosClients, new LegacyArtifactStoreVolumeAdapter(store), mapper, reservations,
-                backupEvidence, null, configs, executionModes);
+                backupEvidence, null, configs, executionModes, null);
     }
 
     public ManualBackupJobHandler(ObjectProvider<OnlineManifestClient> manifests, ObjectProvider<CosObjectClient> cosClients,
@@ -68,7 +84,7 @@ public class ManualBackupJobHandler implements JobHandler {
                                   BackupEvidenceService backupEvidence, BackupStageService backupStages,
                                   RuntimeConfigService configs, BackupExecutionModeProvider executionModes) {
         this(manifests, cosClients, new LegacyArtifactStoreVolumeAdapter(store), mapper, reservations,
-                backupEvidence, backupStages, configs, executionModes);
+                backupEvidence, backupStages, configs, executionModes, null);
     }
 
     @Override
@@ -76,6 +92,8 @@ public class ManualBackupJobHandler implements JobHandler {
         long taskStartedAt = System.nanoTime();
         Payload payload = mapper.readValue(job.getConfigSnapshotJson(), Payload.class);
         BackupExecutionMode executionMode = payload.resolvedExecutionMode();
+        context.initializeOrders(payload.sourceOrderIds());
+        verifyStoragePreflight(context, job, payload.sourceOrderIds());
         OnlineManifestClient manifestsClient = manifests.getIfAvailable();
         CosObjectClient cos = executionMode == BackupExecutionMode.REAL ? cosClients.getIfAvailable() : null;
         if (manifestsClient == null || (executionMode == BackupExecutionMode.REAL && cos == null)) {
@@ -89,7 +107,6 @@ public class ManualBackupJobHandler implements JobHandler {
         java.util.Map<Long, Throwable> terminalFailures = new java.util.LinkedHashMap<>();
         java.util.Map<Long, Integer> attempts = new java.util.HashMap<>();
         java.util.Set<Long> refreshedDegradedManifests = new java.util.HashSet<>();
-        context.initializeOrders(payload.sourceOrderIds());
         int maxRetries = configs.getInt("backup.retry.max-retries", 3, 0);
         OrderBackupRetryPolicy retryPolicy = new OrderBackupRetryPolicy(maxRetries,
                 configs.get("backup.retry.delays-seconds", "60,300,900"));
@@ -342,7 +359,7 @@ public class ManualBackupJobHandler implements JobHandler {
                     BusinessLogFormatter.bytes(result.expectedBytes()), BusinessLogFormatter.bytes(result.packageSize()), result.storageKey());
             return result;
         }
-        int reservationPercent = configs.getInt("storage.backup-reservation-percent", 300, 100);
+        int reservationPercent = configs.getInt("storage.backup-reservation-percent", 200, 100);
         long reserveBytes = BackupWorkingSpaceEstimator.estimate(manifest, reservationPercent);
         long targetStorageVolumeId = requireTargetVolume(job);
         SpaceReservation reservation = isLegacyStore()
@@ -672,6 +689,26 @@ public class ManualBackupJobHandler implements JobHandler {
 
     private boolean isLegacyStore() {
         return store instanceof LegacyArtifactStoreVolumeAdapter;
+    }
+
+    private void verifyStoragePreflight(JobExecutionContext context, JobEntity job, List<Long> sourceOrderIds) {
+        if (isLegacyStore()) return;
+        context.safePoint("STORAGE_PREFLIGHT", 0L);
+        try {
+            if (job.getTargetStorageVolumeId() == null || job.getTargetStorageVolumeId() < 1) {
+                String reason = job.getFailureMessage() == null || job.getFailureMessage().isBlank()
+                        ? "订单备份任务未固化目标存储卷" : job.getFailureMessage();
+                throw new JobPreconditionException("STORAGE_VOLUME_UNAVAILABLE", reason);
+            }
+            if (targetPreflight != null) targetPreflight.requireWritable(job.getTargetStorageVolumeId());
+        } catch (JobPreconditionException precondition) {
+            JobPreconditionException failure = new JobPreconditionException(precondition.code(),
+                    "存储前置检查失败，任务未开始执行：" + precondition.getMessage());
+            context.failOrders(sourceOrderIds, failure);
+            context.taskError("BACKUP_STORAGE_PREFLIGHT_FAILED", "存储预检", failure.getMessage(),
+                    java.util.Map.of("failureCode", failure.code(), "orderCount", sourceOrderIds.size()));
+            throw failure;
+        }
     }
 
     public record Payload(List<Long> sourceOrderIds, int orderTotal, String backupDate,

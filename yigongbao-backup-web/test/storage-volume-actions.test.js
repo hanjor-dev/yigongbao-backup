@@ -28,3 +28,21 @@ test('冷备卷激活确认信息明确说明两侧状态和历史文件处理�
     { displayName: '当前热备盘' },
   ), '确认将“原冷备盘”转为热备活动卷？\n\n当前热备活动卷“当前热备盘”将调整为热备只读；“原冷备盘”将调整为热备活动卷，后续新备份任务写入该卷。\n\n盘内已有历史冷备文件不会被移动或删除，相关订单和任务的当前存储卷状态将同步更新。');
 });
+
+test('存储卷容量展示区分正常、告警和容量未知', () => {
+  assert.deepEqual(actions.storageCapacityPresentation?.({ usedPercent: 84.9, capacityWarning: false }), {
+    percent: '84.9%',
+    status: '容量正常',
+    tone: 'success',
+  });
+  assert.deepEqual(actions.storageCapacityPresentation?.({ usedPercent: 90, capacityWarning: true }), {
+    percent: '90.0%',
+    status: '容量告警',
+    tone: 'danger',
+  });
+  assert.deepEqual(actions.storageCapacityPresentation?.({ usedPercent: null, capacityWarning: null }), {
+    percent: '不可用',
+    status: '容量未知',
+    tone: 'info',
+  });
+});

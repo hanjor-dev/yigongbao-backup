@@ -14,7 +14,7 @@
 
 - A due day creates at most one automatic task at configured local time.
 - A missed start while the server is down is skipped and is not caught up after restart.
-- Formal execution has no order-count cap; development may use `BACKUP_DEV_CANDIDATE_LIMIT=5`.
+- Each task is capped by dynamic configuration `backup.schedule.max-orders-per-run`; excess candidates remain for a later scan.
 - One file failure fails its order, but other orders continue.
 - Failed orders retry inside the same task and remain eligible for later compensation if exhausted.
 - No candidate-selection page and no separate task-center menu.
@@ -42,8 +42,8 @@
 - Produces: exactly one `MANUAL_BACKUP` durable job for a due date.
 
 - [ ] Add failing tests for start time, missed-day skip, duplicate tick, multi-page collection and empty window.
-- [ ] Implement `backup.schedule.start-time` and remove `backup.schedule.max-orders-per-run`.
-- [ ] Add optional dev-only `BACKUP_DEV_CANDIDATE_LIMIT` environment limit.
+- [ ] Implement `backup.schedule.start-time` and keep the task-size limit independent from internal candidate pagination.
+- [ ] Add dynamic `backup.schedule.max-orders-per-run` task limit shared by automatic and administrator-triggered scans.
 - [ ] Persist daily schedule state and stable cursor only after the collection window is complete.
 - [ ] Run backend tests.
 

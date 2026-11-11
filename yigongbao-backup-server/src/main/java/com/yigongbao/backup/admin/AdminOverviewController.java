@@ -60,10 +60,12 @@ public class AdminOverviewController {
     }
 
     private long thresholdFor(String tier) {
-        String key = "COLD".equals(tier) ? "storage.threshold.cold.percent" : "storage.threshold.hot.percent";
+        boolean cold = "COLD".equals(tier);
+        String key = cold ? "storage.threshold.cold.percent" : "storage.threshold.hot.percent";
+        long fallback = cold ? 80 : 75;
         ConfigService.Entry entry = configs.get(key);
-        if (entry == null) return 85;
-        try { return Long.parseLong(entry.value()); } catch (NumberFormatException ignored) { return 85; }
+        if (entry == null) return fallback;
+        try { return Long.parseLong(entry.value()); } catch (NumberFormatException ignored) { return fallback; }
     }
 
     private static void admin() { StpUtil.checkRole("ADMIN"); }

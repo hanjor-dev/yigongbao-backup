@@ -37,14 +37,21 @@ test('admin backup page renders automatic backup tasks without candidate selecti
   assert.match(detail, /simulationPath/);
   assert.match(detail, /源文件容量/);
   assert.match(detail, /模拟完成/);
-  assert.match(orderTable, /displayJson/);
+  assert.match(read('../src/components/orders/OrderDetail.vue'), /displayJson/);
   assert.match(orderTable, /文件可能不完整/);
   assert.match(orderDrawer, /degradedBackupEligible/);
   assert.match(orderDrawer, /降级备份/);
   assert.match(detail, /canRetryFailedOrders/);
   assert.match(read('../src/components/orders/OrderDetail.vue'), /文件可能不完整/);
   assert.match(read('../src/components/jobs/JobTable.vue'), /canRetryFailedOrders/);
-  assert.match(read('../src/components/orders/OrderBusinessFields.vue'), /全部业务字段/);
+  const businessFields = read('../src/components/orders/OrderBusinessFields.vue');
+  assert.match(businessFields, /订单信息（备份时）/);
+  assert.doesNotMatch(businessFields, /全部业务字段|Object\.entries|JSON\.stringify/);
+  assert.match(businessFields, /<el-collapse v-if="presentation\.rawJson" class="business-raw-json">/);
+  assert.match(businessFields, /原始JSON快照/);
+  assert.doesNotMatch(businessFields, /原始 JSON（按需查看）/);
+  assert.match(businessFields, /\.business-raw-json\s*\{(?=[^}]*margin:\s*20px 0 0;)(?=[^}]*width:\s*100%;)[^}]*\}/);
+  assert.match(businessFields, /<pre class="business-raw-json__code"><code>{{ presentation\.rawJson }}<\/code><\/pre>/);
 });
 
 test('order file page uses a unified keyword and fixed filter option catalogs', () => {
@@ -64,6 +71,55 @@ test('order file page uses a unified keyword and fixed filter option catalogs', 
   for (const field of ['orgName', 'hospitalName', 'patientName', 'doctorName']) {
     assert.match(table, new RegExp(`row\\.${field}`));
   }
+});
+
+test('order file details open in a drawer without coupling bulk selection to detail loading', () => {
+  const detail = read('../src/components/orders/OrderDetail.vue');
+  const table = read('../src/components/orders/OrderTable.vue');
+  const consoleSource = read('../src/composables/useBackupConsole.js');
+  const toggleSelectedSource = consoleSource.slice(
+    consoleSource.indexOf('function toggleSelected'),
+    consoleSource.indexOf('async function loadSelectedOrder'),
+  );
+
+  assert.match(detail, /<el-drawer/);
+  assert.match(detail, /:model-value="Boolean\(selectedOrder\)"/);
+  assert.match(detail, /@closed="closeOrderDetail"/);
+  assert.match(detail, /append-to-body/);
+  assert.match(table, />详情<\/el-button>/);
+  assert.match(table, /@click\.stop="selectOrder\(row\)"/);
+  assert.doesNotMatch(table, /type="expand"|OrderBusinessFields/);
+  assert.match(consoleSource, /function closeOrderDetail\(\)/);
+  assert.doesNotMatch(toggleSelectedSource, /selectOrder\(/);
+});
+
+test('raw JSON snapshot keeps the same parent width before and after expansion', () => {
+  const businessFields = read('../src/components/orders/OrderBusinessFields.vue');
+
+  assert.match(businessFields, /\.business-fields\s*\{(?=[^}]*box-sizing:\s*border-box;)(?=[^}]*width:\s*100%;)(?=[^}]*min-width:\s*0;)[^}]*\}/);
+  assert.match(businessFields, /\.business-raw-json\s*\{(?=[^}]*width:\s*100%;)(?=[^}]*min-width:\s*0;)(?=[^}]*max-width:\s*100%;)[^}]*\}/);
+  assert.match(businessFields, /\.business-raw-json\s+:deep\(\.el-collapse-item__content\)[^{]*\{(?=[^}]*min-width:\s*0;)(?=[^}]*overflow:\s*hidden;)[^}]*\}/);
+  assert.match(businessFields, /\.business-raw-json__code\s*\{(?=[^}]*box-sizing:\s*border-box;)(?=[^}]*width:\s*100%;)(?=[^}]*min-width:\s*0;)(?=[^}]*max-width:\s*100%;)(?=[^}]*overflow:\s*auto;)[^}]*\}/);
+});
+
+test('order file table keeps detail download and supplement upload in a fixed action column', () => {
+  const table = read('../src/components/orders/OrderTable.vue');
+
+  assert.match(table, /label="操作"[^>]*fixed="right"/);
+  assert.match(table, /@click\.stop="selectOrder\(row\)">详情<\/el-button>/);
+  assert.match(table, /:disabled="!storageState\(row\)\.canDownload"[^>]*@click\.stop="downloadOrder\(row\)">下载<\/el-button>/);
+  assert.match(table, /<el-upload[^>]*:on-change="\(file\) => uploadOrderFile\(row, file\)"/);
+  assert.match(table, />上传工程文件<\/el-button>/);
+  assert.match(table, /function uploadOrderFile\(row, file\)[\s\S]*selectOrder\(row\)[\s\S]*uploadSupplement/);
+});
+
+test('order file table exposes a viewport-fixed horizontal scrollbar synchronized with the table', () => {
+  const table = read('../src/components/orders/OrderTable.vue');
+
+  assert.match(table, /ref="tableRef"[\s\S]*@scroll="syncFromTable"/);
+  assert.match(table, /class="order-table-sticky-scrollbar"[\s\S]*@scroll="syncFromStickyScrollbar"/);
+  assert.match(table, /tableRef\.value\?\.setScrollLeft\(stickyScrollbar\.value\.scrollLeft\)/);
+  assert.match(table, /\.order-table-sticky-scrollbar\s*\{(?=[^}]*position:\s*fixed;)(?=[^}]*bottom:\s*0;)(?=[^}]*overflow-x:\s*auto;)[^}]*\}/);
 });
 
 test('order file table keeps organization and patient columns compact and omits business columns', () => {
@@ -88,12 +144,13 @@ test('order file table shows the volume state inside the storage location column
   assert.doesNotMatch(table, /label="卷状态"/);
 });
 
-test('order filters allocate more grid width to storage states than physical delivery', () => {
+test('order filters keep physical delivery compact and give all storage selectors the available width', () => {
   const filters = read('../src/components/orders/OrderFilters.vue');
   const styles = read('../src/style-production.css');
   assert.match(filters, /class="physical-filter"/);
   assert.match(filters, /class="storage-filter"/);
   assert.match(styles, /\.order-filter-grid\s*\{[^}]*repeat\(12,minmax\(0,1fr\)\)/);
-  assert.match(styles, /\.order-filter \.physical-filter\s*\{\s*grid-column:span 2;\s*\}/);
-  assert.match(styles, /\.order-filter \.storage-filter\s*\{\s*grid-column:span 6;\s*\}/);
+  assert.match(styles, /\.order-filter \.physical-filter\s*\{\s*grid-column:span 1;\s*\}/);
+  assert.match(styles, /\.order-filter \.storage-filter\s*\{\s*grid-column:span 7;\s*\}/);
+  assert.match(styles, /\.filter-triple\s*\{(?=[^}]*display:flex;)(?=[^}]*width:100%;)[^}]*\}/);
 });

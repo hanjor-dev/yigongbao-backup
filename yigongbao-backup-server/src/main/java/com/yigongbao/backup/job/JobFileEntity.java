@@ -26,6 +26,10 @@ public class JobFileEntity extends BaseEntity {
     @TableField(exist = false) private String currentOperationStatus;
     @TableField(exist = false) private Boolean currentStorageResolved;
     @TableField(exist = false) private String currentStorageUnavailableReason;
+    /** 任务文件列表展示字段，由同任务订单证据投影，不重复持久化。 */
+    @TableField(exist = false) private String orderCode;
+    /** 从包内相对路径或源对象键解析出的原始文件名。 */
+    @TableField(exist = false) private String originalFilename;
     private String assetIdentity;
     private String step;
     private String status;

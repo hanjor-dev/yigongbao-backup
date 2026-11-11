@@ -12,7 +12,7 @@
 - 环境变量：
   - `BACKUP_EXECUTION_MODE=REAL|METADATA_SIMULATION`，默认 `REAL`。
   - `BACKUP_SIMULATION_ROOT=D:/yigongbao-backup/simulation`。
-  - `BACKUP_DEV_CANDIDATE_LIMIT=0` 表示不限制候选订单数量；正整数仅用于显式的小规模调试。
+  - 单个任务候选订单数量由数据库配置 `backup.schedule.max-orders-per-run` 控制，模拟与真实模式使用同一规则。
 - `prod` Profile 启动时若检测到模拟模式必须直接拒绝启动，避免生产环境误用。
 
 ## 3. 模拟执行流程

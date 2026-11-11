@@ -1,4 +1,5 @@
 import { statusLabel } from './components/StatusBadge.js';
+export { buildOrderBusinessPresentation } from './orderBusinessPresentation.js';
 
 export function extractJobId(result) {
   const data = result?.data ?? result;
@@ -145,6 +146,28 @@ export function normalizePage(value) {
   return { records, current, size, total, pages };
 }
 
+/**
+ * 订单表横向溢出且原生横向滚动条仍在视口下方时，显示屏幕底部的同步滚动条。
+ * 原生滚动条进入视口后立即让位，避免同一位置出现两条滚动条。
+ */
+export function stickyTableScrollbarState({
+  scrollWidth = 0,
+  clientWidth = 0,
+  tableTop = 0,
+  tableBottom = 0,
+  viewportHeight = 0,
+} = {}) {
+  const normalizedScrollWidth = Math.max(0, Number(scrollWidth) || 0);
+  const normalizedClientWidth = Math.max(0, Number(clientWidth) || 0);
+  const hasHorizontalOverflow = normalizedScrollWidth > normalizedClientWidth + 1;
+  const tableIntersectsViewport = Number(tableTop) < Number(viewportHeight) && Number(tableBottom) > 0;
+  const nativeScrollbarBelowViewport = Number(tableBottom) > Number(viewportHeight) + 1;
+  return {
+    visible: hasHorizontalOverflow && tableIntersectsViewport && nativeScrollbarBelowViewport,
+    trackWidth: Math.max(normalizedScrollWidth, normalizedClientWidth),
+  };
+}
+
 /** 计算订单热备是否可下载，并给出冷备缺失时的运维提示。 */
 export function storageState(order) {
   const location = order?.storageLocation;
@@ -189,6 +212,16 @@ function unavailableStorageMessage(value) {
 
 /** 同时表达当前卷事实和任务发生时审计快照，避免历史 HOT 覆盖当前 COLD/OFFLINE。 */
 export function storageVolumeView(row, fallbackId = null) {
+  const blockedBeforeTargetAssignment = String(row?.failureCode || '').toUpperCase() === 'STORAGE_VOLUME_UNAVAILABLE'
+    && !fallbackId && !row?.storageVolumeId && !row?.storageVolumeName
+    && !row?.currentStorageVolumeName;
+  if (blockedBeforeTargetAssignment) {
+    return {
+      name: '未分配',
+      current: '创建任务时没有可用的热备存储卷',
+      historical: '',
+    };
+  }
   const historicalParts = [row?.storageVolumeName, row?.storageTier ? statusLabel(row.storageTier) : null].filter(Boolean);
   if (row?.currentStorageResolved === false) {
     const resolvedName = row?.currentStorageVolumeName;

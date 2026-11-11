@@ -1,5 +1,6 @@
 <script setup>
 import { storageVolumeView } from '../../taskCenter.js';
+import { jobFileOrderCode, jobFileOriginalFilename } from '../../jobDetailState.js';
 import { workflowLabel } from '../StatusBadge.js';
 
 defineProps({
@@ -8,6 +9,7 @@ defineProps({
   current: { type: Number, default: 1 },
   size: { type: Number, default: 20 },
   total: { type: Number, default: 0 },
+  compactIdentity: { type: Boolean, default: false },
 });
 
 const emit = defineEmits(['page-change', 'size-change']);
@@ -26,9 +28,17 @@ const changeSize = (value) => emit('size-change', value);
 <template>
   <div class="job-file-table">
     <el-table v-loading="loading" :data="records" stripe border empty-text="暂无文件明细">
-      <el-table-column prop="sourceOrderId" label="订单" width="150" />
-      <el-table-column prop="assetIdentity" label="资产" min-width="220" show-overflow-tooltip />
-      <el-table-column label="步骤" width="132">
+      <el-table-column v-if="!compactIdentity" label="订单号" width="150"><template #default="{ row }">{{ jobFileOrderCode(row) }}</template></el-table-column>
+      <el-table-column label="文件名" min-width="200">
+        <template #default="{ row }">
+          <div class="file-identity">
+            <span>{{ jobFileOriginalFilename(row) }}</span>
+            <small v-if="compactIdentity" class="table-muted">资产：{{ row.assetIdentity || '-' }}</small>
+          </div>
+        </template>
+      </el-table-column>
+      <el-table-column v-if="!compactIdentity" prop="assetIdentity" label="资产" min-width="190" show-overflow-tooltip />
+      <el-table-column v-if="!compactIdentity" label="步骤" width="132">
         <template #default="{ row }">{{ workflowLabel(row.step) }}</template>
       </el-table-column>
       <el-table-column label="存储卷 / 相对位置" min-width="310">
@@ -38,9 +48,20 @@ const changeSize = (value) => emit('size-change', value);
           <small v-if="row.storageKey" class="storage-key">{{ row.storageKey }}</small>
         </template>
       </el-table-column>
-      <el-table-column label="状态" width="118"><template #default="{ row }"><status-badge :value="row.status" /></template></el-table-column>
-      <el-table-column label="进度" width="166"><template #default="{ row }">{{ bytes(row.bytesDone) }} / {{ bytes(row.bytesTotal) }}</template></el-table-column>
+      <el-table-column v-if="!compactIdentity" label="状态" width="118"><template #default="{ row }"><status-badge :value="row.status" /></template></el-table-column>
+      <el-table-column v-if="!compactIdentity" label="进度" width="166"><template #default="{ row }">{{ bytes(row.bytesDone) }} / {{ bytes(row.bytesTotal) }}</template></el-table-column>
+      <el-table-column v-else label="状态 / 进度" width="170">
+        <template #default="{ row }">
+          <div class="file-state-progress">
+            <status-badge :value="row.status" />
+            <small class="table-muted">{{ bytes(row.bytesDone) }} / {{ bytes(row.bytesTotal) }}</small>
+          </div>
+        </template>
+      </el-table-column>
       <el-table-column label="失败原因" min-width="240"><template #default="{ row }"><span class="error-text">{{ row.failureCode || '' }} {{ row.failureMessage || '' }}</span></template></el-table-column>
+      <el-table-column v-if="compactIdentity" label="步骤" width="132">
+        <template #default="{ row }">{{ workflowLabel(row.step) }}</template>
+      </el-table-column>
     </el-table>
     <el-pagination
       v-if="total > 0"
@@ -58,6 +79,13 @@ const changeSize = (value) => emit('size-change', value);
 </template>
 
 <style scoped>
+/* finesse · component: job-file-table · register=product
+ * states: loading · empty · populated · paginated · compact-identity
+ * tokens: inherited (Element Plus CSS variables) */
+.file-identity { display: grid; gap: 4px; }
+.file-identity small { overflow-wrap: anywhere; }
+.file-state-progress { display: grid; gap: 8px; align-content: center; }
+.file-state-progress small { white-space: nowrap; }
 .volume-line { display: flex; flex-wrap: wrap; gap: 6px 10px; align-items: center; }
 .volume-line span { color: var(--el-text-color-regular); }
 .storage-key { display: block; margin-top: 4px; overflow-wrap: anywhere; color: var(--el-text-color-secondary); }

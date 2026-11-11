@@ -7,8 +7,23 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.Mockito.*;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
+import org.springframework.dao.DataAccessResourceFailureException;
 
 class ActiveVolumeSelectionServiceTest {
+    @Test void returnsUnavailableResultWithoutThrowingAcrossTheTransactionBoundary() {
+        StorageVolumeMapper mapper = mock(StorageVolumeMapper.class);
+        RuntimeConfigService configs = mock(RuntimeConfigService.class);
+        when(configs.getBoolean("storage.volume-switch.enabled", false)).thenReturn(false);
+        var service = new ActiveVolumeSelectionService(mapper, mock(StorageVolumeHealthService.class),
+                mock(StorageVolumeLifecycleService.class), configs, mock(StorageVolumeAlertService.class));
+
+        ActiveVolumeSelectionService.SelectionResult result = service.selectActiveForNewBackupResult(100L);
+
+        assertThat(result.available()).isFalse();
+        assertThat(result.failureCode()).isEqualTo("STORAGE_VOLUME_UNAVAILABLE");
+        assertThat(result.failureMessage()).contains("活动热备存储卷不可用");
+    }
+
     @Test void persistsAlertWhenNoStandbyCanAcceptNewBackup() {
         StorageVolumeMapper mapper = mock(StorageVolumeMapper.class);
         RuntimeConfigService configs = mock(RuntimeConfigService.class);
@@ -20,6 +35,44 @@ class ActiveVolumeSelectionServiceTest {
         assertThatThrownBy(() -> service.selectActiveForNewBackup(100L))
                 .isInstanceOf(StorageVolumeOperationException.class);
         verify(alerts).noWritableVolume(anyString());
+    }
+
+    @Test void alertPersistenceFailureIsNotDisguisedAsOrdinaryVolumeUnavailability() {
+        StorageVolumeMapper mapper = mock(StorageVolumeMapper.class);
+        RuntimeConfigService configs = mock(RuntimeConfigService.class);
+        StorageVolumeAlertService alerts = mock(StorageVolumeAlertService.class);
+        when(configs.getBoolean("storage.volume-switch.enabled", false)).thenReturn(true);
+        when(mapper.selectList(any())).thenReturn(List.of());
+        doThrow(new DataAccessResourceFailureException("audit database unavailable"))
+                .when(alerts).noWritableVolume(anyString());
+        var service = new ActiveVolumeSelectionService(mapper, mock(StorageVolumeHealthService.class),
+                mock(StorageVolumeLifecycleService.class), configs, alerts);
+
+        assertThatThrownBy(() -> service.selectActiveForNewBackupResult(100L))
+                .isInstanceOf(DataAccessResourceFailureException.class)
+                .hasMessageContaining("audit database unavailable");
+    }
+
+    @Test void standbyBecomingUnavailableDuringActivationStillReturnsAnAuditableFailure() {
+        StorageVolumeMapper mapper = mock(StorageVolumeMapper.class);
+        StorageVolumeHealthService health = mock(StorageVolumeHealthService.class);
+        StorageVolumeLifecycleService lifecycle = mock(StorageVolumeLifecycleService.class);
+        RuntimeConfigService configs = mock(RuntimeConfigService.class);
+        StorageVolumeEntity standby = volume(2L, 1);
+        when(configs.getBoolean("storage.volume-switch.enabled", false)).thenReturn(true);
+        when(mapper.selectList(any())).thenReturn(List.of(standby));
+        when(health.probe(standby)).thenReturn(new StorageVolumeHealthService.HealthSnapshot(
+                true, true, 100L, 80L, null, null, 0L));
+        doThrow(new StorageVolumeUnavailableException("目标卷不可访问：介质已拔出"))
+                .when(lifecycle).setActive(2L, 0L);
+        var service = new ActiveVolumeSelectionService(mapper, health, lifecycle, configs,
+                mock(StorageVolumeAlertService.class));
+
+        ActiveVolumeSelectionService.SelectionResult result = service.selectActiveForNewBackupResult(20L);
+
+        assertThat(result.available()).isFalse();
+        assertThat(result.failureCode()).isEqualTo("STORAGE_VOLUME_UNAVAILABLE");
+        assertThat(result.failureMessage()).contains("介质已拔出");
     }
 
     @Test void selectsLowestPriorityNumberEligibleStandby() {

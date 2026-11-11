@@ -7,6 +7,7 @@ import java.util.Set;
 public final class ConfigValueValidator {
     private static final Set<String> ALLOWED_KEYS = Set.of(
             "backup.schedule.enabled", "backup.schedule.interval-days", "backup.schedule.start-time",
+            "backup.schedule.max-orders-per-run",
             "backup.schedule.reconcile-enabled", "backup.schedule.reconcile-interval-hours",
             "backup.collection.days-before",
             "backup.retry.max-retries", "backup.retry.delays-seconds",
@@ -86,6 +87,13 @@ public final class ConfigValueValidator {
             int seconds = integer(key, normalized);
             if (seconds < 60 || seconds > 86400) {
                 throw new IllegalArgumentException("线上文件传输超时必须在60到86400秒之间");
+            }
+            return;
+        }
+        if (key.equals("backup.schedule.max-orders-per-run")) {
+            int maximum = integer(key, normalized);
+            if (maximum < 1 || maximum > 1000) {
+                throw new IllegalArgumentException("单个备份任务最大订单数必须在1到1000之间");
             }
             return;
         }

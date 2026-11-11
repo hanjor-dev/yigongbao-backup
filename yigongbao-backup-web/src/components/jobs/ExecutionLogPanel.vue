@@ -64,4 +64,5 @@ const changeSize = (value) => emit('size-change', value);
 .console-entry span:last-child { color: #e5e7eb; overflow-wrap: anywhere; }
 .console-entry pre { margin: 8px 0 0 20px; padding: 8px; white-space: pre-wrap; overflow-wrap: anywhere; color: #a5b4fc; background: #0b1120; border-radius: 4px; }
 .console-empty { color: #94a3b8; padding: 48px 0; text-align: center; }
+.table-pagination { margin-top: 16px; }
 </style>

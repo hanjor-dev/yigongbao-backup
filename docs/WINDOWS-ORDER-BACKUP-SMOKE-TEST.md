@@ -10,10 +10,11 @@
    - `backup.schedule.interval-days=1`
    - `backup.schedule.start-time=<当前时间后1分钟>`
    - `backup.collection.days-before=7`（按自然日备份7天前及更早创建的正式订单）
+   - `backup.schedule.max-orders-per-run=5`（本轮仅创建包含5个订单的测试任务）
    - 已在“存储卷管理”中纳管一个 ONLINE、ACTIVE 的 HOT 卷
    - `storage.managed-roots=D:/yigongbao-backup/data,D:/yigongbao-backup/cold-disks,D:/yigongbao-backup/cold-import`
 3. 本地与模拟服务仍需配置相同的 `BACKUP_SHARED_HMAC_SECRET`；模拟服务不会校验签名，但本地HTTP客户端要求该值存在。
-4. 在本地备份后端 `.env` 设置 `BACKUP_DEV_CANDIDATE_LIMIT=5`（仅开发联调，生产必须删除或设为0）；线上候选接口仍使用内部技术分页，但不会限制正式环境单个任务的订单总数。然后启动模拟服务：`node tools/mock-online-backup-server.mjs`。
+4. 启动模拟服务：`node tools/mock-online-backup-server.mjs`；线上候选接口仍使用内部技术分页，单个任务订单数由系统动态配置控制。
 5. 启动本地备份后端和前端，以管理员登录后进入“订单备份”。
 6. 到达配置的开始时间后，在“订单备份”页查看系统自动创建的单个5订单备份任务及其明细。
 7. 在“订单文件”验证5个订单、每个订单1个关联资产，并分别下载订单ZIP。

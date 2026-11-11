@@ -37,12 +37,10 @@ BACKUP_DB_PASSWORD=<数据库密码>
 ### 2.2 测试限制和服务基础配置
 
 ```env
-BACKUP_DEV_CANDIDATE_LIMIT=0
 BACKUP_SERVER_PORT=18080
 BACKUP_MAX_UPLOAD_SIZE=2GB
 ```
 
-- `BACKUP_DEV_CANDIDATE_LIMIT=0` 表示取消开发期候选订单数量限制。测试阶段可临时设置为 5 或 10，但生产不能保留该限制。
 - `BACKUP_MAX_UPLOAD_SIZE` 主要影响补传文件等上传接口，不限制 COS 流式下载；应根据补传文件策略设置。
 - 数据库、端口、日志路径等基础配置可以按现场环境调整，但不能与数据库中的业务配置重复维护。
 
@@ -67,12 +65,13 @@ BACKUP_MAX_UPLOAD_SIZE=2GB
 | `backup.schedule.interval-days` | 自动任务自然日执行周期 | 通常为 `1` |
 | `backup.schedule.start-time` | 每轮备份开始时间，格式 `HH:mm` | 配置为业务允许的低峰时段 |
 | `backup.collection.days-before` | 备份执行日前多少天及更早创建的正式订单 | 确认订单成熟窗口，例如 `7` |
+| `backup.schedule.max-orders-per-run` | 单个备份任务最多包含的订单数 | 默认 `100`，按单任务处理时长和容量规划在1～1000之间调整 |
 | `backup.schedule.reconcile-enabled` | 漏单、取消和删除事件对账 | 建议开启 |
 | `backup.schedule.reconcile-interval-hours` | 对账周期 | 按业务量设置，通常为 `24` |
 | `backup.retry.max-retries` | 单订单在当前任务中的最大重试次数 | 结合网络和 COS 稳定性设置 |
 | `backup.retry.delays-seconds` | 失败订单各重试轮次的等待秒数 | 例如 `60,300,900` |
 
-自动备份按自然日和订单创建日期增量查询，不按固定订单数量分页截断。若配置了 `BACKUP_DEV_CANDIDATE_LIMIT`，它仍会形成开发期数量上限。
+自动备份按自然日和订单创建日期扫描候选集合，并按 `backup.schedule.max-orders-per-run` 截取本轮任务；超出部分在下一轮继续处理。
 
 ### 3.3 本地热备存储
 

@@ -8,7 +8,9 @@ import com.yigongbao.backup.config.RuntimeConfigService;
 import com.yigongbao.backup.job.JobEntity;
 import com.yigongbao.backup.job.JobExecutionContext;
 import com.yigongbao.backup.job.PartialJobFailureException;
+import com.yigongbao.backup.job.JobPreconditionException;
 import com.yigongbao.backup.storage.api.ArtifactStore;
+import com.yigongbao.backup.storage.api.VolumeArtifactStore;
 import com.yigongbao.backup.storage.api.SpaceReservationService;
 import com.yigongbao.backup.storage.api.SpacePlanner.SpaceReservation;
 import org.junit.jupiter.api.Test;
@@ -23,6 +25,56 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.Mockito.*;
 
 class ManualBackupJobHandlerLoggingTest {
+    @Test
+    void missingFrozenTargetFailsAllOrdersBeforeRemoteClientsAreUsed() throws Exception {
+        ObjectProvider<OnlineManifestClient> manifestProvider = mock(ObjectProvider.class);
+        ObjectProvider<CosObjectClient> cosProvider = mock(ObjectProvider.class);
+        ManualBackupJobHandler handler = new ManualBackupJobHandler(manifestProvider, cosProvider,
+                mock(VolumeArtifactStore.class), new ObjectMapper(), mock(SpaceReservationService.class),
+                mock(BackupEvidenceService.class), mock(RuntimeConfigService.class),
+                new BackupExecutionModeProvider(new MockEnvironment()));
+        JobEntity job = new JobEntity();
+        job.setId(19L); job.setJobNo("job-19");
+        job.setFailureCode("STORAGE_VOLUME_UNAVAILABLE");
+        job.setFailureMessage("活动热备存储卷不可用或剩余空间不足");
+        job.setConfigSnapshotJson(new ObjectMapper().writeValueAsString(
+                new ManualBackupJobHandler.Payload(List.of(101L, 102L))));
+        JobExecutionContext context = mock(JobExecutionContext.class);
+
+        assertThatThrownBy(() -> handler.execute(context, job))
+                .isInstanceOf(JobPreconditionException.class)
+                .hasMessageContaining("活动热备存储卷不可用或剩余空间不足");
+
+        verify(context).initializeOrders(List.of(101L, 102L));
+        verify(context).safePoint("STORAGE_PREFLIGHT", 0L);
+        verify(context).failOrders(eq(List.of(101L, 102L)), any(JobPreconditionException.class));
+        verifyNoInteractions(manifestProvider, cosProvider);
+    }
+
+    @Test
+    void frozenTargetBecomingUnavailableFailsBeforeRemoteClientsAreUsed() throws Exception {
+        ObjectProvider<OnlineManifestClient> manifestProvider = mock(ObjectProvider.class);
+        ObjectProvider<CosObjectClient> cosProvider = mock(ObjectProvider.class);
+        BackupTargetPreflightService preflight = mock(BackupTargetPreflightService.class);
+        doThrow(new JobPreconditionException("STORAGE_VOLUME_UNAVAILABLE", "目标热备卷已离线"))
+                .when(preflight).requireWritable(7L);
+        ManualBackupJobHandler handler = new ManualBackupJobHandler(manifestProvider, cosProvider,
+                mock(VolumeArtifactStore.class), new ObjectMapper(), mock(SpaceReservationService.class),
+                mock(BackupEvidenceService.class), mock(RuntimeConfigService.class),
+                new BackupExecutionModeProvider(new MockEnvironment()), preflight);
+        JobEntity job = new JobEntity(); job.setId(20L); job.setTargetStorageVolumeId(7L);
+        job.setConfigSnapshotJson(new ObjectMapper().writeValueAsString(
+                new ManualBackupJobHandler.Payload(List.of(103L))));
+        JobExecutionContext context = mock(JobExecutionContext.class);
+
+        assertThatThrownBy(() -> handler.execute(context, job))
+                .isInstanceOf(JobPreconditionException.class)
+                .hasMessageContaining("目标热备卷已离线");
+
+        verify(context).failOrders(eq(List.of(103L)), any(JobPreconditionException.class));
+        verifyNoInteractions(manifestProvider, cosProvider);
+    }
+
     @Test
     void reservationReleaseFailureDoesNotMaskTheBusinessFailure() {
         SpaceReservationService reservations = mock(SpaceReservationService.class);

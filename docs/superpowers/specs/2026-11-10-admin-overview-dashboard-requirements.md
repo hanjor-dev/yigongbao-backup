@@ -313,7 +313,7 @@ max(storage.volume-health.interval-minutes × 3, 15 分钟)
 - `HOT/ACTIVE` 使用 `storage.volume-switch.threshold-percent` 判断是否需要准备或切换活动卷；
 - 其他在线可写 HOT 卷使用 `storage.threshold.hot.percent`；
 - 正常只读 COLD 卷容量高不产生容量告警，因为其不再接收写入，但仍展示使用率；
-- `storage.volume-switch.threshold-percent` 缺失时默认 90%，`storage.threshold.hot.percent` 缺失时默认 85%；配置非法时使用同一默认值并返回配置数据质量提示；
+- `storage.volume-switch.threshold-percent` 缺失时默认 90%，`storage.threshold.hot.percent` 缺失时默认 75%；配置非法时使用同一默认值并返回配置数据质量提示；
 - 不允许前端自行设定另一套阈值。
 
 ## 9. 当前有效告警

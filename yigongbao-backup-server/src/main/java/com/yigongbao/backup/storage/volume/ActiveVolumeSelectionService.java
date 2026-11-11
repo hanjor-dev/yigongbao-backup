@@ -31,25 +31,42 @@ public class ActiveVolumeSelectionService {
         return volume;
     }
 
-    /** 新任务入口；保留 requiredBytes 参数以确保调用方不再自行挑选卷。容量预留随后以同一卷执行。 */
+    /**
+     * 订单备份建任务入口。预期的“没有可用卷”以结果返回，避免异常穿过事务代理后将建任务事务标记为回滚；
+     * 切卷过程本身的异常仍向外抛出，防止提交部分完成的卷状态变更。
+     */
     @Transactional(rollbackFor = Exception.class)
-    public StorageVolumeEntity selectActiveForNewBackup(long requiredBytes) {
+    public SelectionResult selectActiveForNewBackupResult(long requiredBytes) {
         if (requiredBytes < 0) throw new IllegalArgumentException("预计写入容量不能为负数");
         StorageVolumeEntity active = volumeMapper.findActiveForUpdate();
-        if (active != null && hasCapacity(active, Math.max(requiredBytes, 1L))) return active;
+        if (active != null && hasCapacity(active, Math.max(requiredBytes, 1L))) {
+            return SelectionResult.available(active);
+        }
         if (!configs.getBoolean("storage.volume-switch.enabled", false)) {
-            throw new StorageVolumeOperationException("活动热备存储卷不可用或剩余空间不足");
+            return SelectionResult.unavailable("STORAGE_VOLUME_UNAVAILABLE", "活动热备存储卷不可用或剩余空间不足");
         }
         StorageVolumeEntity standby;
         try {
             standby = selectStandbyForNewBackup(Math.max(requiredBytes, 1L));
         } catch (StorageVolumeOperationException unavailable) {
-            try { alerts.noWritableVolume(unavailable.getMessage()); }
-            catch (RuntimeException auditFailure) { unavailable.addSuppressed(auditFailure); }
-            throw unavailable;
+            alerts.noWritableVolume(unavailable.getMessage());
+            return SelectionResult.unavailable("STORAGE_VOLUME_UNAVAILABLE", unavailable.getMessage());
         }
-        lifecycleService.setActive(standby.getId(), 0L);
-        return standby;
+        try {
+            lifecycleService.setActive(standby.getId(), 0L);
+        } catch (StorageVolumeUnavailableException unavailable) {
+            alerts.noWritableVolume(unavailable.getMessage());
+            return SelectionResult.unavailable("STORAGE_VOLUME_UNAVAILABLE", unavailable.getMessage());
+        }
+        return SelectionResult.available(standby);
+    }
+
+    /** 其他写入流程保持原有快速失败语义。 */
+    @Transactional(rollbackFor = Exception.class)
+    public StorageVolumeEntity selectActiveForNewBackup(long requiredBytes) {
+        SelectionResult result = selectActiveForNewBackupResult(requiredBytes);
+        if (!result.available()) throw new StorageVolumeOperationException(result.failureMessage());
+        return result.volume();
     }
 
     /** Selects only previously managed HOT STANDBY volumes; capacity is reserved after selection. */
@@ -73,5 +90,20 @@ public class ActiveVolumeSelectionService {
         boolean belowThreshold = health.totalBytes() > 0
                 && (health.totalBytes() - health.usableBytes()) * 100L < health.totalBytes() * threshold;
         return health.accessible() && health.writable() && belowThreshold && health.usableBytes() >= requiredBytes;
+    }
+
+    public record SelectionResult(StorageVolumeEntity volume, String failureCode, String failureMessage) {
+        public static SelectionResult available(StorageVolumeEntity volume) {
+            if (volume == null || volume.getId() == null) throw new IllegalArgumentException("可用存储卷不能为空");
+            return new SelectionResult(volume, null, null);
+        }
+
+        public static SelectionResult unavailable(String code, String message) {
+            return new SelectionResult(null, code, message);
+        }
+
+        public boolean available() {
+            return volume != null;
+        }
     }
 }

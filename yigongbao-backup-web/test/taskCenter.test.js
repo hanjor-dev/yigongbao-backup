@@ -1,5 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
+import * as taskCenter from '../src/taskCenter.js';
 import { canRetryFailedOrders, coldBatchCapabilities, coldImportDiagnostic, extractJobId, incompleteBackupLabel, isTerminalJob, jobProgress, normalizePage, offlineStorageSummary, replaceJobById, storageMountState, storageState, storageVolumeView, supplementTaskState, taskFailureSummary } from '../src/taskCenter.js';
 import { statusLabel, statusTone, workflowLabel } from '../src/components/StatusBadge.js';
 
@@ -46,6 +47,31 @@ test('normalizePage preserves server pagination metadata and safe defaults', () 
     records: [{ id: 1 }], current: 2, size: 20, total: 41, pages: 3
   });
   assert.deepEqual(normalizePage(undefined), { records: [], current: 1, size: 20, total: 0, pages: 0 });
+});
+
+test('sticky order table scrollbar appears only while the native horizontal bar is below the viewport', () => {
+  assert.equal(typeof taskCenter.stickyTableScrollbarState, 'function');
+  assert.deepEqual(taskCenter.stickyTableScrollbarState({
+    scrollWidth: 1600,
+    clientWidth: 1000,
+    tableTop: 120,
+    tableBottom: 1400,
+    viewportHeight: 900,
+  }), { visible: true, trackWidth: 1600 });
+  assert.deepEqual(taskCenter.stickyTableScrollbarState({
+    scrollWidth: 1600,
+    clientWidth: 1000,
+    tableTop: 120,
+    tableBottom: 880,
+    viewportHeight: 900,
+  }), { visible: false, trackWidth: 1600 });
+  assert.deepEqual(taskCenter.stickyTableScrollbarState({
+    scrollWidth: 1000,
+    clientWidth: 1000,
+    tableTop: 120,
+    tableBottom: 1400,
+    viewportHeight: 900,
+  }), { visible: false, trackWidth: 1000 });
 });
 
 test('storageState distinguishes hot backup availability from missing cold backup', () => {
@@ -133,6 +159,17 @@ test('storageVolumeView keeps resolved current volumes visible when only part of
     name: '归档盘-A（部分台账不可用）',
     current: '冷备 / 在线；一个或多个关联存储卷台账不存在',
     historical: '任务时：任务时热备盘 / 热备',
+  });
+});
+
+test('storageVolumeView shows an unassigned target for jobs blocked before backup execution', () => {
+  assert.deepEqual(storageVolumeView({
+    failureCode: 'STORAGE_VOLUME_UNAVAILABLE',
+    failureEvidence: '活动热备存储卷不可用或剩余空间不足',
+  }), {
+    name: '未分配',
+    current: '创建任务时没有可用的热备存储卷',
+    historical: '',
   });
 });
 

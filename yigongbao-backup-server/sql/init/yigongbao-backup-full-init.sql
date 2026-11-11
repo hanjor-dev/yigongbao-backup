@@ -489,13 +489,14 @@ FROM (
     UNION ALL SELECT 'backup.schedule.interval-days','自动备份周期（天）','BACKUP_COLLECTION','备份采集策略','INTEGER','1',NULL,'自动备份任务执行周期，最小1天。',NULL
     UNION ALL SELECT 'backup.schedule.start-time','自动备份开始时间','BACKUP_COLLECTION','备份采集策略','STRING','05:00',NULL,'按服务器本地时区执行，格式HH:mm；服务停机错过后当天不补跑。',NULL
     UNION ALL SELECT 'backup.collection.days-before','备份X天前的订单','BACKUP_COLLECTION','备份采集策略','INTEGER','7',NULL,'按订单创建日期和服务器本地自然日计算；配置7表示执行日往前第7天及更早创建的正式订单进入备份范围。',NULL
+    UNION ALL SELECT 'backup.schedule.max-orders-per-run','单个备份任务最大订单数','BACKUP_COLLECTION','备份采集策略','INTEGER','100',NULL,'自动备份或管理员立即扫描创建的单个任务最多包含的订单数，范围1至1000；超出部分留待下一轮扫描。',NULL
     UNION ALL SELECT 'backup.retry.max-retries','订单最大重试次数','BACKUP_COLLECTION','备份采集策略','INTEGER','3',NULL,'单个订单首次失败后在当前备份任务中的最大重试次数。',NULL
     UNION ALL SELECT 'backup.retry.delays-seconds','订单重试等待秒数','BACKUP_COLLECTION','备份采集策略','STRING','60,300,900',NULL,'订单失败后各次重试前的等待秒数，逗号分隔。',NULL
     UNION ALL SELECT 'backup.schedule.reconcile-enabled','候选对账开关','BACKUP_COLLECTION','备份采集策略','BOOLEAN','true','[{"label":"启用","value":"true"},{"label":"停用","value":"false"}]','控制是否定期对账候选订单；自动备份总开关关闭时本开关也不执行。',NULL
     UNION ALL SELECT 'backup.schedule.reconcile-interval-hours','候选对账周期（小时）','BACKUP_COLLECTION','备份采集策略','INTEGER','24',NULL,'漏单、取消和删除事件的对账周期。',NULL
-    UNION ALL SELECT 'storage.backup-reservation-percent','备份工作空间预留比例（%）','STORAGE_MANAGEMENT','存储与容量','INTEGER','300',NULL,'按源文件总量预留下载原文件、压缩包和原子发布临时副本的峰值空间，范围100至500。',NULL
-    UNION ALL SELECT 'storage.threshold.hot.percent','热备容量告警阈值（%）','STORAGE_MANAGEMENT','存储与容量','INTEGER','85',NULL,'热备或NAS使用率达到该值时告警。',NULL
-    UNION ALL SELECT 'storage.threshold.cold.percent','冷备容量告警阈值（%）','STORAGE_MANAGEMENT','存储与容量','INTEGER','90',NULL,'冷备目标盘使用率达到该值时告警。',NULL
+    UNION ALL SELECT 'storage.backup-reservation-percent','备份工作空间预留比例（%）','STORAGE_MANAGEMENT','存储与容量','INTEGER','200',NULL,'按源文件总量预留下载原文件、压缩包和原子发布临时副本的峰值空间，范围100至500。',NULL
+    UNION ALL SELECT 'storage.threshold.hot.percent','热备容量告警阈值（%）','STORAGE_MANAGEMENT','存储与容量','INTEGER','75',NULL,'热备或NAS使用率达到该值时告警。',NULL
+    UNION ALL SELECT 'storage.threshold.cold.percent','冷备容量告警阈值（%）','STORAGE_MANAGEMENT','存储与容量','INTEGER','80',NULL,'冷备目标盘使用率达到该值时告警。',NULL
     UNION ALL SELECT 'storage.volume-switch.enabled','存储卷自动切换开关','STORAGE_MANAGEMENT','存储与容量','BOOLEAN','false','[{"label":"启用","value":"true"},{"label":"停用","value":"false"}]','仅从已纳管 HOT STANDBY 卷中自动切换。',NULL
     UNION ALL SELECT 'storage.volume-switch.threshold-percent','存储卷切换阈值（%）','STORAGE_MANAGEMENT','存储与容量','INTEGER','90',NULL,'当前 ACTIVE 卷使用率达到该值时建议切换。',NULL
     UNION ALL SELECT 'storage.volume-health.interval-minutes','存储卷健康检查周期（分钟）','STORAGE_MANAGEMENT','存储与容量','INTEGER','5',NULL,'定期探测已纳管卷的可访问性和容量。',NULL

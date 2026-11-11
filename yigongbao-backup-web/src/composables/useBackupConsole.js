@@ -137,6 +137,8 @@ export function useBackupConsole() {
   let supplementPollTimer = null;
   let jobLoadingCount = 0;
   const detailRequestGuard = createDetailRequestGuard();
+  const orderFileDetailGuard = createDetailRequestGuard();
+  orderFileDetailGuard.openTask('order-files');
   const detailSectionTracker = createSectionLoadTracker();
 
   function stopJobPolling() {
@@ -282,8 +284,18 @@ export function useBackupConsole() {
   }
 
   async function selectOrder(order) {
+    orderFileDetailGuard.openOrder(order.id);
     selectedOrder.value = order;
+    assets.value = [];
+    supplements.value = [];
     await loadSelectedOrder();
+  }
+
+  function closeOrderDetail() {
+    orderFileDetailGuard.closeOrder();
+    selectedOrder.value = null;
+    assets.value = [];
+    supplements.value = [];
   }
 
   function toggleSelected(order) {
@@ -292,15 +304,17 @@ export function useBackupConsole() {
       return;
     }
     selectedIds.value = selectedIds.value.includes(order.id) ? selectedIds.value.filter((id) => id !== order.id) : [...selectedIds.value, order.id];
-    selectOrder(order);
   }
 
   async function loadSelectedOrder() {
     if (!selectedOrder.value) return;
+    const requestToken = orderFileDetailGuard.beginOrderRequest('detail');
+    const orderId = selectedOrder.value.id;
     const id = encodeURIComponent(selectedOrder.value.id);
     const key = encodeURIComponent(selectedOrderKey());
     try {
       const [assetResult, supplementResult, locationResult] = await Promise.all([api('/orders/' + id + '/assets'), api('/orders/' + key + '/supplements'), api('/orders/' + id + '/package-location')]);
+      if (!orderFileDetailGuard.isCurrentOrderRequest(requestToken) || selectedOrder.value?.id !== orderId) return;
       assets.value = assetResult.data || [];
       supplements.value = supplementResult.data || [];
       selectedOrder.value = {
@@ -308,6 +322,7 @@ export function useBackupConsole() {
         storageLocation: locationResult.data || null,
       };
     } catch (error) {
+      if (!orderFileDetailGuard.isCurrentOrderRequest(requestToken)) return;
       notice.value = error.message || '订单文件加载失败';
     }
   }
@@ -1601,6 +1616,7 @@ export function useBackupConsole() {
     changeOrderPage,
     changeOrderSize,
     selectOrder,
+    closeOrderDetail,
     toggleSelected,
     downloadOrder,
     uploadSupplement,

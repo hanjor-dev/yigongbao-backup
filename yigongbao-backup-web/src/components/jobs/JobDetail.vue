@@ -2,7 +2,6 @@
 import { computed } from 'vue';
 import { useBackupContext } from '../../composables/useBackupContext.js';
 import { canRetryFailedOrders, formatJobOrderCreatedAt, jobOrderPatientName, storageVolumeView } from '../../taskCenter.js';
-import { statusLabel } from '../StatusBadge.js';
 import JobFileTable from './JobFileTable.vue';
 import ExecutionLogPanel from './ExecutionLogPanel.vue';
 import JobOrderDetailDrawer from './JobOrderDetailDrawer.vue';
@@ -21,8 +20,6 @@ const jobState = (job) => job?.state || job?.status || '';
 const progress = computed(() => selectedJob.value ? jobProgress(selectedJob.value) : 0);
 const simulation = computed(() => selectedJob.value?.executionMode === 'METADATA_SIMULATION');
 const orderBackup = computed(() => ['ORDER_BACKUP', 'MANUAL_BACKUP', 'DEGRADED_BACKUP'].includes(selectedJob.value?.jobType));
-const stateLabel = computed(() => jobState(selectedJob.value) === 'RETRYING_FAILED_ORDERS' ? '失败订单重试中'
-  : simulation.value && jobState(selectedJob.value) === 'SUCCEEDED' ? '模拟完成' : statusLabel(jobState(selectedJob.value)));
 const bytes = (value) => {
   const n = Number(value || 0);
   if (n < 1024) return `${n} B`;
@@ -52,9 +49,7 @@ const volume = (row, fallback = null) => storageVolumeView(row, fallback);
         </div>
         <div class="detail-actions">
           <el-tag v-if="simulation" type="warning">元数据模拟</el-tag>
-          <status-badge :value="jobState(selectedJob)" :label="stateLabel || '未知'" />
           <el-tag v-if="selectedJob.cancelRequested" type="warning">取消中</el-tag>
-          <el-button v-if="orderBackup" plain @click="changeJobDetailTab('logs')">执行日志</el-button>
           <el-button v-if="!terminalStates.includes(jobState(selectedJob)) && !selectedJob.cancelRequested" type="danger" plain @click="cancelJob()">取消任务</el-button>
           <el-button v-if="canRetryFailedOrders(selectedJob)" type="primary" plain @click="retryJob()">重试失败订单</el-button>
         </div>
@@ -87,7 +82,7 @@ const volume = (row, fallback = null) => storageVolumeView(row, fallback);
       <el-tabs v-model="jobDetailTab" class="job-detail-tabs" @tab-change="changeJobDetailTab">
         <el-tab-pane label="订单明细" name="orders">
           <el-table :data="jobOrders" stripe border empty-text="暂无订单明细">
-            <el-table-column label="订单号" min-width="170"><template #default="{ row }">{{ row.orderCode || row.sourceOrderId }}</template></el-table-column>
+            <el-table-column label="订单号" width="150"><template #default="{ row }">{{ row.orderCode || row.sourceOrderId }}</template></el-table-column>
             <el-table-column label="创建时间" width="174"><template #default="{ row }"><time class="table-time" :datetime="row.orderCreatedAt">{{ formatJobOrderCreatedAt(row.orderCreatedAt) }}</time></template></el-table-column>
             <el-table-column label="患者" width="130" show-overflow-tooltip><template #default="{ row }">{{ jobOrderPatientName(row) }}</template></el-table-column>
             <el-table-column label="状态" width="122"><template #default="{ row }"><status-badge :value="row.status" /></template></el-table-column>
@@ -128,7 +123,7 @@ const volume = (row, fallback = null) => storageVolumeView(row, fallback);
           />
         </el-tab-pane>
 
-        <el-tab-pane label="执行日志" name="logs">
+        <el-tab-pane label="任务日志" name="logs">
           <ExecutionLogPanel
             :records="jobLogRecords"
             :loading="jobLogLoading"

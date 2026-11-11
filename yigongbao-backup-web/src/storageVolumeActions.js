@@ -18,3 +18,16 @@ export function activeVolumeConfirmation(target, currentActive) {
   }
   return `确认将“${targetName}”转为热备活动卷？\n\n当前热备活动卷“${currentName}”将调整为热备只读；“${targetName}”将调整为热备活动卷，后续新备份任务写入该卷。\n\n盘内已有历史冷备文件不会被移动或删除，相关订单和任务的当前存储卷状态将同步更新。`;
 }
+
+/** 将服务端按分层阈值计算的容量状态转换为紧凑、稳定的列表展示。 */
+export function storageCapacityPresentation(volume) {
+  const usedPercent = Number(volume?.usedPercent);
+  if (volume?.usedPercent == null || !Number.isFinite(usedPercent)) {
+    return { percent: '不可用', status: '容量未知', tone: 'info' };
+  }
+  return {
+    percent: `${usedPercent.toFixed(1)}%`,
+    status: volume?.capacityWarning === true ? '容量告警' : '容量正常',
+    tone: volume?.capacityWarning === true ? 'danger' : 'success',
+  };
+}

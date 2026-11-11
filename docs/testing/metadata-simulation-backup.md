@@ -11,11 +11,9 @@
 ```properties
 BACKUP_EXECUTION_MODE=METADATA_SIMULATION
 BACKUP_SIMULATION_ROOT=D:/yigongbao-backup/simulation
-BACKUP_DEV_CANDIDATE_LIMIT=0
 ```
 
-- `BACKUP_DEV_CANDIDATE_LIMIT=0`：不限制候选订单数量，按日期规则完整翻页。
-- 正整数：仅在需要再次缩小测试范围时使用。
+- 小批量测试请在系统配置中调整 `backup.schedule.max-orders-per-run`，修改后下一轮扫描立即生效。
 - 模拟目录必须与正式热备目录分开。
 - `prod` Profile 禁止启动模拟模式；本地测试应使用非 `prod` Profile。
 
@@ -37,7 +35,6 @@ BACKUP_DEV_CANDIDATE_LIMIT=0
 
 ```properties
 BACKUP_EXECUTION_MODE=REAL
-BACKUP_DEV_CANDIDATE_LIMIT=0
 ```
 
 重启服务后生效。任务已经创建后使用其配置快照中的模式，不会因重启或环境变量变化而中途切换。

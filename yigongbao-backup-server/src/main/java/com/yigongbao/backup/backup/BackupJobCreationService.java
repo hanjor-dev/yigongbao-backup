@@ -11,7 +11,7 @@ import com.yigongbao.backup.order.OrderPackageMapper;
 import com.yigongbao.backup.config.RuntimeConfigService;
 import com.baomidou.mybatisplus.core.toolkit.Wrappers;
 
-/** 在同一数据库事务内锁定活动卷并固化到新任务，避免切卷与建任务发生竞态。 */
+/** 在同一数据库事务内完成选卷与建任务；无可用卷时仍创建带前置失败证据的可审计任务。 */
 @Service
 @RequiredArgsConstructor
 public class BackupJobCreationService {
@@ -22,18 +22,24 @@ public class BackupJobCreationService {
 
     @Transactional(rollbackFor = Exception.class)
     public JobEntity create(String type, String key, long actor, String config, long requiredBytes) {
-        long volumeId = volumes.selectActiveForNewBackup(requiredBytes).getId();
-        return jobs.create(type, key, actor, config, volumeId);
+        PersistentJobCoordinator.CreationResult reservation = jobs.reserve(type, key, actor, config);
+        if (!reservation.created()) return reservation.job();
+        ActiveVolumeSelectionService.SelectionResult selection = volumes.selectActiveForNewBackupResult(requiredBytes);
+        if (selection.available()) {
+            return jobs.completeCreation(reservation.job(), selection.volume().getId(), null, null);
+        }
+        return jobs.completeCreation(reservation.job(), null,
+                selection.failureCode(), selection.failureMessage());
     }
 
-    /** 候选阶段没有清单大小时，以近期可用订单包均值估算；无历史数据时按每单 1GiB 保守估算。 */
+    /** 候选阶段没有清单大小时，以近期可用订单包均值估算；无历史数据时按每单 500MiB 保守估算。 */
     @Transactional(rollbackFor = Exception.class)
     public JobEntity createForOrders(String type, String key, long actor, String config, int orderCount) {
         if (orderCount < 1) throw new IllegalArgumentException("备份订单数必须大于0");
         var recent = packages.selectList(Wrappers.<OrderPackageEntity>lambdaQuery()
                 .eq(OrderPackageEntity::getStatus, "AVAILABLE").gt(OrderPackageEntity::getPackageSize, 0L)
                 .eq(OrderPackageEntity::getIsDeleted, 0).orderByDesc(OrderPackageEntity::getId).last("LIMIT 100"));
-        long average = recent.isEmpty() ? 1_073_741_824L : Math.max(1L,
+        long average = recent.isEmpty() ? 500L * 1024L * 1024L : Math.max(1L,
                 recent.stream().map(OrderPackageEntity::getPackageSize).filter(java.util.Objects::nonNull)
                         .mapToLong(Long::longValue).sum() / recent.size());
         int reservationPercent = configs.getInt("storage.backup-reservation-percent", 200, 100);

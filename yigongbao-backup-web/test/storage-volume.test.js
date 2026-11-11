@@ -20,6 +20,13 @@ test('discovered volume candidates display used available and total capacity', (
   assert.match(source, /容量（已用 \/ 可用 \/ 总）/);
 });
 
+test('managed volume capacity displays used percentage and warning status', () => {
+  const source = fs.readFileSync(path.join(root, 'src', 'views', 'StorageView.vue'), 'utf8');
+  assert.match(source, /storageCapacityPresentation\(row\)/);
+  assert.match(source, /已用占比/);
+  assert.match(source, /capacity\(row\)\.status/);
+});
+
 test('order and job views expose persisted volume and relative location at every level', () => {
   const orderTable = fs.readFileSync(path.join(root, 'src', 'components', 'orders', 'OrderTable.vue'), 'utf8');
   const orderDetail = fs.readFileSync(path.join(root, 'src', 'components', 'orders', 'OrderDetail.vue'), 'utf8');

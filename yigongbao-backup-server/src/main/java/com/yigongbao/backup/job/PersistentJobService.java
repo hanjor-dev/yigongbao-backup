@@ -342,8 +342,43 @@ public class PersistentJobService {
                 Wrappers.<JobFileEntity>lambdaQuery().eq(JobFileEntity::getJobId, jobId)
                         .eq(sourceOrderId != null, JobFileEntity::getSourceOrderId, sourceOrderId)
                         .orderByAsc(JobFileEntity::getId));
-        return new JobFilePage(enrichCurrentVolumes(page.getRecords()), page.getTotal(), page.getCurrent(),
+        return new JobFilePage(enrichTaskFileDisplay(jobId, page.getRecords()), page.getTotal(), page.getCurrent(),
                 page.getSize(), page.getPages());
+    }
+
+    /** 为当前文件页补充订单编号和原始文件名，避免前端展示内部订单ID或自行猜测路径。 */
+    private List<JobFileEntity> enrichTaskFileDisplay(long jobId, List<JobFileEntity> rows) {
+        rows = enrichCurrentVolumes(rows);
+        if (rows == null || rows.isEmpty()) return rows;
+        rows.forEach(row -> row.setOriginalFilename(originalFilename(row)));
+        if (orderMapper == null) return rows;
+        List<Long> sourceOrderIds = rows.stream().map(JobFileEntity::getSourceOrderId)
+                .filter(Objects::nonNull).distinct().toList();
+        if (sourceOrderIds.isEmpty()) return rows;
+        Map<Long, String> orderCodes = orderMapper.selectList(
+                        new com.baomidou.mybatisplus.core.conditions.query.QueryWrapper<JobOrderEntity>()
+                                .eq("job_id", jobId).in("source_order_id", sourceOrderIds))
+                .stream().filter(order -> order.getSourceOrderId() != null
+                        && order.getOrderCode() != null && !order.getOrderCode().isBlank())
+                .collect(java.util.stream.Collectors.toMap(JobOrderEntity::getSourceOrderId,
+                        JobOrderEntity::getOrderCode, (left, right) -> left));
+        rows.forEach(row -> row.setOrderCode(orderCodes.get(row.getSourceOrderId())));
+        return rows;
+    }
+
+    private static String originalFilename(JobFileEntity row) {
+        String candidate = null;
+        if (row.getStorageKey() != null) {
+            int packageEntry = row.getStorageKey().indexOf("!/");
+            if (packageEntry >= 0) candidate = row.getStorageKey().substring(packageEntry + 2);
+        }
+        if (candidate == null || candidate.isBlank()) candidate = row.getObjectKey();
+        if (candidate == null || candidate.isBlank()) candidate = row.getTempPath();
+        if (candidate == null || candidate.isBlank()) return null;
+        String normalized = candidate.replace('\\', '/');
+        String leaf = normalized.substring(normalized.lastIndexOf('/') + 1);
+        String prefix = row.getAssetIdentity() == null ? null : row.getAssetIdentity() + "-";
+        return prefix != null && leaf.startsWith(prefix) ? leaf.substring(prefix.length()) : leaf;
     }
 
     private List<JobFileEntity> listFilesRaw(long jobId) {

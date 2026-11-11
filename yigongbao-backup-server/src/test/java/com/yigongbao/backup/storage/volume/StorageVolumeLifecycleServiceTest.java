@@ -20,6 +20,7 @@ import java.util.UUID;
 import java.nio.file.Files;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.Mockito.doAnswer;
+import static org.mockito.Mockito.never;
 
 /** 存储卷状态机的关键安全边界测试。 */
 class StorageVolumeLifecycleServiceTest {
@@ -193,6 +194,30 @@ class StorageVolumeLifecycleServiceTest {
 
         assertThat(volume.getWriteStatus()).isEqualTo("ACTIVE");
         verify(mapper).updateById(volume);
+    }
+
+    @Test
+    void activationClassifiesAHealthRaceAsVolumeUnavailabilityBeforeWritingState() {
+        StorageVolumeMapper mapper = mock(StorageVolumeMapper.class);
+        StorageVolumeMarkerService markers = mock(StorageVolumeMarkerService.class);
+        StorageVolumeHealthService health = mock(StorageVolumeHealthService.class);
+        StorageVolumeEntity standby = new StorageVolumeEntity();
+        standby.setId(2L); standby.setTier("HOT"); standby.setMountStatus("ONLINE");
+        standby.setWriteStatus("STANDBY"); standby.setAdminStatus("ENABLED");
+        standby.setOperationStatus("IDLE"); standby.setRootPath("E:/managed"); standby.setIsDeleted(0);
+        when(mapper.findByIdForUpdate(2L)).thenReturn(standby);
+        when(markers.verify(any(), any()))
+                .thenReturn(new StorageVolumeMarkerService.VerificationResult(true, true, null));
+        when(health.probe(standby)).thenReturn(new StorageVolumeHealthService.HealthSnapshot(
+                false, false, 0L, 0L, "STORAGE_PROBE_FAILED", "介质已拔出", 1L));
+        StorageVolumeLifecycleService service = service(mapper, markers, health, mock(JobMapper.class),
+                mock(JobOrderMapper.class), mock(ArtifactCopyMapper.class), mock(SpaceReservationMapper.class),
+                mock(RuntimeConfigService.class));
+
+        assertThatThrownBy(() -> service.setActive(2L, 0L))
+                .isInstanceOf(StorageVolumeUnavailableException.class)
+                .hasMessageContaining("介质已拔出");
+        verify(mapper, never()).updateById(any(StorageVolumeEntity.class));
     }
 
     @Test

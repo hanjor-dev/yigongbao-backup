@@ -92,5 +92,5 @@ const server = http.createServer(async (request, response) => {
 
 server.listen(port, '127.0.0.1', () => {
   console.log(`Mock online/COS service: http://127.0.0.1:${port}`);
-  console.log('Set online.base-url to this address; optionally set BACKUP_DEV_CANDIDATE_LIMIT=5 for local testing.');
+  console.log('Set online.base-url to this address; use backup.schedule.max-orders-per-run for local batch sizing.');
 });

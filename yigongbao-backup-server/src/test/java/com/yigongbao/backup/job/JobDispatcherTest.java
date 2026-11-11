@@ -148,6 +148,22 @@ class JobDispatcherTest {
     }
 
     @Test
+    void storagePreflightFailureNeverSchedulesTaskRetry() {
+        PersistentJobCoordinator coordinator = mock(PersistentJobCoordinator.class);
+        JobEntity claimed = job(13L, "ORDER_BACKUP", 7L, false);
+        when(coordinator.claimNext("worker-a", 60)).thenReturn(claimed);
+        JobHandler handler = (context, job) -> { throw new JobPreconditionException(
+                "STORAGE_VOLUME_UNAVAILABLE", "没有可写的活动热备卷"); };
+        JobDispatcher dispatcher = new JobDispatcher(coordinator,
+                new JobExecutorRegistry(Map.of("ORDER_BACKUP", handler)), "worker-a", Duration.ofSeconds(60), 3);
+
+        dispatcher.dispatchOne();
+
+        verify(coordinator).failOrRetry(eq(13L), eq("worker-a"), eq(7L), eq(0),
+                argThat(failure -> failure instanceof JobPreconditionException));
+    }
+
+    @Test
     void oldFencingTokenIsRejectedByExecutionContext() {
         PersistentJobCoordinator coordinator = mock(PersistentJobCoordinator.class);
         doThrow(new IllegalStateException("租约或 fencing token 无效")).when(coordinator)

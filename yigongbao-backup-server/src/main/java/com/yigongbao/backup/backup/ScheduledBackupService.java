@@ -11,7 +11,6 @@ import com.yigongbao.backup.job.PersistentJobCoordinator;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Service;
-import org.springframework.core.env.Environment;
 import com.yigongbao.backup.config.RuntimeConfigService;
 
 import java.util.List;
@@ -31,7 +30,6 @@ public class ScheduledBackupService {
     private final RuntimeConfigService runtimeConfig;
     private final BackupScheduleCheckpointService checkpoint;
     private final JobOrderMapper jobOrders;
-    private final Environment environment;
     private final BackupExecutionModeProvider executionModes;
     private final BackupJobCreationService jobCreation;
     private volatile long lastReconcileAt;
@@ -40,11 +38,10 @@ public class ScheduledBackupService {
     public ScheduledBackupService(OnlineCandidateClient candidates, ObjectMapper mapper,
                                   OrderSnapshotMapper snapshots, PersistentJobCoordinator coordinator,
                                   RuntimeConfigService runtimeConfig, BackupScheduleCheckpointService checkpoint,
-                                  Environment environment, JobOrderMapper jobOrders,
+                                  JobOrderMapper jobOrders,
                                   BackupExecutionModeProvider executionModes, BackupJobCreationService jobCreation) {
         this.candidates = candidates; this.mapper = mapper; this.snapshots = snapshots;
         this.coordinator = coordinator; this.runtimeConfig = runtimeConfig; this.checkpoint = checkpoint;
-        this.environment = environment;
         this.jobOrders = jobOrders;
         this.executionModes = executionModes;
         this.jobCreation = jobCreation;
@@ -79,15 +76,18 @@ public class ScheduledBackupService {
         String highWatermark = "";
         int daysBefore = runtimeConfig.getInt("backup.collection.days-before", 7, 0);
         LocalDateTime orderCreatedBefore = BackupMaturityWindow.orderCreatedBefore(now.toLocalDate(), daysBefore);
-        int developmentLimit = developmentLimit();
+        int maximumOrders = runtimeConfig.getInt("backup.schedule.max-orders-per-run", 100, 1);
+        if (maximumOrders > 1000) {
+            throw new IllegalStateException("数据库配置超出允许上限: backup.schedule.max-orders-per-run");
+        }
         java.util.LinkedHashSet<Long> orderIds = new java.util.LinkedHashSet<>();
         checkpoint.begin();
-        log.info("{}备份候选扫描开始｜执行模式={}｜计划日期={}｜备份间隔={}天｜计划开始时间={}｜备份{}天前的订单｜订单创建时间上界={}（排他）｜开发测试上限={}",
+        log.info("{}备份候选扫描开始｜执行模式={}｜计划日期={}｜备份间隔={}天｜计划开始时间={}｜备份{}天前的订单｜订单创建时间上界={}（排他）｜单任务订单上限={}",
                 forced ? "管理员立即" : "定时", executionModes.mode(), now.toLocalDate(), intervalDays, startTime, daysBefore, orderCreatedBefore,
-                developmentLimit == 0 ? "不限制" : developmentLimit + "个订单");
+                maximumOrders);
         try {
           while (true) {
-            int remaining = developmentLimit > 0 ? developmentLimit - orderIds.size() : Integer.MAX_VALUE;
+            int remaining = maximumOrders - orderIds.size();
             if (remaining <= 0) break;
             int pageSize = Math.min(INTERNAL_CANDIDATE_PAGE_SIZE, remaining);
             OnlineCandidateClient.Page page = candidates.search(cursor, pageSize, highWatermark,
@@ -98,15 +98,17 @@ public class ScheduledBackupService {
                     .filter(candidate -> candidate.orderId() != null)
                     .filter(candidate -> !isTerminal(candidate.eventStatus()))
                     .filter(candidate -> !alreadyBackedUp(candidate.orderId()))
-                    .map(OnlineCandidateClient.Candidate::orderId).forEach(orderIds::add);
+                    .map(OnlineCandidateClient.Candidate::orderId)
+                    .limit(remaining)
+                    .forEach(orderIds::add);
             log.info("定时备份候选分页完成｜请求数量={}｜线上返回数量={}｜本页接纳数量={}｜累计待备份数量={}｜是否还有下一页={}",
                     pageSize, page.items().size(), orderIds.size() - beforePage, orderIds.size(), page.hasMore());
             cursor = page.nextCursor();
-            if (!page.hasMore() || (developmentLimit > 0 && orderIds.size() >= developmentLimit)) break;
+            if (!page.hasMore() || orderIds.size() >= maximumOrders) break;
             if (cursor == null || cursor.isBlank()) throw new IllegalStateException("线上候选分页缺少下一页游标");
           }
           // 上一批经过任务内重试仍失败的订单，等待下一个计划时间自动补偿。
-          int remaining = developmentLimit > 0 ? Math.max(0, developmentLimit - orderIds.size()) : Integer.MAX_VALUE;
+          int remaining = Math.max(0, maximumOrders - orderIds.size());
           if (remaining > 0) {
             jobOrders.selectList(Wrappers.<JobOrderEntity>lambdaQuery()
                             .eq(JobOrderEntity::getStatus, "FAILED")
@@ -168,13 +170,6 @@ public class ScheduledBackupService {
     }
 
     private static boolean isTerminal(String status) { return status != null && ("CANCELLED".equalsIgnoreCase(status) || "DELETED".equalsIgnoreCase(status) || "DELETE".equalsIgnoreCase(status)); }
-
-    private int developmentLimit() {
-        String value = environment.getProperty("BACKUP_DEV_CANDIDATE_LIMIT", "").trim();
-        if (value.isEmpty()) return 0;
-        try { return Math.max(0, Integer.parseInt(value)); }
-        catch (NumberFormatException exception) { throw new IllegalArgumentException("BACKUP_DEV_CANDIDATE_LIMIT必须为非负整数", exception); }
-    }
 
     private static Long last(java.util.LinkedHashSet<Long> values) {
         Long result = null;

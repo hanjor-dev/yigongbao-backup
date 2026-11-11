@@ -21,9 +21,15 @@ class ConfigValueValidatorTest {
     }
 
     @Test
-    void removesDevelopmentBatchLimitFromBusinessConfiguration() {
-        assertThatThrownBy(() -> ConfigValueValidator.validate("backup.schedule.max-orders-per-run", "5"))
-                .isInstanceOf(IllegalArgumentException.class).hasMessageContaining("不允许");
+    void validatesMaximumOrdersPerBackupTask() {
+        assertThatCode(() -> ConfigValueValidator.validate("backup.schedule.max-orders-per-run", "1"))
+                .doesNotThrowAnyException();
+        assertThatCode(() -> ConfigValueValidator.validate("backup.schedule.max-orders-per-run", "1000"))
+                .doesNotThrowAnyException();
+        assertThatThrownBy(() -> ConfigValueValidator.validate("backup.schedule.max-orders-per-run", "0"))
+                .isInstanceOf(IllegalArgumentException.class).hasMessageContaining("1到1000");
+        assertThatThrownBy(() -> ConfigValueValidator.validate("backup.schedule.max-orders-per-run", "1001"))
+                .isInstanceOf(IllegalArgumentException.class).hasMessageContaining("1到1000");
     }
 
     @Test

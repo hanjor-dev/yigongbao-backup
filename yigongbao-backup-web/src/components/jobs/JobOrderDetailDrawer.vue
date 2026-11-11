@@ -64,8 +64,8 @@ const volume = (row) => storageVolumeView(
             </el-alert>
 
             <el-collapse class="business-snapshot">
-              <el-collapse-item title="业务快照（按需查看）" name="business">
-                <OrderBusinessFields :value="selectedJobOrder.orderBusinessJson" />
+              <el-collapse-item title="订单信息（备份时）" name="business">
+                <OrderBusinessFields :value="selectedJobOrder.orderBusinessJson" title="" />
               </el-collapse-item>
             </el-collapse>
           </div>
@@ -73,6 +73,7 @@ const volume = (row) => storageVolumeView(
 
         <el-tab-pane label="文件明细" name="files">
           <JobFileTable
+            compact-identity
             :records="jobOrderFiles"
             :loading="jobOrderFileLoading"
             :current="jobOrderFilePage"

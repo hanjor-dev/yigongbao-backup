@@ -74,7 +74,7 @@ class DegradedBackupJobHandlerTest {
         when(cosProvider.getIfAvailable()).thenReturn(mock(CosObjectClient.class));
         RuntimeConfigService configs = mock(RuntimeConfigService.class);
         when(configs.getInt("backup.retry.max-retries", 3, 0)).thenReturn(0);
-        when(configs.getInt("storage.backup-reservation-percent", 300, 100)).thenReturn(100);
+        when(configs.getInt("storage.backup-reservation-percent", 200, 100)).thenReturn(100);
         when(configs.get("backup.retry.delays-seconds", "60,300,900")).thenReturn("60,300,900");
         SpaceReservationService reservations = mock(SpaceReservationService.class);
         when(reservations.reserve(eq("hot"), anyLong(), eq(6L)))
