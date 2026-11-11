@@ -5,7 +5,7 @@ import { statusLabel } from '../components/StatusBadge.js';
 import { activeVolumeConfirmation, canSetAsActiveVolume, canSetAsStandbyVolume, storageCapacityPresentation } from '../storageVolumeActions.js';
 import { confirmAction, promptAction, showWarningMessage } from '../uiFeedback.js';
 
-const { isAdmin, storageVolumes, storageCandidates, loadStorageVolumes, loadStorageVolumeDetail, scanStorageVolumes, registerStorageVolume, changeStorageVolumeState, previewStorageArchive, startStorageArchive, navigate } = useBackupContext();
+const { isAdmin, storageVolumes, storageCandidates, loadStorageVolumes, loadStorageVolumeDetail, scanStorageVolumes, registerStorageVolume, changeStorageVolumeState, previewStorageArchive, startStorageArchive, navigate, consumeRouteQuery } = useBackupContext();
 const hotActive = computed(() => storageVolumes.value.find((item) => item.tier === 'HOT' && item.writeStatus === 'ACTIVE'));
 const selectedVolume = ref(null);
 const standbyLoadingId = ref(null);
@@ -78,7 +78,7 @@ async function setStandby(row) {
 async function openDetail(row) {
   selectedVolume.value = await loadStorageVolumeDetail(row.id);
 }
-onMounted(loadStorageVolumes);
+onMounted(async () => { await loadStorageVolumes(); const { volumeId } = consumeRouteQuery(['volumeId']); if (volumeId) selectedVolume.value = await loadStorageVolumeDetail(volumeId); });
 </script>
 
 <template>

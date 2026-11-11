@@ -18,7 +18,7 @@ export function useBackupConsole() {
   const auth = createAuthStore();
   const { token, role, isAdmin } = auth;
   const route = createRouteStore();
-  const { page } = route;
+  const { page, routeQuery } = route;
   // 兼容现有模板中的 page 直接赋值，同时将导航状态持久化并同步到 hash。
   watch(page, (value) => route.navigate(value));
   const username = ref('');
@@ -51,6 +51,9 @@ export function useBackupConsole() {
   const cloudRollup = ref('');
   const hotRollup = ref('');
   const coldRollup = ref('');
+  const backupMode = ref('');
+  const storageAccessible = ref('');
+  const storageIssue = ref('');
   const orderFilterOptions = ref({
     orderStatuses: [],
     businessTypes: [],
@@ -125,6 +128,11 @@ export function useBackupConsole() {
   const configCategories = ref([]);
   const selectedConfigCategory = ref('');
   const overview = ref(null);
+  const overviewLoading = ref(false);
+  const overviewError = ref(null);
+  const overviewLastSuccessAt = ref(null);
+  let overviewRequest = null;
+  const backupJobFilters = ref({ jobId: '', finishedFrom: '', finishedTo: '', orderResult: '' });
   const accounts = ref([]);
   const accountPage = ref(1);
   const accountSize = ref(20);
@@ -259,6 +267,9 @@ export function useBackupConsole() {
       if (cloudRollup.value) params.set('cloudRollup', cloudRollup.value);
       if (hotRollup.value) params.set('hotRollup', hotRollup.value);
       if (coldRollup.value) params.set('coldRollup', coldRollup.value);
+      if (backupMode.value) params.set('backupMode', backupMode.value);
+      if (storageAccessible.value !== '' && storageAccessible.value != null) params.set('storageAccessible', storageAccessible.value);
+      if (storageIssue.value) params.set('storageIssue', storageIssue.value);
       const result = await api('/orders?' + params.toString());
       const page = normalizePage(result.data);
       orderPage.value = page.current;
@@ -422,8 +433,7 @@ export function useBackupConsole() {
         body: JSON.stringify({ orderSnapshotId: selectedOrder.value.id }),
       });
       const jobId = extractJobId(result);
-      if (jobId) sessionStorage.setItem('backup-restore-task-focus', String(jobId));
-      route.navigate('restore');
+      route.navigate('restore', jobId ? { jobId } : {});
       notice.value = '线上恢复任务已提交，已跳转至恢复任务页面。';
     } catch (error) {
       notice.value = error.message || '线上恢复失败';
@@ -451,8 +461,7 @@ export function useBackupConsole() {
         }),
       });
       const jobId = extractJobId(result);
-      if (jobId) sessionStorage.setItem('backup-restore-task-focus', String(jobId));
-      route.navigate('restore');
+      route.navigate('restore', jobId ? { jobId } : {});
       notice.value = '批量线上恢复任务已提交，已跳转至恢复任务页面。';
     } catch (error) {
       notice.value = error.message || '批量恢复失败';
@@ -504,7 +513,9 @@ export function useBackupConsole() {
 
   async function loadJobs(pageNumber = jobPage.value) {
     try {
-      const result = await api(`/admin/backup/jobs?current=${encodeURIComponent(pageNumber)}&size=${encodeURIComponent(jobSize.value)}`);
+      const params = new URLSearchParams({ current: String(pageNumber), size: String(jobSize.value) });
+      for (const [key, value] of Object.entries(backupJobFilters.value)) if (value) params.set(key, value);
+      const result = await api(`/admin/backup/jobs?${params.toString()}`);
       const pageData = normalizePage(result.data);
       jobs.value = pageData.records;
       jobPage.value = pageData.current;
@@ -910,6 +921,9 @@ export function useBackupConsole() {
     cloudRollup.value = '';
     hotRollup.value = '';
     coldRollup.value = '';
+    backupMode.value = '';
+    storageAccessible.value = '';
+    storageIssue.value = '';
     loadOrders(1);
   }
 
@@ -1296,13 +1310,28 @@ export function useBackupConsole() {
     }
   }
 
-  async function loadOverview() {
-    try {
-      const result = await api('/admin/overview');
-      overview.value = result.data || null;
-    } catch (error) {
-      notice.value = error.message || '概览加载失败';
-    }
+  async function loadOverview(options = {}) {
+    if (overviewRequest) return overviewRequest;
+    const refresh = options?.refresh === true;
+    overviewLoading.value = true;
+    overviewRequest = (async () => {
+      try {
+        const result = await api(`/admin/overview${refresh ? '?refresh=true' : ''}`);
+        overview.value = result.data || null;
+        overviewLastSuccessAt.value = new Date().toISOString();
+        overviewError.value = null;
+      } catch (error) {
+        overviewError.value = { code: error.code || 'OVERVIEW_LOAD_FAILED', message: error.message || '概览加载失败', requestId: error.requestId || '' };
+      } finally {
+        overviewLoading.value = false;
+        overviewRequest = null;
+      }
+    })();
+    return overviewRequest;
+  }
+  function clearBackupJobFilters() {
+    backupJobFilters.value = { jobId: '', finishedFrom: '', finishedTo: '', orderResult: '' };
+    loadJobs(1);
   }
 
   async function loadAccounts(pageNumber = accountPage.value) {
@@ -1435,18 +1464,26 @@ export function useBackupConsole() {
     if (!isAdmin.value && page.value !== 'orders') route.navigate('orders');
   }
 
-  function navigate(target) {
+  function navigate(target, query) {
     if (!isAdmin.value && target !== 'orders') {
       route.navigate('orders');
       return;
     }
     if (target !== 'backup' && jobDetailVisible.value) closeJobDetail();
-    route.navigate(target);
+    route.navigate(target, query);
     if (target === 'orders') {
+      const filters = route.consumeRouteQuery(['backupMode', 'storageAccessible', 'storageIssue']);
+      backupMode.value = filters.backupMode || '';
+      storageAccessible.value = filters.storageAccessible ?? '';
+      storageIssue.value = filters.storageIssue || '';
       Promise.all([loadOrderFilterOptions(), loadOrders(1)]);
       return;
     }
-    if (target === 'backup') loadJobs();
+    if (target === 'backup') {
+      const filters = route.consumeRouteQuery(['jobId', 'finishedFrom', 'finishedTo', 'orderResult']);
+      backupJobFilters.value = { jobId: filters.jobId || '', finishedFrom: filters.finishedFrom || '', finishedTo: filters.finishedTo || '', orderResult: filters.orderResult || '' };
+      loadJobs(1).then(() => { if (filters.jobId) selectJob({ id: filters.jobId }); });
+    }
     if (target === 'cold-storage') loadColdStorage();
     if (target === 'restore') return;
     if (target === 'overview') {
@@ -1467,7 +1504,12 @@ export function useBackupConsole() {
         await loadAccounts();
         break;
       case 'backup':
-        await loadJobs();
+        {
+          const filters = route.consumeRouteQuery(['jobId', 'finishedFrom', 'finishedTo', 'orderResult']);
+          backupJobFilters.value = { jobId: filters.jobId || '', finishedFrom: filters.finishedFrom || '', finishedTo: filters.finishedTo || '', orderResult: filters.orderResult || '' };
+          await loadJobs(1);
+          if (filters.jobId) await selectJob({ id: filters.jobId });
+        }
         if (selectedJobId.value && selectedJob.value && !isTerminalJob(selectedJob.value)) startJobPolling();
         break;
       case 'restore':
@@ -1486,6 +1528,12 @@ export function useBackupConsole() {
         await loadStorageVolumes();
         break;
       default:
+        {
+          const filters = route.consumeRouteQuery(['backupMode', 'storageAccessible', 'storageIssue']);
+          backupMode.value = filters.backupMode || '';
+          storageAccessible.value = filters.storageAccessible ?? '';
+          storageIssue.value = filters.storageIssue || '';
+        }
         await Promise.all([loadOrderFilterOptions(), loadOrders()]);
     }
   }
@@ -1514,6 +1562,9 @@ export function useBackupConsole() {
     cloudRollup,
     hotRollup,
     coldRollup,
+    backupMode,
+    storageAccessible,
+    storageIssue,
     orderFilterOptions,
     orderPage,
     orderSize,
@@ -1532,6 +1583,7 @@ export function useBackupConsole() {
     jobPage,
     jobSize,
     jobTotal,
+    backupJobFilters,
     selectedJobId,
     selectedJob,
     jobDetailVisible,
@@ -1556,6 +1608,11 @@ export function useBackupConsole() {
     jobOrderFileLoading,
     jobProgress,
     overview,
+    overviewLoading,
+    overviewError,
+    overviewLastSuccessAt,
+    routeQuery,
+    consumeRouteQuery: route.consumeRouteQuery,
     jobLogRecords,
     jobLogCurrent,
     jobLogSize,
@@ -1645,6 +1702,7 @@ export function useBackupConsole() {
     runScheduledBackupNow,
     changeJobPage,
     changeJobSize,
+    clearBackupJobFilters,
     loadJobSummary,
     loadJobOrders,
     loadJobDetails,

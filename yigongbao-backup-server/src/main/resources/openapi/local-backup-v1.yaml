@@ -10,6 +10,26 @@ servers:
 security:
   - BearerAuth: []
 paths:
+  /api/v1/admin/overview:
+    get:
+      operationId: getAdminOverview
+      parameters:
+        - in: query
+          name: refresh
+          schema: {type: boolean, default: false}
+      responses:
+        '200':
+          description: 管理概览（分区失败字段为 null，并在 sectionErrors 中说明）
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [code, message, requestId, data]
+                properties:
+                  code: {type: string}
+                  message: {type: string}
+                  requestId: {type: string}
+                  data: {$ref: '#/components/schemas/AdminOverview'}
   /api/v1/auth/login:
     post:
       security: []
@@ -118,6 +138,9 @@ paths:
         - {name: cloudRollup, in: query, schema: {$ref: '#/components/schemas/StorageRollupState'}}
         - {name: hotRollup, in: query, schema: {$ref: '#/components/schemas/StorageRollupState'}}
         - {name: coldRollup, in: query, schema: {$ref: '#/components/schemas/StorageRollupState'}}
+        - {name: backupMode, in: query, schema: {type: string, enum: [REAL, METADATA_SIMULATION]}}
+        - {name: storageAccessible, in: query, schema: {type: boolean}}
+        - {name: storageIssue, in: query, schema: {type: string, enum: [UNREADABLE]}}
       responses:
         '200':
           description: 订单页码分页结果
@@ -233,8 +256,16 @@ paths:
     get:
       operationId: listBackupJobs
       description: 管理员查询自动订单备份批次及核心进度。
+      parameters:
+        - {name: current, in: query, schema: {type: integer, format: int64, minimum: 1, default: 1}}
+        - {name: size, in: query, schema: {type: integer, format: int64, minimum: 1, maximum: 100, default: 20}}
+        - {name: jobId, in: query, schema: {type: integer, format: int64, minimum: 1}}
+        - {name: finishedFrom, in: query, description: 完成时间半开区间起点, schema: {$ref: '#/components/schemas/OrderDateBoundary'}}
+        - {name: finishedTo, in: query, description: 完成时间半开区间终点（不含）, schema: {$ref: '#/components/schemas/OrderDateBoundary'}}
+        - {name: orderResult, in: query, schema: {type: string, enum: [COMPLETE_SUCCEEDED, INCOMPLETE_SUCCEEDED, FAILED, SKIPPED]}}
       responses:
         '200': {$ref: '#/components/responses/PageSucceeded'}
+        '400': {$ref: '#/components/responses/BadRequest'}
         '403': {$ref: '#/components/responses/Forbidden'}
   /api/v1/admin/backup/jobs/{id}/retry-failed:
     post:
@@ -631,6 +662,204 @@ components:
         application/json:
           schema: {$ref: '#/components/schemas/ErrorEnvelope'}
   schemas:
+    AdminOverview:
+      type: object
+      required: [observedAt, health, sections, dataQuality, sectionErrors]
+      additionalProperties: false
+      properties:
+        observedAt: {type: string, format: date-time}
+        health: {$ref: '#/components/schemas/OverviewHealth'}
+        sections: {$ref: '#/components/schemas/OverviewSections'}
+        summary: {oneOf: [{$ref: '#/components/schemas/OverviewSummary'}, {type: 'null'}]}
+        storage: {oneOf: [{$ref: '#/components/schemas/OverviewStorage'}, {type: 'null'}]}
+        activeAlerts: {type: [array, 'null'], items: {$ref: '#/components/schemas/OverviewAlert'}}
+        backupTrend: {type: [array, 'null'], items: {$ref: '#/components/schemas/OverviewTrendPoint'}}
+        automation: {oneOf: [{$ref: '#/components/schemas/OverviewAutomation'}, {type: 'null'}]}
+        recentActivities: {type: [array, 'null'], items: {$ref: '#/components/schemas/OverviewActivity'}}
+        dataQuality: {$ref: '#/components/schemas/OverviewDataQuality'}
+        sectionErrors: {type: array, items: {$ref: '#/components/schemas/OverviewSectionError'}}
+    OverviewHealth:
+      type: object
+      required: [level, activeAlertCount, criticalAlertCount, warningAlertCount]
+      additionalProperties: false
+      properties:
+        level: {type: string, enum: [NORMAL, WARNING, CRITICAL, UNKNOWN, SETUP_REQUIRED]}
+        activeAlertCount: {type: integer, format: int64, minimum: 0}
+        criticalAlertCount: {type: integer, format: int64, minimum: 0}
+        warningAlertCount: {type: integer, format: int64, minimum: 0}
+    OverviewSections:
+      type: object
+      required: [summary, storage, activeAlerts, backupTrend, automation, recentActivities]
+      additionalProperties: false
+      properties:
+        summary: {$ref: '#/components/schemas/OverviewSectionState'}
+        storage: {$ref: '#/components/schemas/OverviewSectionState'}
+        activeAlerts: {$ref: '#/components/schemas/OverviewSectionState'}
+        backupTrend: {$ref: '#/components/schemas/OverviewSectionState'}
+        automation: {$ref: '#/components/schemas/OverviewSectionState'}
+        recentActivities: {$ref: '#/components/schemas/OverviewSectionState'}
+    OverviewSectionState: {type: string, enum: [AVAILABLE, UNAVAILABLE]}
+    OverviewSummary:
+      type: object
+      required: [readableOrders, readableFiles, todayBackup]
+      additionalProperties: false
+      properties:
+        readableOrders: {$ref: '#/components/schemas/OverviewReadableOrders'}
+        readableFiles: {$ref: '#/components/schemas/OverviewReadableFiles'}
+        todayBackup: {$ref: '#/components/schemas/OverviewTodayBackup'}
+    OverviewReadableOrders:
+      type: object
+      additionalProperties: false
+      properties:
+        total: {type: integer, format: int64}
+        complete: {type: integer, format: int64}
+        incomplete: {type: integer, format: int64}
+        temporarilyOffline: {type: integer, format: int64}
+        abnormalUnreadable: {type: integer, format: int64}
+        degradedRedundancy: {type: integer, format: int64}
+    OverviewReadableFiles:
+      type: object
+      additionalProperties: false
+      properties:
+        logicalFileCount: {type: integer, format: int64}
+        managedArtifactBytes: {type: integer, format: int64}
+        unknownFileCountPackageCount: {type: integer, format: int64}
+        unknownSizeCopyCount: {type: integer, format: int64}
+        invalidCopyMetadataCount: {type: integer, format: int64}
+    OverviewTodayBackup:
+      type: object
+      additionalProperties: false
+      properties:
+        completeSucceeded: {type: integer, format: int64}
+        incompleteSucceeded: {type: integer, format: int64}
+        failed: {type: integer, format: int64}
+        skipped: {type: integer, format: int64}
+        total: {type: integer, format: int64}
+    OverviewStorage:
+      type: object
+      additionalProperties: false
+      properties:
+        activeVolume: {oneOf: [{$ref: '#/components/schemas/OverviewVolume'}, {type: 'null'}]}
+        standby: {type: object, additionalProperties: false, properties: {readyCount: {type: integer, format: int64}, preferred: {oneOf: [{$ref: '#/components/schemas/OverviewVolume'}, {type: 'null'}]}}}
+        coldMedia: {type: object, additionalProperties: false, properties: {onlineCount: {type: integer, format: int64}, expectedOfflineCount: {type: integer, format: int64}, repairRequiredCount: {type: integer, format: int64}, successfulArchiveCount: {type: integer, format: int64}, latestArchivedAt: {type: [string, 'null'], format: date-time}}}
+        onlineCapacity: {type: object, additionalProperties: false, properties: {usedBytes: {type: [integer, 'null'], format: int64}, usableBytes: {type: [integer, 'null'], format: int64}, totalBytes: {type: [integer, 'null'], format: int64}, usedPercent: {type: [number, 'null']}, includedVolumeCount: {type: integer, format: int64}, excludedVolumeCount: {type: integer, format: int64}}}
+    OverviewVolume:
+      type: object
+      additionalProperties: false
+      properties:
+        id: {type: integer, format: int64}
+        name: {type: string}
+        code: {type: string}
+        mountStatus: {type: string}
+        writeStatus: {type: string}
+        operationStatus: {type: string}
+        usedBytes: {type: [integer, 'null'], format: int64}
+        usableBytes: {type: [integer, 'null'], format: int64}
+        totalBytes: {type: [integer, 'null'], format: int64}
+        usedPercent: {type: [number, 'null']}
+        thresholdPercent: {type: integer}
+        lastProbedAt: {type: [string, 'null'], format: date-time}
+        capacityObservedAt: {type: [string, 'null'], format: date-time}
+        capacityFresh: {type: boolean}
+        capacityLabel: {type: string}
+    OverviewAlert:
+      type: object
+      additionalProperties: false
+      properties:
+        alertKey: {type: string}
+        severity: {type: string, enum: [CRITICAL, WARNING]}
+        category: {type: string}
+        code: {type: string}
+        title: {type: string}
+        message: {type: string}
+        evidenceAt: {type: string, format: date-time}
+        targetType: {type: string}
+        targetId: {type: string}
+        actionRoute: {type: string}
+        actionQuery: {type: object, additionalProperties: {type: string}}
+    OverviewTrendPoint:
+      type: object
+      additionalProperties: false
+      properties:
+        date: {type: string, format: date}
+        completeSucceeded: {type: integer, format: int64}
+        incompleteSucceeded: {type: integer, format: int64}
+        failed: {type: integer, format: int64}
+        skipped: {type: integer, format: int64}
+        addedPackageBytes: {type: integer, format: int64}
+        unknownPackageCount: {type: integer, format: int64}
+    OverviewAutomation:
+      type: object
+      additionalProperties: false
+      properties:
+        backup: {$ref: '#/components/schemas/OverviewAutomationItem'}
+        accountSync: {$ref: '#/components/schemas/OverviewAutomationItem'}
+        cleanup: {$ref: '#/components/schemas/OverviewAutomationItem'}
+    OverviewAutomationItem:
+      type: object
+      additionalProperties: false
+      properties:
+        state: {type: string}
+        enabled: {type: boolean}
+        executionMode: {type: [string, 'null']}
+        schedule: {type: [string, 'null']}
+        intervalValue: {type: [integer, 'null']}
+        intervalUnit: {type: [string, 'null'], enum: [DAYS, MINUTES, HOURS, null]}
+        lastProcessedCount: {type: [integer, 'null']}
+        lastError: {type: [string, 'null']}
+        lastAttemptAt: {type: [string, 'null'], format: date-time}
+        lastSuccessAt: {type: [string, 'null'], format: date-time}
+        nextExpectedAt: {type: [string, 'null'], format: date-time}
+        message: {type: string}
+        actionRoute: {type: string}
+        actionQuery: {type: object, additionalProperties: {type: string}}
+    OverviewActivity:
+      type: object
+      additionalProperties: false
+      properties:
+        activityId: {type: string}
+        sourceType: {type: string}
+        sourceId: {type: [integer, 'null'], format: int64}
+        activityType: {type: string, enum: [ORDER_BACKUP, MANUAL_BACKUP, DEGRADED_BACKUP, RESTORE, SUPPLEMENT_UPLOAD, CLEANUP_DRY_RUN, CLEANUP_EXECUTE, AUTO_CLEANUP, VOLUME_ARCHIVE]}
+        name: {type: string}
+        status: {type: string}
+        progressCurrent: {type: [integer, 'null'], format: int64}
+        progressTotal: {type: [integer, 'null'], format: int64}
+        completeSucceeded: {type: integer, format: int64}
+        incompleteSucceeded: {type: integer, format: int64}
+        failed: {type: integer, format: int64}
+        skipped: {type: integer, format: int64}
+        requestedAt: {type: [string, 'null'], format: date-time}
+        startedAt: {type: [string, 'null'], format: date-time}
+        finishedAt: {type: [string, 'null'], format: date-time}
+        storageSummary: {type: [string, 'null']}
+        failureSummary: {type: [string, 'null']}
+        actionRoute: {type: [string, 'null']}
+        actionQuery: {type: object, additionalProperties: {type: string}}
+    OverviewDataQuality:
+      type: object
+      required: [complete, messages]
+      additionalProperties: false
+      properties:
+        complete: {type: boolean}
+        messages: {type: array, items: {$ref: '#/components/schemas/OverviewDataQualityMessage'}}
+    OverviewDataQualityMessage:
+      type: object
+      additionalProperties: false
+      properties:
+        code: {type: string}
+        severity: {type: string, enum: [WARNING, BLOCKING]}
+        section: {type: string}
+        affectedCount: {type: integer, format: int64}
+        message: {type: string}
+    OverviewSectionError:
+      type: object
+      additionalProperties: false
+      properties:
+        section: {type: string}
+        code: {type: string}
+        requestId: {type: string}
+        message: {type: string}
     DecimalId: {type: string, pattern: '^[0-9]+$'}
     ByteCount: {type: string, pattern: '^[0-9]+$'}
     Rfc3339Time: {type: string, format: date-time}

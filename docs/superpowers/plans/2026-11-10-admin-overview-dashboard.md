@@ -2,9 +2,9 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Goal:** 将当前只返回存储探测与原始配置的管理概览改造成可信的管理员工作台，完整提供真实备份统计、持久化容量快照、当前有效告警、近 7 日趋势、近期任务和可处理的业务下钻。
+**Goal:** 基于当前备份、降级备份、恢复、整盘封存、存储卷、清理和账号同步实现，交付可信、只读、可解释且可下钻的管理员概览首页。
 
-**Architecture:** 后端新增独立概览查询层、纯策略层和编排服务：复杂统计由 MySQL 8 聚合查询一次完成，当前告警由数据库事实即时推导，容量只读取后台已持久化的成功快照。前端使用独立概览模型和小型 Vue 组件组合页面，并通过带结构化查询参数的轻量路由下钻到现有业务页面；首页加载和刷新不执行任何磁盘、NAS 或线上服务调用。
+**Architecture:** 后端建立独立概览 DTO、聚合查询、共享卷访问策略、时间/容量/告警策略和分区编排服务；首页只读持久化数据库事实，不执行任何文件系统或线上调用。前端以 Element Plus 组件组合健康、告警、核心指标、趋势、存储、近期活动和自动化状态，并通过白名单 hash 查询参数打开现有任务弹窗和详情抽屉。
 
 **Tech Stack:** Java 21、Spring Boot 3.2.5、MyBatis-Plus 3.5.8、MySQL 8、JUnit 5/Mockito/AssertJ、Vue 3、Element Plus、Vite、Node.js `node:test`。
 
@@ -12,70 +12,74 @@
 
 ## Global Constraints
 
-- 所有业务日期使用 `Asia/Shanghai`；“今日”为 `[00:00:00, 次日 00:00:00)`，“近 7 日”包含今天及此前 6 日。
-- 首页只统计真实备份；`METADATA_SIMULATION`、`SIMULATED`、`SIMULATION_FAILED` 不得进入真实订单、文件、今日结果和趋势容量。
-- 首页请求不得调用 `StorageProbe`、`Files.getFileStore`、磁盘、NAS 或线上 API；管理员手动刷新仍只读数据库。
-- 告警仅表示当前有效问题，不新增告警表，不从审计日志反推当前状态，恢复后下一次查询自动消失。
-- 正常 `COLD/OFFLINE/READ_ONLY` 冷备卷不告警、不进入在线容量汇总，但保留并展示离线前容量快照。
-- 页面只展示“可用备份订单、有效备份文件、今日订单备份”三张核心指标卡；不得增加备份覆盖率或正在执行任务 KPI。
-- 状态接口保留稳定英文码，用户界面复用公共 `StatusBadge` 显示中文和统一颜色语义。
-- 不增加图表依赖；近 7 日趋势使用 Vue + 原生 SVG/CSS，保持键盘可读和文本兜底。
-- 所有复杂列表/统计必须批量查询，禁止逐订单、逐副本或逐卷 N+1 查询。
-- MySQL 迁移脚本、`sql/init/01-schema.sql`、`sql/init/02-indexes.sql` 与 `sql/init/yigongbao-backup-full-init.sql` 必须同步更新。
-- 遵守仓库 `AGENTS.md`：整个实施只创建一个最终 Git 提交；提交前依次运行 `git status`、`git diff HEAD`、`git branch --show-current`、`git log --oneline -10`，只暂存本需求文件并使用中文 Conventional Commit。
+- 应用在任何业务 Bean 和时间事实写入前，把进程、JDBC 会话、Jackson 和初始化 SQL 统一为 `Asia/Shanghai/+08:00`；概览另用可注入 `Clock` 做确定性测试，前端不按浏览器时区重算。
+- 正式完整备份和成功降级备份都计入生产备份；模拟备份全部排除。
+- 首页请求不得调用 `StorageProbe`、Marker 校验、文件系统、NAS 或线上接口。
+- 首页只读最后成功容量快照；探测失败保留合法历史容量。
+- 首页、下载、恢复、副本解析和备份预检必须复用统一卷访问策略。
+- 正常 `COLD/OFFLINE/READ_ONLY/ENABLED/IDLE` 冷备卷不告警；`REPAIR_REQUIRED` 不属于正常离线；卷重新转为 HOT 后封存历史仍保留。
+- 当前告警只来自当前事实；历史失败任务不自动成为告警。
+- 分区失败返回 `UNAVAILABLE + null`，不得以零值或空数组伪装。
+- 不增加大型图表依赖；近 7 日图表使用 Vue + 原生 SVG/CSS。
+- 复杂统计必须使用固定数量的聚合或批量查询，禁止 N+1。
+- 迁移、`sql/init/01-schema.sql`、`02-indexes.sql` 和完整初始化 SQL 必须同步。
+- 遵守仓库 Git 规范：实施完成后只创建一个中文 Conventional Commit；各任务检查点不单独提交。
 
 ## Review Focus
 
-1. **健康离线冷备副本**：订单不计入“当前可用”，但不得产生制品不可读告警；Task 2 与 Task 3 的测试必须同时固定这两个结果。
-2. **过期且历史使用率过高的容量快照**：只能产生 `VOLUME_CAPACITY_UNKNOWN`，不能继续产生容量高告警；Task 3 覆盖抑制测试。
-3. **真实快照与另一次模拟包交叉关联**：不能拼成真实备份成果；Task 2 的 SQL 契约和聚合测试覆盖。
-4. **首次运行与缺失检查点**：全新无卷返回 `SETUP_REQUIRED`，账号同步启用但初始化后仍无检查点产生明确告警；Task 3、Task 4 覆盖。
-5. **查询部分失败**：不得用 `0`、空数组或“系统正常”掩盖，必须返回 `sections=UNAVAILABLE`、`null` 数据和 `UNKNOWN` 健康状态；Task 4 与 Task 6 覆盖。
+1. **降级备份口径**：`REAL + INCOMPLETE` 必须计入可恢复订单并单独拆分，不能排除或伪装为完整；Task 3、Task 4、Task 8 覆盖。
+2. **正常离线冷备**：当前不计可恢复但不告警，重新接入后自动恢复计数；Task 2、Task 3、Task 4 覆盖。
+3. **合法 `ARCHIVE_GUARD`**：匹配活动封存的保障卷与普通异常操作状态不同，首页、下载、恢复和备份预检结果必须一致；Task 2、Task 4 覆盖。
+4. **容量失败快照**：探测失败保留最后成功容量，在线汇总排除过期值，离线冷备标记为离线前快照；Task 1、Task 4、Task 8 覆盖。
+5. **历史与当前分离**：历史恢复失败、封存失败或卷后来转回 HOT 不得造成永久告警或历史丢失；Task 4、Task 5、Task 8 覆盖。
 
 ---
 
 ## 计划文件结构
 
-### 后端新增文件
+### 后端新增
 
-- `yigongbao-backup-server/sql/migration/2026-11-10-10-admin-overview-dashboard.sql`：容量成功观测时间和概览查询索引迁移。
-- `yigongbao-backup-server/src/main/java/com/yigongbao/backup/storage/volume/StorageVolumeCapacitySnapshotPolicy.java`：统一更新探测时间、错误和最后一次合法容量快照。
-- `yigongbao-backup-server/src/main/java/com/yigongbao/backup/admin/AdminOverviewView.java`：概览响应、告警、趋势、容量和数据质量只读 DTO。
-- `yigongbao-backup-server/src/main/java/com/yigongbao/backup/admin/AdminOverviewQueryMapper.java`：概览数据库聚合接口与行投影。
-- `yigongbao-backup-server/src/main/resources/mapper/AdminOverviewQueryMapper.xml`：真实备份、今日结果、趋势、制品质量和近期任务聚合 SQL。
-- `yigongbao-backup-server/src/main/java/com/yigongbao/backup/admin/OverviewTimePolicy.java`：今日/近 7 日边界、成功相对备份周期和账号同步陈旧判断。
-- `yigongbao-backup-server/src/main/java/com/yigongbao/backup/admin/OverviewStoragePolicy.java`：卷可读性、容量新鲜度、容量汇总和逐卷展示策略。
-- `yigongbao-backup-server/src/main/java/com/yigongbao/backup/admin/AdminOverviewAlertService.java`：当前有效告警、去重、抑制和健康级别推导。
-- `yigongbao-backup-server/src/main/java/com/yigongbao/backup/admin/AdminOverviewService.java`：分区查询编排、失败隔离、数据质量合并和最终响应。
-- `yigongbao-backup-server/src/main/java/com/yigongbao/backup/account/AccountSyncCheckpointInitializer.java`：应用启动时为启用的账号同步建立 `USER/IDLE` 检查点。
-- 对应的 `AdminOverview*Test.java`、策略测试和 SQL 契约测试。
+- `yigongbao-backup-server/sql/migration/2026-11-11-13-admin-overview-dashboard.sql`
+- `.../storage/volume/StorageVolumeCapacitySnapshotPolicy.java`
+- `.../storage/volume/StorageVolumeAccessPolicy.java`
+- `.../storage/volume/StorageVolumeAccessSqlPredicate.java`
+- `.../common/time/BusinessClock.java`
+- `.../common/time/BusinessTimeConfiguration.java`
+- `.../common/time/BusinessTimeCodec.java`
+- `.../admin/AdminOverviewView.java`
+- `.../admin/AdminOverviewQueryMapper.java`
+- `.../admin/AdminOverviewQuerySqlProvider.java`
+- `.../admin/OverviewTimePolicy.java`
+- `.../admin/OverviewStoragePolicy.java`
+- `.../admin/AdminOverviewAlertService.java`
+- `.../admin/AdminOverviewActivityService.java`
+- `.../admin/AdminOverviewService.java`
+- 对应后端测试类。
 
-### 前端新增文件
+### 前端新增
 
-- `yigongbao-backup-web/src/overviewModel.js`：概览数据规范化、容量格式化、健康文案、趋势数据和下钻目标的纯函数。
-- `yigongbao-backup-web/src/components/overview/OverviewHealthPanel.vue`：健康摘要和当前有效告警。
-- `yigongbao-backup-web/src/components/overview/OverviewMetricGrid.vue`：三张核心指标卡。
-- `yigongbao-backup-web/src/components/overview/OverviewStoragePanel.vue`：在线容量汇总和逐卷容量。
-- `yigongbao-backup-web/src/components/overview/OverviewTrendPanel.vue`：7 日订单结果与新增逻辑字节趋势。
-- `yigongbao-backup-web/src/components/overview/OverviewRecentJobs.vue`：最近 10 条任务与业务下钻。
-- `yigongbao-backup-web/test/overview.test.js`：模型、路由、组件契约和禁止项测试。
+- `yigongbao-backup-web/src/overviewModel.js`
+- `yigongbao-backup-web/src/components/overview/OverviewHealthPanel.vue`
+- `yigongbao-backup-web/src/components/overview/OverviewAlertList.vue`
+- `yigongbao-backup-web/src/components/overview/OverviewMetricGrid.vue`
+- `yigongbao-backup-web/src/components/overview/OverviewTrendPanel.vue`
+- `yigongbao-backup-web/src/components/overview/OverviewStoragePanel.vue`
+- `yigongbao-backup-web/src/components/overview/OverviewRecentActivity.vue`
+- `yigongbao-backup-web/src/components/overview/OverviewAutomationPanel.vue`
+- `yigongbao-backup-web/test/overview.test.js`
 
-### 主要修改文件
+### 主要修改
 
-- 容量：`StorageVolumeEntity.java`、`StorageVolumeHealthScheduler.java`、`StorageVolumeLifecycleService.java`、`AdminStorageVolumeController.java` 和三份初始化 SQL。
-- 概览 API：`AdminOverviewController.java`、`local-backup-v1.yaml`。
-- 下钻：`OrderController.java`、`AdminBackupController.java`、`PersistentJobService.java` 及对应测试。
-- 前端状态与路由：`routeStore.js`、`useBackupConsole.js`、`OverviewView.vue`、`StorageView.vue`、`BackupView.vue`、`OrdersView.vue`、`ColdStorageView.vue`、`AccountsView.vue`、`style-production.css`。
+- 后端：应用启动时区、数据源/Jackson 配置、容量实体/调度/生命周期、制品解析、备份预检、概览控制器、订单与任务筛选、OpenAPI、初始化 SQL。
+- 前端：`routeStore.js`、`useBackupConsole.js`、`useRestoreTasks.js`、`OverviewView.vue`、目标业务页面、`StatusBadge.js`、生产样式和架构测试。
 
 ---
 
-### Task 1: 持久化最后一次成功容量快照
+### Task 1: 建立最后成功容量快照事实
 
 **Files:**
-- Create: `yigongbao-backup-server/sql/migration/2026-11-10-10-admin-overview-dashboard.sql`
+- Create: `yigongbao-backup-server/sql/migration/2026-11-11-13-admin-overview-dashboard.sql`
 - Create: `yigongbao-backup-server/src/main/java/com/yigongbao/backup/storage/volume/StorageVolumeCapacitySnapshotPolicy.java`
-- Create: `yigongbao-backup-server/src/test/java/com/yigongbao/backup/storage/volume/AdminOverviewMigrationContractTest.java`
-- Create: `yigongbao-backup-server/src/test/java/com/yigongbao/backup/storage/volume/StorageVolumeCapacitySnapshotPolicyTest.java`
 - Modify: `yigongbao-backup-server/sql/init/01-schema.sql`
 - Modify: `yigongbao-backup-server/sql/init/02-indexes.sql`
 - Modify: `yigongbao-backup-server/sql/init/yigongbao-backup-full-init.sql`
@@ -83,355 +87,312 @@
 - Modify: `yigongbao-backup-server/src/main/java/com/yigongbao/backup/storage/volume/StorageVolumeHealthScheduler.java`
 - Modify: `yigongbao-backup-server/src/main/java/com/yigongbao/backup/storage/volume/StorageVolumeLifecycleService.java`
 - Modify: `yigongbao-backup-server/src/main/java/com/yigongbao/backup/admin/AdminStorageVolumeController.java`
-- Modify: `yigongbao-backup-server/src/test/java/com/yigongbao/backup/storage/volume/StorageVolumeHealthSchedulerTest.java`
-- Modify: `yigongbao-backup-server/src/test/java/com/yigongbao/backup/storage/volume/StorageVolumeLifecycleServiceTest.java`
+- Test: `.../storage/volume/AdminOverviewMigrationContractTest.java`
+- Test: `.../storage/volume/StorageVolumeCapacitySnapshotPolicyTest.java`
 
 **Interfaces:**
 - Produces: `StorageVolumeEntity#getCapacityObservedAt()`；`StorageVolumeCapacitySnapshotPolicy.apply(StorageVolumeEntity, HealthSnapshot, LocalDateTime)`。
-- Consumes: `StorageVolumeHealthService.HealthSnapshot` 的 `accessible/totalBytes/usableBytes/errorCode/errorMessage`。
+- Consumes: `StorageVolumeHealthService.HealthSnapshot`。
 
-- [ ] **Step 1: 写失败的迁移契约测试**
+- [ ] **Step 1: 写迁移契约失败测试**
 
-  在 `AdminOverviewMigrationContractTest` 断言迁移和三份初始化 SQL 均包含 `capacity_observed_at DATETIME(3)`；迁移需要用现有合法容量的 `last_probed_at` 回填，并包含以下索引：
-
-  - `idx_bk_job_overview_finished(job_type,finished_at,id,is_deleted)`；
-  - `idx_bk_job_order_overview(source_order_id,status,job_id,is_deleted)`；
-  - `idx_bk_package_overview(backup_mode,status,snapshot_id,id,is_deleted)`；
-  - `idx_bk_artifact_overview(artifact_type,lifecycle,state,artifact_id,storage_volume_id,is_deleted)`。
+  断言迁移同时包含 `capacity_observed_at`、回填和概览索引；`01-schema.sql` 包含容量列，`02-indexes.sql` 包含概览索引，`yigongbao-backup-full-init.sql` 同时包含两者；回填只处理合法的 `total_bytes/usable_bytes`。
 
 - [ ] **Step 2: 运行迁移契约测试并确认失败**
 
-  Run: `mvn -Dtest=AdminOverviewMigrationContractTest test`
+  Run: `mvn -f yigongbao-backup-server/pom.xml -Dtest=AdminOverviewMigrationContractTest test`
 
-  Expected: FAIL，提示 `capacity_observed_at` 或索引不存在。
+  Expected: FAIL，缺少列或索引。
 
 - [ ] **Step 3: 写容量快照策略失败测试**
 
-  `StorageVolumeCapacitySnapshotPolicyTest` 至少固定：
+  固定以下行为：只有 `totalBytes > 0` 且 `0 <= usableBytes <= totalBytes` 才是合法成功，并同时更新容量、探测时间和成功观测时间；失败只更新探测时间和错误；非法容量不覆盖历史；离线冷备保留历史容量。使用率用防溢出的十进制定点运算四舍五入保留 1 位小数。
 
-  - 成功且 `total>0`、`0<=usable<=total` 时同时更新容量、`lastProbedAt` 和 `capacityObservedAt`；
-  - 探测失败只更新 `lastProbedAt/lastError*`，保留已有容量和 `capacityObservedAt`；
-  - 非法容量不覆盖最后合法快照；
-  - 主动离线卷探测失败后仍可展示离线前快照。
-
-- [ ] **Step 4: 运行容量策略测试并确认失败**
-
-  Run: `mvn -Dtest=StorageVolumeCapacitySnapshotPolicyTest test`
-
-  Expected: FAIL，类或方法尚不存在。
-
-- [ ] **Step 5: 实现迁移、实体字段和统一策略**
-
-  实现签名：
+- [ ] **Step 4: 实现容量字段、迁移和策略**
 
   ```java
   public final class StorageVolumeCapacitySnapshotPolicy {
       public static void apply(StorageVolumeEntity volume,
                                StorageVolumeHealthService.HealthSnapshot snapshot,
-                               LocalDateTime probedAt);
-      public static boolean legalCapacity(StorageVolumeHealthService.HealthSnapshot snapshot);
+                               LocalDateTime observedAt);
+      public static boolean legal(StorageVolumeHealthService.HealthSnapshot snapshot);
   }
   ```
 
-  `apply` 始终更新探测尝试时间和错误；只有合法成功快照才更新 `totalBytes/usableBytes/capacityObservedAt`。迁移回填只对两项容量都非空且合法的记录执行。
+- [ ] **Step 5: 替换容量写入逻辑**
 
-- [ ] **Step 6: 替换重复容量更新逻辑**
+  `StorageVolumeHealthScheduler`、`StorageVolumeLifecycleService` 和主动探测路径统一调用策略；列表 DTO 增加 `capacityObservedAt`。
 
-  `StorageVolumeHealthScheduler` 和 `StorageVolumeLifecycleService` 统一调用策略；删除“探测失败就把容量设为 null”的代码。`AdminStorageVolumeController.StorageVolumeView` 增加 `capacityObservedAt`，但不执行新探测。
+- [ ] **Step 6: 运行容量与卷回归测试**
 
-- [ ] **Step 7: 运行容量相关测试**
-
-  Run: `mvn -Dtest=AdminOverviewMigrationContractTest,StorageVolumeCapacitySnapshotPolicyTest,StorageVolumeHealthSchedulerTest,StorageVolumeLifecycleServiceTest,AdminStorageVolumeControllerTest test`
-
-  Expected: PASS。
-
-- [ ] **Step 8: 阶段检查点**
-
-  检查 `git diff --check`；不要提交，保留到最终单一提交。
-
----
-
-### Task 2: 建立可信概览查询层
-
-**Files:**
-- Create: `yigongbao-backup-server/src/main/java/com/yigongbao/backup/admin/AdminOverviewView.java`
-- Create: `yigongbao-backup-server/src/main/java/com/yigongbao/backup/admin/AdminOverviewQueryMapper.java`
-- Create: `yigongbao-backup-server/src/main/resources/mapper/AdminOverviewQueryMapper.xml`
-- Create: `yigongbao-backup-server/src/test/java/com/yigongbao/backup/admin/AdminOverviewQueryMapperSqlContractTest.java`
-- Create: `yigongbao-backup-server/src/test/java/com/yigongbao/backup/admin/AdminOverviewQueryProjectionTest.java`
-
-**Interfaces:**
-- Produces: `AdminOverviewQueryMapper` 的摘要、7 日结果、趋势字节、制品质量和近期任务批量查询；`AdminOverviewView` 全部只读响应类型。
-- Consumes: Task 1 的 `capacityObservedAt` 字段以及现有订单、包、副本、卷、任务表。
-
-- [ ] **Step 1: 定义响应 DTO 失败编译测试**
-
-  在 `AdminOverviewQueryProjectionTest` 直接构造并断言以下记录的访问器：
-
-  ```java
-  AdminOverviewView
-  AdminOverviewView.HealthView
-  AdminOverviewView.SummaryView
-  AdminOverviewView.TodayBackupView
-  AdminOverviewView.StorageSummaryView
-  AdminOverviewView.StorageVolumeView
-  AdminOverviewView.AlertView
-  AdminOverviewView.TrendPointView
-  AdminOverviewView.RecentJobView
-  AdminOverviewView.DataQualityView
-  AdminOverviewView.DataQualityMessageView
-  AdminOverviewView.SectionErrorView
-  ```
-
-  `AdminOverviewView` 顶层字段必须与需求响应结构一致：`observedAt/health/sections/summary/storageSummary/storageVolumes/activeAlerts/backupTrend/recentJobs/dataQuality/sectionErrors`。
-
-- [ ] **Step 2: 运行 DTO 测试并确认失败**
-
-  Run: `mvn -Dtest=AdminOverviewQueryProjectionTest test`
-
-  Expected: FAIL，DTO 尚不存在。
-
-- [ ] **Step 3: 定义 Mapper 精确接口**
-
-  ```java
-  ReadableSummaryRow selectReadableSummary();
-  ManagedArtifactRow selectManagedArtifactSummary();
-  List<BackupResultBucketRow> selectBackupResultBuckets(LocalDateTime from, LocalDateTime to);
-  List<BackupBytesBucketRow> selectBackupBytesBuckets(LocalDateTime from, LocalDateTime to);
-  ArtifactAlertAggregateRow selectArtifactAlertAggregate();
-  List<RecentJobRow> selectRecentJobs(int limit);
-  ```
-
-  `BackupResultBucketRow` 按日期和最终订单状态返回；`RecentJobRow` 一次关联任务目标卷，不允许服务层逐任务查卷。
-
-- [ ] **Step 4: 写 SQL 契约失败测试**
-
-  `AdminOverviewQueryMapperSqlContractTest` 读取 XML 并断言：
-
-  - 真实成果严格使用 `snapshot.id -> package.snapshot_id -> copy.artifact_id`；快照与包都为 `REAL`；
-  - 可读副本只接受 `ACTIVE + PRESENT/VERIFIED` 和需求定义的卷真值表；合法 ACTIVE `ARCHIVE_GUARD` 有明确关联判断；
-  - 使用 `ROW_NUMBER() OVER (PARTITION BY source_order_id ...)` 固定最新包及今日/每日最后尝试；
-  - 正常离线冷备不算可读，但制品异常聚合排除健康主动离线冷备；
-  - `managedArtifactBytes` 只统计能关联未删除卷的健康活动副本；
-  - 趋势字节只统计 `REAL + AVAILABLE` 包，并按 `backup_completed_at` 归日；
-  - 查询没有绝对路径、文件函数或用户配置原文。
-
-- [ ] **Step 5: 运行 SQL 契约测试并确认失败**
-
-  Run: `mvn -Dtest=AdminOverviewQueryMapperSqlContractTest test`
-
-  Expected: FAIL，Mapper/XML 尚不存在。
-
-- [ ] **Step 6: 实现 DTO、Mapper 和 XML 聚合**
-
-  SQL 使用 MySQL 8 CTE 和窗口函数：订单数按不同 `source_order_id`；逻辑文件数只取每个订单最新可读真实包；今日/趋势按订单每天最后一次已终结真实任务结果；近期任务固定 `LIMIT 10`、`requested_at DESC,id DESC`。未知 `file_count/size/completed_at` 只返回质量计数，不使用 `COALESCE(...,0)` 伪造完整值。
-
-- [ ] **Step 7: 增加真实/模拟交叉和离线冷备投影测试**
-
-  在 `AdminOverviewQueryProjectionTest` 用 Mapper 行投影组装器或最小 H2 数据集固定 Review Focus 1、3：真实快照不能借用模拟包；只有健康离线冷备副本时“当前可用订单”为 0，但异常制品数也为 0。
-
-- [ ] **Step 8: 运行查询层测试**
-
-  Run: `mvn -Dtest=AdminOverviewQueryMapperSqlContractTest,AdminOverviewQueryProjectionTest test`
-
-  Expected: PASS。
-
-- [ ] **Step 9: 阶段检查点**
-
-  检查查询数量固定、XML 无逐行子查询循环；不要提交。
-
----
-
-### Task 3: 实现时间、容量、告警与健康策略
-
-**Files:**
-- Create: `yigongbao-backup-server/src/main/java/com/yigongbao/backup/admin/OverviewTimePolicy.java`
-- Create: `yigongbao-backup-server/src/main/java/com/yigongbao/backup/admin/OverviewStoragePolicy.java`
-- Create: `yigongbao-backup-server/src/main/java/com/yigongbao/backup/admin/AdminOverviewAlertService.java`
-- Create: `yigongbao-backup-server/src/test/java/com/yigongbao/backup/admin/OverviewTimePolicyTest.java`
-- Create: `yigongbao-backup-server/src/test/java/com/yigongbao/backup/admin/OverviewStoragePolicyTest.java`
-- Create: `yigongbao-backup-server/src/test/java/com/yigongbao/backup/admin/AdminOverviewAlertServiceTest.java`
-
-**Interfaces:**
-- Produces: 纯函数时间边界、卷投影、告警列表、数据质量严重度与最终健康级别。
-- Consumes: Task 1 的容量时间、Task 2 DTO/查询行及 `RuntimeConfigService` 提供的已校验配置值。
-
-- [ ] **Step 1: 写时间策略失败测试**
-
-  覆盖：
-
-  - `todayWindow(now)` 与 `sevenDayWindow(now)` 使用 `Asia/Shanghai`；
-  - `nextBackupDue(lastSuccess,startTime,intervalDays,now)` 使用“成功相对周期”；跨日延迟成功重置下一周期；
-  - 无成功记录时锚定今天 `startTime`；`now == due+120m` 即逾期；
-  - 账号同步阈值为 `max(delayMinutes*3,60m)`；优先锚定成功、其次尝试、最后检查点创建时间。
-
-- [ ] **Step 2: 写存储策略失败测试**
-
-  覆盖：
-
-  - 快照新鲜度 `max(healthInterval*3,15m)`；
-  - 汇总排除离线、退役、停用、未知和过期卷；
-  - 离线冷备保留 `lastKnown=true` 的展示值但不计入汇总；
-  - `ARCHIVE_GUARD` 只有在唯一 ACTIVE 且关联合法运行中封存时允许读写；
-  - 负数、`usable>total`、`total=0` 均为非法容量。
-
-- [ ] **Step 3: 写告警失败测试**
-
-  对第 9.3 节每个告警至少写一组触发/恢复测试，并额外固定：
-
-  - 从未纳管卷时为 `SETUP_REQUIRED`，纳管后 ACTIVE 数量非 1 为 `CRITICAL`；
-  - 退役 ACTIVE 告警，退役/停用非 ACTIVE 不产生普通卷告警；
-  - 过期的 95% 旧快照只产生 `VOLUME_CAPACITY_UNKNOWN`；
-  - `FAILED` 抑制备份逾期/同步陈旧；
-  - 只有健康主动离线冷备副本不产生 `UNREADABLE_ARTIFACTS`；
-  - 封存失败和同源卷 `REPAIR_REQUIRED` 合并；
-  - `BLOCKING` 数据质量使健康为 `UNKNOWN`，`WARNING` 质量使健康至少为 `WARNING`；
-  - 同一告警成员变化不改变 `alertKey`。
-
-- [ ] **Step 4: 运行策略测试并确认失败**
-
-  Run: `mvn -Dtest=OverviewTimePolicyTest,OverviewStoragePolicyTest,AdminOverviewAlertServiceTest test`
-
-  Expected: FAIL，策略尚不存在。
-
-- [ ] **Step 5: 实现纯策略接口**
-
-  ```java
-  public final class OverviewTimePolicy {
-      DateWindow todayWindow(LocalDateTime now);
-      DateWindow sevenDayWindow(LocalDateTime now);
-      LocalDateTime nextBackupDue(LocalDateTime lastSuccess, LocalTime start, long intervalDays, LocalDateTime now);
-      boolean accountSyncStale(BkSyncCursorEntity cursor, long delayMinutes, LocalDateTime now);
-  }
-
-  public final class OverviewStoragePolicy {
-      boolean capacityFresh(StorageVolumeEntity volume, int healthIntervalMinutes, LocalDateTime now);
-      StorageProjection project(StorageVolumeEntity volume, ArchiveGuardContext guard, LocalDateTime now, int healthIntervalMinutes);
-      StorageSummaryView summarize(List<StorageProjection> volumes);
-  }
-
-  public final class AdminOverviewAlertService {
-      AlertEvaluation evaluate(AlertContext context);
-  }
-  ```
-
-  `AlertEvaluation` 同时返回排序去重后的告警和健康级别；告警文本为安全中文摘要，不包含根路径、marker JSON 或堆栈。
-
-- [ ] **Step 6: 运行全部策略测试**
-
-  Run: `mvn -Dtest=OverviewTimePolicyTest,OverviewStoragePolicyTest,AdminOverviewAlertServiceTest test`
+  Run: `mvn -f yigongbao-backup-server/pom.xml -Dtest=AdminOverviewMigrationContractTest,StorageVolumeCapacitySnapshotPolicyTest,StorageVolumeHealthSchedulerTest,StorageVolumeLifecycleServiceTest,AdminStorageVolumeControllerTest test`
 
   Expected: PASS。
 
 - [ ] **Step 7: 阶段检查点**
 
-  对照需求 §6、§8、§9、§13.3 逐项勾选；不要提交。
+  Run: `git diff --check`
+
+  Expected: 无输出；不提交。
 
 ---
 
-### Task 4: 编排概览接口并初始化同步检查点
+### Task 2: 统一卷访问与封存保护语义
 
 **Files:**
-- Create: `yigongbao-backup-server/src/main/java/com/yigongbao/backup/admin/AdminOverviewService.java`
-- Create: `yigongbao-backup-server/src/main/java/com/yigongbao/backup/account/AccountSyncCheckpointInitializer.java`
-- Create: `yigongbao-backup-server/src/test/java/com/yigongbao/backup/admin/AdminOverviewServiceTest.java`
-- Create: `yigongbao-backup-server/src/test/java/com/yigongbao/backup/admin/AdminOverviewControllerTest.java`
-- Create: `yigongbao-backup-server/src/test/java/com/yigongbao/backup/account/AccountSyncCheckpointInitializerTest.java`
-- Modify: `yigongbao-backup-server/src/main/java/com/yigongbao/backup/admin/AdminOverviewController.java`
-- Modify: `yigongbao-backup-server/src/main/java/com/yigongbao/backup/account/AccountSyncCheckpointService.java`
-- Modify: `yigongbao-backup-server/src/main/resources/openapi/local-backup-v1.yaml`
+- Create: `yigongbao-backup-server/src/main/java/com/yigongbao/backup/storage/volume/StorageVolumeAccessPolicy.java`
+- Create: `.../storage/volume/StorageVolumeAccessSqlPredicate.java`
+- Modify: `.../storage/location/ArtifactReplicaResolver.java`
+- Modify: `.../backup/BackupTargetPreflightService.java`
+- Modify: `.../storage/volume/ActiveVolumeSelectionService.java`
+- Modify: `.../storage/volume/StorageVolumeLifecycleService.java`
+- Test: `.../storage/volume/StorageVolumeAccessPolicyTest.java`
+- Test: existing resolver, preflight and lifecycle tests.
 
 **Interfaces:**
-- Produces: `AdminOverviewService.overview(): AdminOverviewView` 和保持现有路径的 `GET /api/v1/admin/overview`。
-- Consumes: Task 2 查询、Task 3 策略、现有 `StorageVolumeMapper/BkSyncCursorMapper/VolumeArchiveMapper`。
+- Produces: `StorageVolumeAccessPolicy.AccessDecision`、`readable(...)`、`writable(...)`、`standbyReady(...)`、`expectedOffline(...)`，以及同源的可读性 SQL 谓词。
+- Consumes: `StorageVolumeEntity` 和可选 `ArchiveGuardContext`。
 
-- [ ] **Step 1: 写服务编排失败测试**
+- [ ] **Step 1: 写共享策略失败测试**
 
-  `AdminOverviewServiceTest` 固定：
+  覆盖 HOT/COLD/IMPORT、ONLINE/OFFLINE/UNAVAILABLE、ACTIVE/STANDBY/READ_ONLY/DISABLED、RETIRED、全部操作状态、正常离线冷备、合法和非法 `ARCHIVE_GUARD`。对完整状态矩阵同时执行 Java 判定和 SQL 谓词集成查询，断言结果逐项一致。
 
-  - 正常数据返回 7 个趋势点、最多 10 个任务和 `sections` 全部 AVAILABLE；
-  - 单个查询分区抛异常时其他分区仍返回，失败分区数据为 `null`、状态 UNAVAILABLE，并写入安全 `sectionErrors`；
-  - 告警分区失败时健康为 UNKNOWN，绝不返回 NORMAL；
-  - 数据质量问题保留已知值和受影响数量；
-  - 服务依赖中没有 `StorageProbe`，且测试不允许文件系统交互；
-  - 近期任务未知类型不会使整个响应失败。
-
-- [ ] **Step 2: 写控制器失败测试**
-
-  使用 mock `AdminOverviewService` 验证管理员鉴权、统一 `ApiResponse`、请求 ID；反射或构造器断言 `AdminOverviewController` 不再依赖 `StorageProbe/PersistentConfigService/StorageVolumeMapper`，不再返回原始 `configs`。
-
-- [ ] **Step 3: 写检查点初始化失败测试**
-
-  `AccountSyncCheckpointInitializerTest` 覆盖：同步启用且不存在 `USER` 时创建 `IDLE`；已存在时不覆盖游标/成功时间；同步关闭时不创建；初始化异常有清晰日志且概览可通过缺失告警暴露。
-
-- [ ] **Step 4: 运行测试并确认失败**
-
-  Run: `mvn -Dtest=AdminOverviewServiceTest,AdminOverviewControllerTest,AccountSyncCheckpointInitializerTest test`
-
-  Expected: FAIL，新服务尚不存在。
-
-- [ ] **Step 5: 实现分区编排**
-
-  `AdminOverviewService` 为 `summary/storage/activeAlerts/backupTrend/recentJobs` 分别执行有边界的数据库查询。内部使用：
+- [ ] **Step 2: 定义策略接口**
 
   ```java
-  private <T> SectionResult<T> section(String name, Supplier<T> query);
+  public final class StorageVolumeAccessPolicy {
+      public AccessDecision readable(StorageVolumeEntity volume, ArchiveGuardContext guard);
+      public AccessDecision writable(StorageVolumeEntity volume, ArchiveGuardContext guard);
+      public boolean standbyReady(StorageVolumeEntity volume, boolean capacityFresh, int threshold);
+      public boolean expectedOffline(StorageVolumeEntity volume);
+      public StorageVolumeAccessSqlPredicate readableSql(SqlAliases aliases);
+
+      public record ArchiveGuardContext(Long archiveId, Long successorVolumeId, String phase, boolean active) {}
+      public record AccessDecision(boolean allowed, String code, String message) {}
+  }
   ```
 
-  捕获运行异常时记录 requestId、分区、耗时和异常类型，不输出配置原文与路径；返回安全错误码。数据质量问题与查询失败分别进入 `dataQuality` 和 `sectionErrors`。
+  Java 判定与 SQL 谓词必须由同一规则定义构建，SQL Provider 只能调用 `readableSql(...)`，不得自行拼写第二套卷状态真值表。谓词必须支持关联活动封存上下文，供后续订单列表在数据库分页和 `COUNT` 前使用。
 
-- [ ] **Step 6: 实现控制器和启动初始化**
+- [ ] **Step 3: 实现并接入制品副本解析**
 
-  控制器只保留管理员鉴权、调用和响应。`AccountSyncCheckpointService.ensureInitialized()` 使用事务锁安全创建；`AccountSyncCheckpointInitializer` 在应用 ready 前调用。更新 OpenAPI 的 Overview schema、五种 health level、分区状态和告警字段。
+  批量读取相关 `operation_ref_id` 的封存记录，避免逐副本查询；`ArtifactReplicaResolver` 使用策略决定当前可读性。
 
-- [ ] **Step 7: 运行后端概览测试**
+- [ ] **Step 4: 接入备份预检和卷选择**
 
-  Run: `mvn "-Dtest=AdminOverview*Test,Overview*Test,AccountSyncCheckpointInitializerTest" test`
+  状态判断复用策略，Marker、实际容量和可写探测仍只发生在创建/执行写任务的原业务路径，不进入首页。
+
+- [ ] **Step 5: 运行共享策略回归测试**
+
+  Run: `mvn -f yigongbao-backup-server/pom.xml -Dtest=StorageVolumeAccessPolicyTest,StorageVolumeAccessSqlPredicateTest,ArtifactReplicaResolverTest,BackupTargetPreflightServiceTest,ActiveVolumeSelectionServiceTest,StorageVolumeLifecycleServiceTest test`
+
+  Expected: PASS，首页后续可以复用相同决策。
+
+- [ ] **Step 6: 阶段检查点**
+
+  搜索并审查仍然散落的 `operationStatus == IDLE` 可用性判断和 SQL 状态真值表；保留纯展示判断，业务判断必须迁移到共享策略。确认 Java/SQL 状态矩阵等价；不提交。
+
+---
+
+### Task 3: 建立概览响应和聚合查询层
+
+**Files:**
+- Create: `.../admin/AdminOverviewView.java`
+- Create: `.../admin/AdminOverviewQueryMapper.java`
+- Create: `.../admin/AdminOverviewQuerySqlProvider.java`
+- Test: `.../admin/AdminOverviewProjectionTest.java`
+- Test: `.../admin/AdminOverviewQueryMapperSqlContractTest.java`
+
+**Interfaces:**
+- Produces: 完整只读 DTO；可恢复性候选行、今日结束任务中的订单结果、7 日结果、趋势容量和近期任务聚合行。
+- Consumes: Task 1 容量字段、Task 2 访问策略需要的批量事实。
+
+- [ ] **Step 1: 写 DTO 投影失败测试**
+
+  固定顶层字段：`observedAt/health/sections/summary/storage/activeAlerts/backupTrend/automation/recentActivities/dataQuality/sectionErrors`；固定规格中的完整/降级拆分和活动模型字段。
+
+- [ ] **Step 2: 定义 Mapper 接口**
+
+  ```java
+  List<ArtifactReplicaCandidateRow> selectArtifactReplicaCandidates();
+  ManagedArtifactSummaryRow selectManagedArtifactSummary();
+  List<BackupResultBucketRow> selectBackupResultBuckets(LocalDateTime from, LocalDateTime to);
+  List<BackupBytesBucketRow> selectBackupBytesBuckets(LocalDateTime from, LocalDateTime to);
+  List<RecentJobRow> selectRecentJobs(int limit);
+  RecentJobRow selectLatestAutoCleanup();
+  ```
+
+  `ArtifactReplicaCandidateRow` 至少保留 `sourceOrderId/snapshotId/packageId/backupCompletedAt/completeness/fileCount/copyId/copyState/copyLifecycle/volumeId`、全部卷状态、`operationRefId` 和封存上下文。Java 投影先调用 Task 2 共享策略，再按订单归并；制品异常复用同一分类结果。
+
+- [ ] **Step 3: 写 SQL 契约失败测试**
+
+  断言项目仍无 Mapper XML；真实链路为 snapshot → package → active copy → volume；候选行保留 Java 决策所需维度；完整/降级按 `backup_completeness`；模拟排除；订单结果按每日每订单最终尝试；近期任务批量关联订单和卷；SQL 不包含卷可读真值表、文件函数或绝对路径。
+
+- [ ] **Step 4: 实现 DTO、注解 Mapper 和 SQL Provider**
+
+  遵守 `application.yml` 的“禁止 Mapper XML”约束，使用 `@Select`/`@SelectProvider` 与 MySQL 8 CTE、窗口函数。SQL 只筛选正式候选并保留逐包/副本决策维度；通过左连接或等价方式保留零活动副本的正式包。Java 投影用 Task 2 策略完成 `readable → abnormalUnreadable → temporarilyOffline` 互斥分类，再按完成时间非空优先、`backupCompletedAt/snapshotId/packageId` 降序选择最新可读代表包。查询数量必须固定。
+
+- [ ] **Step 5: 增加完整/降级/模拟与离线冷备投影测试**
+
+  覆盖规格 Review Focus 1、2，并固定物理副本容量与逻辑文件数量不混算。补充旧完整+新降级、新包不可读但旧包可读、离线冷备+损坏热备、零活动副本，以及 `complete + incomplete = total`。
+
+- [ ] **Step 6: 运行查询层测试**
+
+  Run: `mvn -f yigongbao-backup-server/pom.xml -Dtest=AdminOverviewProjectionTest,AdminOverviewQueryMapperSqlContractTest test`
 
   Expected: PASS。
 
-- [ ] **Step 8: 阶段检查点**
+- [ ] **Step 7: 阶段检查点**
 
-  用 `rg "StorageProbe|probe\(" AdminOverview*.java` 确认概览链路不探测；不要提交。
+  检查注解/Provider SQL 无逐记录相关子查询、无未索引无界扫描、无卷可读性真值表；用 10 万正式包/30 万副本验证固定查询数和候选投影耗时；不提交。
 
 ---
 
-### Task 5: 完成首页下钻的后端筛选契约
+### Task 4: 实现时间、存储、活动和告警策略
 
 **Files:**
-- Modify: `yigongbao-backup-server/src/main/java/com/yigongbao/backup/order/OrderController.java`
-- Modify: `yigongbao-backup-server/src/main/java/com/yigongbao/backup/admin/AdminBackupController.java`
-- Modify: `yigongbao-backup-server/src/main/java/com/yigongbao/backup/job/PersistentJobService.java`
-- Modify: `yigongbao-backup-server/src/test/java/com/yigongbao/backup/order/OrderControllerFilterTest.java`
-- Modify: `yigongbao-backup-server/src/test/java/com/yigongbao/backup/admin/AdminBackupControllerTest.java`
-- Modify: `yigongbao-backup-server/src/test/java/com/yigongbao/backup/job/PersistentJobServiceTest.java`
+- Create: `.../common/time/BusinessClock.java`
+- Create: `.../common/time/BusinessTimeConfiguration.java`
+- Create: `.../common/time/BusinessTimeCodec.java`
+- Create: `.../admin/OverviewTimePolicy.java`
+- Create: `.../admin/OverviewStoragePolicy.java`
+- Create: `.../admin/AdminOverviewActivityService.java`
+- Create: `.../admin/AdminOverviewAlertService.java`
+- Modify: `.../BackupServerApplication.java`
+- Modify: `.../resources/application.yml`
+- Modify: `yigongbao-backup-server/.env.example`
+- Modify: `.../backup/ScheduledBackupService.java`
+- Modify: `.../config/PersistentConfigService.java`
+- Modify: `.../job/PersistentJobService.java`
+- Modify: `.../cleanup/CleanupTaskService.java`
+- Modify: `yigongbao-backup-server/sql/init/01-schema.sql`
+- Modify: `yigongbao-backup-server/sql/init/04-functional-config-defaults.sql`
+- Modify: `yigongbao-backup-server/sql/init/yigongbao-backup-full-init.sql`
+- Test: 时间配置、调度器及对应四个策略/服务测试类。
 
 **Interfaces:**
-- Produces: 订单页 `backupMode/storageAccessible/storageIssue` 筛选；备份任务页 `finishedFrom/finishedTo/orderResult/jobId` 筛选。
-- Consumes: `AdminOverviewView.AlertView.actionRoute/actionQuery` 约定的字符串参数。
+- Produces: 日期窗口、计划槽位、存储投影、统一活动、当前告警和健康级别。
+- Consumes: Task 1–3 产生的事实与 DTO。
+
+- [ ] **Step 1: 写时间策略失败测试**
+
+  测试先把宿主默认时区设为 UTC，再初始化应用时区，覆盖进程/JDBC/Jackson/三个可独立初始化 SQL 入口均为上海、已有 `LocalDateTime.now()` 和 MyBatis 填充写入上海时间、数据库 `DATETIME` 与 `Instant` 双向转换、今日/7 日与 UTC 日期边界。自动化覆盖当前有效开关配置 `changed_at`、首次应执行时间、配置时间缺失、正常周期、错过不补跑，以及强制扫描成功后按“成功日期 + 周期天数 + 配置开始时间”计算下个槽位。
+
+- [ ] **Step 2: 定义时间策略**
+
+  ```java
+  public final class OverviewTimePolicy {
+      public OverviewTimePolicy(BusinessClock businessClock);
+      public DateWindow today();
+      public DateWindow sevenDays();
+      public BackupScheduleState backupSchedule(BackupScheduleInput input);
+      public boolean accountSyncStale(AccountSyncInput input);
+      public boolean capacityFresh(LocalDateTime capacityObservedAt, int intervalMinutes);
+  }
+  ```
+
+  `BackupServerApplication.main` 在调用 `SpringApplication.run` 前执行 `BusinessTimeConfiguration.initializeProcessTimezone()`；`application.yml` 固定 Jackson 时区，并为每条数据库连接执行 `SET time_zone = '+08:00'`；`01-schema.sql`、`04-functional-config-defaults.sql` 和 `yigongbao-backup-full-init.sql` 各自在开头设置会话时区并逐文件做契约测试；`.env.example` 不再声明 UTC。`BusinessClock` 仅为概览纯策略提供可替换 `Clock`，生产固定 `ZoneId.of("Asia/Shanghai")`。`BusinessTimeCodec` 统一数据库 `DATETIME` 与 `Instant` 的上海时区转换；审查并替换 `PersistentConfigService`、`PersistentJobService`、`CleanupTaskService` 中把数据库本地时间直接按 UTC 解释的代码。`ScheduledBackupService` 的订单截止时间属于外部 UTC 协议，但必须先把上海 `LocalDateTime` 绑定 `Asia/Shanghai`，再转换为同一瞬间的 UTC `OffsetDateTime`，禁止直接 `atOffset(ZoneOffset.UTC)`；测试精确断言 `2026-11-04 00:00 Asia/Shanghai` 转为 `2026-11-03T16:00Z`。这样无需一次性改写全部现有 `LocalDateTime.now()` 调用，但所有权威时间写入与读取都遵守同一语义。
+
+  `BackupScheduleInput` 和 `AccountSyncInput` 必须包含当前有效开关配置行的 `changed_at` 作为 `enabledAt`。自动备份首次应执行时间是不早于 `enabledAt` 的第一个配置计划分钟；账号同步是 `enabledAt + syncDelay`。配置行或时间缺失时返回 `UNKNOWN` 数据质量状态，不产生缺失检查点告警。
+
+- [ ] **Step 3: 写存储与活动策略失败测试**
+
+  固定活动卷、备用卷、冷备介质、在线容量、成功封存历史，以及 `bk_job` 与 `bk_volume_archive` 合并排序、未知任务类型降级展示。
+
+- [ ] **Step 4: 写告警失败测试**
+
+  对规格全部告警逐一覆盖触发、恢复、抑制、去重和稳定 `alertKey`；特别覆盖检查点缺失抑制失败/错过、明确失败抑制同槽位错过、首次启用未到首次应执行时间不告警、启用时间未知返回 `UNKNOWN`、历史失败任务不告警、封存失败但卷已修复不告警、正常离线冷备不告警。
+
+- [ ] **Step 5: 实现四个纯策略/服务**
+
+  `AdminOverviewActivityService` 固定最多返回 10 条；`AdminOverviewAlertService.evaluate(AlertContext)` 同时返回排序后的告警和健康级别。
+
+- [ ] **Step 6: 运行策略测试**
+
+  Run: `mvn -f yigongbao-backup-server/pom.xml -Dtest=BusinessTimeConfigurationTest,BusinessTimeCodecTest,OverviewTimePolicyTest,ScheduledBackupServiceTest,MybatisFillConfigTest,PersistentConfigServiceTest,PersistentJobServiceTest,CleanupTaskServiceTest,OverviewStoragePolicyTest,AdminOverviewActivityServiceTest,AdminOverviewAlertServiceTest test`
+
+  Expected: PASS。
+
+- [ ] **Step 7: 阶段检查点**
+
+  对照规格 §§6–12 检查每个字段和规则都有测试；不提交。
+
+---
+
+### Task 5: 编排概览服务和接口
+
+**Files:**
+- Create: `.../admin/AdminOverviewService.java`
+- Modify: `.../admin/AdminOverviewController.java`
+- Modify: `.../resources/openapi/local-backup-v1.yaml`
+- Test: `.../admin/AdminOverviewServiceTest.java`
+- Test: `.../admin/AdminOverviewControllerTest.java`
+
+**Interfaces:**
+- Produces: `AdminOverviewService.overview(boolean refresh, String requestId): AdminOverviewView`。
+- Consumes: Task 1–4 全部能力及现有配置、卷、封存和同步 Mapper。
+
+- [ ] **Step 1: 写服务编排失败测试**
+
+  覆盖正常响应、7 个趋势点、最多 10 条活动、完整/降级摘要、单分区失败、告警分区失败、数据质量、短缓存和 `refresh=true` 绕过缓存。连续两个不同 requestId 命中同一业务缓存时，响应及 `sectionErrors` 必须使用各自当前 requestId，同时保持首次查询的真实 `observedAt`，不能伪报数据新鲜度。
+
+- [ ] **Step 2: 写控制器失败测试**
+
+  验证管理员鉴权、统一 `ApiResponse`、requestId、refresh 参数；反射断言控制器不依赖 `StorageProbe/PersistentConfigService/StorageVolumeMapper`，响应不含原始 `configs`。
+
+- [ ] **Step 3: 实现分区编排和缓存**
+
+  ```java
+  public AdminOverviewView overview(boolean refresh, String requestId);
+  private <T> SectionResult<T> section(String name, Supplier<T> query, String requestId);
+  ```
+
+  缓存最长 30 秒并保存业务分区结果及其真实 `observedAt`；命中时只重新绑定当前 requestId 和请求关联错误，不重置观察时间。分区异常记录 requestId、分区、耗时和异常类型，返回脱敏安全错误；正常请求不写审计、不输出逐记录 INFO 日志。
+
+- [ ] **Step 4: 重写控制器和 OpenAPI**
+
+  删除实时探测、阈值解析和配置列表返回；补齐所有 DTO schema、健康级别、分区状态和活动类型。
+
+- [ ] **Step 5: 运行概览后端测试**
+
+  Run: `mvn -f yigongbao-backup-server/pom.xml "-Dtest=AdminOverview*Test,Overview*Test" test`
+
+  Expected: PASS。
+
+- [ ] **Step 6: 验证概览链路无外部 I/O**
+
+  使用依赖图测试与 `rg "StorageProbe|probe\(|Files\.|Path\.of"` 检查概览包；任何外部 I/O 依赖都必须移除。不提交。
+
+---
+
+### Task 6: 完成首页下钻的后端筛选
+
+**Files:**
+- Create: `.../order/OrderOverviewFilterMapper.java`
+- Create: `.../order/OrderOverviewFilterSqlProvider.java`
+- Modify: `.../order/OrderController.java`
+- Modify: `.../admin/AdminBackupController.java`
+- Modify: `.../job/PersistentJobService.java`
+- Modify: `.../resources/openapi/local-backup-v1.yaml`
+- Test: `.../order/OrderControllerFilterTest.java`
+- Test: `.../admin/AdminBackupControllerTest.java`
+- Test: `.../job/PersistentJobServiceTest.java`
+- Modify: `.../order/OrderOpenApiContractTest.java`
+- Modify: `.../admin/AdminJobOpenApiContractTest.java`
+
+**Interfaces:**
+- Produces: 订单页 `backupMode/storageAccessible/storageIssue`；备份任务页 `jobId/finishedFrom/finishedTo/orderResult`。
+- Consumes: 概览 `actionRoute/actionQuery`。
 
 - [ ] **Step 1: 写订单下钻失败测试**
 
-  扩展 `OrderControllerFilterTest`：
-
-  - `backupMode=REAL&storageAccessible=true` 只返回至少一个当前可读真实包的订单；
-  - `storageIssue=UNREADABLE` 返回全部活动副本损坏、卷缺失或预期在线不可用的真实订单，但排除仅健康主动离线冷备；
-  - 非法枚举返回参数错误；
-  - 查询使用 `EXISTS` 批量谓词，不在 enrich 阶段先分页再过滤。
+  `backupMode=REAL&storageAccessible=true` 只返回当前可读正式订单；`storageIssue=UNREADABLE` 排除正常离线冷备并返回异常不可读订单；非法枚举返回参数错误。
 
 - [ ] **Step 2: 写备份任务下钻失败测试**
 
-  `AdminBackupControllerTest/PersistentJobServiceTest` 固定日期半开区间、订单结果筛选、精确 jobId，以及原无筛选调用仍兼容。`orderResult=FAILED` 使用 `EXISTS bk_job_order`，不是只看任务总状态。
+  固定 jobId、日期半开区间和订单结果筛选；`orderResult` 通过任务订单事实筛选，不只看任务总状态。
 
-- [ ] **Step 3: 运行筛选测试并确认失败**
-
-  Run: `mvn -Dtest=OrderControllerFilterTest,AdminBackupControllerTest,PersistentJobServiceTest test`
-
-  Expected: FAIL，新参数尚未实现。
-
-- [ ] **Step 4: 实现筛选参数和共享校验**
-
-  控制器只接受固定枚举和 ISO 本地日期；`PersistentJobService.listBackupJobs` 增加筛选对象：
+- [ ] **Step 3: 实现数据库分页前的共享策略筛选**
 
   ```java
   public record BackupJobFilter(Long jobId,
@@ -440,210 +401,169 @@
                                 String orderResult) {}
   ```
 
-  保留现有无筛选重载供其他调用方使用。
+  `OrderOverviewFilterSqlProvider` 通过 Task 2 的 `StorageVolumeAccessPolicy.readableSql(...)` 构建 `EXISTS/NOT EXISTS` 条件，在数据库执行 `COUNT` 和分页之前完成 `storageAccessible/storageIssue` 分类；不得复制卷状态真值表，不得先分页后 Java 过滤，也不得全量加载订单。查询保持 `order_created_at DESC, id DESC` 稳定排序，返回准确 `total`。保留现有无筛选重载，避免破坏现有页面。
 
-- [ ] **Step 5: 运行下钻测试与订单回归测试**
+- [ ] **Step 4: 同步 OpenAPI 契约**
 
-  Run: `mvn -Dtest=OrderControllerFilterTest,OrderStorageLocationServiceTest,AdminBackupControllerTest,PersistentJobServiceTest test`
+  为订单页和备份任务页补齐全部筛选参数、枚举、半开日期区间和错误响应；增加契约测试，确保实现参数与 OpenAPI 一致。订单筛选测试覆盖跨页稳定性、准确 total、空页、正常离线与异常不可读混合、Java/SQL 策略等价和 10 万订单查询计划。
+
+- [ ] **Step 5: 运行筛选和订单回归测试**
+
+  Run: `mvn -f yigongbao-backup-server/pom.xml -Dtest=OrderControllerFilterTest,AdminBackupControllerTest,PersistentJobServiceTest,OrderStorageLocationServiceTest,OrderOpenApiContractTest,AdminJobOpenApiContractTest test`
 
   Expected: PASS。
 
 - [ ] **Step 6: 阶段检查点**
 
-  确认所有 `actionQuery` 都能由目标接口消费；不要提交。
+  逐项验证概览产生的 query 都被目标接口消费；不提交。
 
 ---
 
-### Task 6: 建立前端概览状态、模型和结构化路由
+### Task 7: 建立前端概览模型、状态和结构化路由
 
 **Files:**
 - Create: `yigongbao-backup-web/src/overviewModel.js`
 - Create: `yigongbao-backup-web/test/overview.test.js`
-- Modify: `yigongbao-backup-web/src/stores/routeStore.js`
-- Modify: `yigongbao-backup-web/src/composables/useBackupConsole.js`
-- Modify: `yigongbao-backup-web/src/views/StorageView.vue`
-- Modify: `yigongbao-backup-web/src/views/BackupView.vue`
-- Modify: `yigongbao-backup-web/src/views/OrdersView.vue`
-- Modify: `yigongbao-backup-web/src/views/ColdStorageView.vue`
-- Modify: `yigongbao-backup-web/src/views/AccountsView.vue`
+- Modify: `.../src/stores/routeStore.js`
+- Modify: `.../src/composables/useBackupConsole.js`
+- Modify: `.../src/composables/useRestoreTasks.js`
+- Modify: 订单、备份、恢复、冷备、存储卷、账号和清理页面。
 
 **Interfaces:**
-- Produces: `navigate(target, query)`、`routeQuery`、`clearRouteQuery()`；概览 loading/error/lastSuccess 状态；下钻纯函数。
-- Consumes: Task 4 API 响应和 Task 5 筛选参数。
+- Produces: `navigate(target, query)`、`routeQuery`、`consumeRouteQuery(keys)`；概览加载/错误/上次成功状态；格式化和下钻纯函数。
+- Consumes: Task 5 响应和 Task 6 后端筛选。
 
-- [ ] **Step 1: 写纯模型失败测试**
+- [ ] **Step 1: 写模型失败测试**
 
-  `overview.test.js` 覆盖：
-
-  ```js
-  formatBytes(null) === '不可用'
-  formatBytes(0) === '0 B'
-  healthPresentation('SETUP_REQUIRED').label === '待完成存储初始化'
-  normalizeSection('UNAVAILABLE', []).data === null
-  buildSevenDayTrend([]).length === 7
-  overviewActionTarget(alert).route === alert.actionRoute
-  ```
-
-  另断言未知状态安全回退、百分比总量为 0 时不产生 `NaN`、告警排序保持后端顺序。
+  覆盖 null 与 0、字节和百分比、五种健康状态、完整/降级拆分、7 日补零、未知活动类型、告警顺序和受控下钻。
 
 - [ ] **Step 2: 写路由失败测试**
 
-  模拟 `window.location.hash/localStorage`，验证：
+  验证查询参数编码、页面与键白名单、旧 hash 兼容、一次性消费后不重复弹窗，以及恶意 route/query 不能生成可执行 URL。
 
-  - `navigate('storage-volumes',{volumeId:'12'})` 生成可恢复的编码 hash；
-  - hash 解析只接受白名单页面和键值，不执行 URL；
-  - `clearRouteQuery()` 不改变当前页面；
-  - 旧 `#orders` hash 继续兼容。
+- [ ] **Step 3: 实现 `overviewModel.js` 和路由仓库**
 
-- [ ] **Step 3: 运行前端测试并确认失败**
+  纯函数不依赖 DOM，不重新推导健康或告警。路由仓库统一解析 hash，不再使用各页面临时 `sessionStorage` 聚焦方案。
 
-  Run: `node --test test/overview.test.js test/architecture.test.js`
+- [ ] **Step 4: 实现概览加载状态**
 
-  Expected: FAIL，模型和查询路由不存在。
+  `loadOverview({ refresh })` 防止并发；失败保留旧数据并保存 code/message/requestId；成功更新时间并清除错误。
 
-- [ ] **Step 4: 实现 `overviewModel.js`**
+- [ ] **Step 5: 接入目标页一次性聚焦**
 
-  导出 `formatBytes/formatPercent/healthPresentation/buildSevenDayTrend/overviewActionTarget`。函数不依赖 DOM，严格区分 `null` 与 `0`，不重新推导后端健康或告警。
+  备份/恢复打开 jobId，冷备打开 archiveId，存储卷打开 volumeId，账号定位同步状态，订单和备份应用筛选；消费后清理 query。
 
-- [ ] **Step 5: 扩展轻量路由**
+- [ ] **Step 6: 运行前端模型和路由测试**
 
-  `routeStore` 使用 `URLSearchParams` 编解码 hash 查询；只保留字符串、数字和 ISO 日期。目标页挂载时消费参数：存储卷打开指定详情，冷备打开 archiveId，订单页应用真实/可读/异常筛选，备份页应用日期/结果/jobId，账号页定位同步状态。消费后调用 `clearRouteQuery()` 防止普通返回时重复应用。
-
-- [ ] **Step 6: 完善概览加载状态**
-
-  `useBackupConsole` 新增 `overviewLoading/overviewError/overviewLastSuccessAt`。`loadOverview()` 在 loading 时直接返回；失败保留旧 `overview`，保存 `message/code/requestId`；成功清除错误并更新时间。刷新不增加探测参数或写操作。
-
-- [ ] **Step 7: 运行模型、路由和架构测试**
-
-  Run: `node --test test/overview.test.js test/architecture.test.js`
+  Run: `node --test yigongbao-backup-web/test/overview.test.js yigongbao-backup-web/test/architecture.test.js`
 
   Expected: PASS。
 
-- [ ] **Step 8: 阶段检查点**
+- [ ] **Step 7: 阶段检查点**
 
-  检查所有路由参数都经过编码且目标页只消费白名单；不要提交。
+  确认关闭并重新进入冷备页不会自动打开旧抽屉；不提交。
 
 ---
 
-### Task 7: 实现管理概览页面与展示组件
+### Task 8: 实现管理概览页面
 
 **Files:**
-- Create: `yigongbao-backup-web/src/components/overview/OverviewHealthPanel.vue`
-- Create: `yigongbao-backup-web/src/components/overview/OverviewMetricGrid.vue`
-- Create: `yigongbao-backup-web/src/components/overview/OverviewStoragePanel.vue`
-- Create: `yigongbao-backup-web/src/components/overview/OverviewTrendPanel.vue`
-- Create: `yigongbao-backup-web/src/components/overview/OverviewRecentJobs.vue`
-- Modify: `yigongbao-backup-web/src/views/OverviewView.vue`
-- Modify: `yigongbao-backup-web/src/style-production.css`
-- Modify: `yigongbao-backup-web/test/overview.test.js`
-- Modify: `yigongbao-backup-web/test/architecture.test.js`
+- Create: 七个 `src/components/overview/*.vue` 组件。
+- Modify: `src/views/OverviewView.vue`
+- Modify: `src/components/StatusBadge.js`
+- Modify: `src/style-production.css`
+- Modify: `test/overview.test.js`
+- Modify: `test/architecture.test.js`
 
 **Interfaces:**
-- Produces: 完整首页 UI；组件只通过 props/emits 工作。
-- Consumes: Task 6 的模型、概览状态和 `navigate(target,query)`。
+- Produces: 完整首页 UI 和组件事件。
+- Consumes: Task 7 模型、状态和导航。
 
 - [ ] **Step 1: 写组件契约失败测试**
 
-  读取 Vue 源文件并断言：
+  断言页面组合全部组件；不存在 `JSON.stringify`、固定“服务正常”、覆盖率或运行任务 KPI；存在刷新失败覆盖状态、requestId、上次成功时间、中文状态和文本图表兜底。
 
-  - 首页组合五个 overview 组件；
-  - 只出现三张核心指标，不出现“订单备份覆盖率”“正在执行的任务”或 `JSON.stringify`；
-  - 告警、卷状态和任务状态使用 `status-badge`；
-  - 存在刷新 loading、错误 requestId、上次成功时间和保留旧数据文案；
-  - 趋势含文本表格/aria-label 兜底，不只依赖颜色或图形；
-  - 逐卷容量区明确“当前快照/离线前快照/数据过期/不计入汇总”。
+- [ ] **Step 2: 实现健康、告警和三指标**
 
-- [ ] **Step 2: 运行组件契约测试并确认失败**
+  健康结论完全使用后端 `health.level`；Top 3 告警显示处理入口；三卡明确完整/降级、逻辑/物理和“今日结束任务中的订单结果”口径。
 
-  Run: `node --test test/overview.test.js test/architecture.test.js`
+- [ ] **Step 3: 实现趋势与存储面板**
 
-  Expected: FAIL，组件尚不存在。
+  使用两个独立 SVG/CSS 图表；容量区区分当前快照、离线前快照、过期和不可用，活动/备用/冷备层级清晰。
 
-- [ ] **Step 3: 实现健康与指标组件**
+- [ ] **Step 4: 实现近期活动与自动化状态**
 
-  `OverviewHealthPanel` 按后端 `health.level` 展示 NORMAL/WARNING/CRITICAL/UNKNOWN/SETUP_REQUIRED；告警点击 emit `navigate`。`OverviewMetricGrid` 只显示三张卡，未知值显示“暂不可用”，文件卡同时展示逻辑文件数和受管物理数据量，今日卡显示成功/失败/跳过。
+  已知类型下钻到现有详情；未知类型只读展示；自动备份明确“错过不补跑”，关闭状态不使用危险色。
 
-- [ ] **Step 4: 实现容量、趋势和近期任务组件**
+- [ ] **Step 5: 重写 `OverviewView.vue` 和状态字典**
 
-  `OverviewStoragePanel` 展示在线总已用/可用/总量、使用率、参与/排除卷数和逐卷状态；过期高容量不使用危险进度色伪装成当前值。`OverviewTrendPanel` 用原生 SVG/CSS 显示 7 天成功/失败/跳过与逻辑字节，并提供同数据文本摘要。`OverviewRecentJobs` 最多 10 条，未知类型使用通用只读摘要。
+  页面顺序严格遵守规格；扩充 `StatusBadge` 的健康、降级、自动清理和历史任务类型中文映射。
 
-- [ ] **Step 5: 重写 `OverviewView.vue`**
+- [ ] **Step 6: 实现响应式和无障碍样式**
 
-  页面顺序固定为：标题/刷新 → 健康告警 → 三指标 → 容量 → 趋势 → 近期任务。首次无数据用骨架/空态；失败且已有旧数据时保留组件并在顶部显示“刷新失败”；失败且无数据时显示错误态，不显示正常结论。
-
-- [ ] **Step 6: 完成响应式和视觉语义**
-
-  在 `style-production.css` 增加 `overview-*` 类：1366×768 下首屏可见健康和三指标；1100px 以下双列，700px 以下单列；HOT 暖色、COLD 冷色，告警严重度与全局颜色一致；所有可点击卡片具有 focus 样式。
+  检查 1366×768、1100px、700px；所有可点击卡和图表点支持键盘焦点，颜色不是唯一信息载体。
 
 - [ ] **Step 7: 运行前端测试和构建**
 
-  Run: `npm test`
+  Run: `npm --prefix yigongbao-backup-web test`
 
   Expected: 全部 PASS。
 
-  Run: `npm run build`
+  Run: `npm --prefix yigongbao-backup-web run build`
 
-  Expected: Vite build 成功，无 Vue 编译错误；仅允许既有 bundle size 提示。
+  Expected: Vite 构建成功。
 
 - [ ] **Step 8: 阶段检查点**
 
-  在 1366×768 与窄屏做浏览器检查；不要提交。
+  浏览器验证正常、零数据、未知、部分失败、整体失败和过期旧数据；不提交。
 
 ---
 
-### Task 8: 全链路回归、性能验证、审查与单一提交
+### Task 9: 全链路验证、性能审查和单一提交
 
 **Files:**
-- Create: `docs/superpowers/verification/2026-11-10-admin-overview-dashboard.md`
+- Create: `docs/superpowers/verification/2026-11-11-admin-overview-dashboard.md`
 - Modify: 仅修复本轮验证发现且属于本需求的问题。
 
 **Interfaces:**
-- Produces: 可交付实现、验证证据和唯一 Git 提交。
-- Consumes: Task 1–7 全部结果。
+- Produces: 验证证据和唯一 Git 提交。
+- Consumes: Task 1–8。
 
 - [ ] **Step 1: 运行后端全量测试**
 
-  Run: `mvn test`
+  Run: `mvn -f yigongbao-backup-server/pom.xml test`
 
-  Expected: 全部测试 PASS，失败数为 0。
+  Expected: 全部 PASS。
 
 - [ ] **Step 2: 运行前端全量测试和生产构建**
 
-  Run: `npm test`
+  Run: `npm --prefix yigongbao-backup-web test`
 
-  Expected: 全部测试 PASS。
+  Run: `npm --prefix yigongbao-backup-web run build`
 
-  Run: `npm run build`
+  Expected: 全部成功。
 
-  Expected: 构建成功。
+- [ ] **Step 3: 验证数据库迁移与查询计划**
 
-- [ ] **Step 3: 执行数据库迁移与查询计划验证**
-
-  在 MySQL 8 测试库从当前版本执行迁移，确认列、回填与索引成功；对摘要、趋势、制品异常和近期任务 SQL 运行 `EXPLAIN ANALYZE`，确认使用预期索引且没有按记录数增长的相关子查询。
+  在 MySQL 8 测试库执行迁移，对副本候选、今日任务结果、趋势和近期任务 SQL 运行 `EXPLAIN ANALYZE`，确认使用预期索引且无相关子查询随记录数增长。
 
 - [ ] **Step 4: 执行性能基准**
 
-  使用规格 §17.1 数据规模：10 万快照、10 万订单包、100 万资产/关系、30 万副本、10 万任务、100 万任务订单、100 卷；MySQL 8/4 vCPU/8 GB，10 并发、100 次预热、至少 1000 次采样。记录 `/api/v1/admin/overview` P50/P95/P99、错误率、数据库查询数和“无外部 I/O”证据；P95 必须 ≤1 秒。
+  按规格数据量和环境记录 P50/P95/P99、错误率、数据库查询数和无外部 I/O 证据；P95 必须 ≤1 秒。
 
-- [ ] **Step 5: 执行浏览器验收**
+- [ ] **Step 5: 执行 22 个验收场景**
 
-  使用本地测试数据检查需求 §19 的全部 15 个场景，重点验证：离线冷备不告警、重新挂载后订单重新计入、ACTIVE 故障恢复、容量过期抑制、模拟备份排除、部分查询失败、中文状态、三指标禁止项和所有下钻。
+  重点验证完整/降级/模拟、正常离线冷备、重新接入、卷转回 HOT 后历史、错过计划不补跑、历史失败不告警、分区失败和所有下钻。
 
-- [ ] **Step 6: 写验证报告**
+- [ ] **Step 6: 写验证报告并进行最终审查**
 
-  `docs/superpowers/verification/2026-11-10-admin-overview-dashboard.md` 记录命令、测试数量、构建结果、性能数据、浏览器场景、已知非阻断提示和最终 Ready/Not Ready。不得写入凭据、绝对卷根路径或业务敏感数据。
+  记录命令、测试数、构建、迁移、性能、浏览器场景和结论；审查统计去重、64 位溢出与百分比舍入、访问策略、告警抑制、OpenAPI、路由白名单、错误脱敏、缓存 requestId、首页不写审计、正常请求日志量和 N+1。
 
-- [ ] **Step 7: 进行最终代码审查并修复**
-
-  审查重点：统计 SQL 去重、状态真值表、告警抑制、分区失败、容量快照保留、SQL 注入/路由参数、N+1、日志脱敏、前端未知值。任何 P1/P2 必须修复并重复相关测试；无剩余 P1/P2 才继续。
-
-- [ ] **Step 8: 执行最终差异检查**
+- [ ] **Step 7: 执行最终差异检查**
 
   Run: `git diff --check`
 
-  Expected: 无输出。
-
-  按仓库规范依次执行：
+  按项目规范依次执行：
 
   ```powershell
   git status
@@ -652,19 +572,13 @@
   git log --oneline -10
   ```
 
-  确认不暂存用户其他未提交改动。
+- [ ] **Step 8: 创建唯一提交**
 
-- [ ] **Step 9: 创建唯一提交**
-
-  仅暂存本计划实施直接相关文件，创建一个中文 Conventional Commit：
+  只暂存与本需求直接相关的实现、测试、迁移和文档文件，提交：
 
   ```powershell
   git commit -m "feat: 完善管理概览首页"
   ```
-
-- [ ] **Step 10: 交付说明**
-
-  向用户提供：提交号、需求/计划/验证文档链接、测试结果、迁移文件、首次启动注意事项和本地测试入口。
 
 ---
 
@@ -672,35 +586,25 @@
 
 | 需求区域 | 实施任务 |
 |---|---|
-| 页面信息架构与三指标 | Task 6、Task 7 |
-| 可读订单、逻辑文件、物理字节口径 | Task 2、Task 3 |
-| 今日结果与近 7 日趋势 | Task 2、Task 3、Task 7 |
-| 容量成功快照、在线汇总、离线前快照 | Task 1、Task 3、Task 7 |
-| 当前有效告警、去重、恢复与健康级别 | Task 3、Task 4、Task 7 |
-| 自动备份/账号同步时间与初始化 | Task 3、Task 4 |
-| 分区失败与数据质量 | Task 2、Task 3、Task 4、Task 6 |
-| 业务下钻 | Task 5、Task 6、Task 7 |
-| 权限、安全、日志和无外部 I/O | Task 4、Task 8 |
-| 性能、全量测试和验收 | Task 8 |
+| 最后成功容量快照 | Task 1 |
+| 统一卷访问与 `ARCHIVE_GUARD` | Task 2 |
+| 完整/降级/模拟统计 | Task 3、Task 4 |
+| 今日结束任务中的订单结果与 7 日趋势 | Task 3、Task 4、Task 8 |
+| 当前告警与健康级别 | Task 4、Task 5、Task 8 |
+| 存储、封存历史与自动化 | Task 4、Task 5、Task 8 |
+| 分区失败、缓存 requestId、数据质量、安全与日志 | Task 5、Task 9 |
+| OpenAPI 契约 | Task 5、Task 6、Task 9 |
+| 业务下钻 | Task 6、Task 7 |
+| 前端布局、状态与响应式 | Task 7、Task 8 |
+| 性能、回归和验收 | Task 9 |
 
 ## 完成门禁
 
-实施只有在以下条件全部满足后才可标记完成：
-
-- 需求覆盖矩阵无遗漏；
-- 后端全量测试、前端全量测试和生产构建全部通过；
-- MySQL 迁移、初始化 SQL 和查询计划验证通过；
-- 概览 P95 在规定基准下不超过 1 秒；
-- 首页请求证实不调用文件系统、NAS 或线上 API；
-- 需求 §19 全部验收场景通过；
+- 规格中的 22 个验收场景全部通过；
+- 后端全量测试、前端全量测试和生产构建通过；
+- 数据库迁移和查询计划验证通过；
+- 概览 P95 ≤1 秒；
+- 首页链路证实没有文件系统、NAS、Marker 或线上调用；
+- 首页、下载、恢复和备份预检使用同一卷访问语义；
 - 无剩余已知 P1/P2；
 - 只创建一个符合仓库规范的最终提交。
-
-## 计划自审结论
-
-- **需求完整性：通过。** 需求文档中的指标口径、容量快照、当前有效告警、健康状态、趋势、近期任务、下钻、权限、性能和异常降级均已映射到明确任务与测试。
-- **依赖顺序：通过。** 先建立容量事实和查询层，再实现策略、接口、下钻与前端；后续任务消费的接口均在前置任务中定义。
-- **异常场景：通过。** 已覆盖首次初始化、部分查询失败、容量快照过期、正常离线冷备、模拟数据污染、未知任务类型和刷新失败保留旧数据。
-- **可验证性：通过。** 每个任务均包含先失败测试、最小实现、回归命令和阶段检查点，最终另有迁移、查询计划、性能与浏览器验收门禁。
-- **仓库适配：通过。** 测试命令与当前 Maven、`node:test` 脚本匹配；迁移和三套初始化 SQL 同步；执行阶段遵循只创建一个最终提交的项目规范。
-- **实施边界：明确。** 本计划不引入告警持久表、图表依赖或首页实时探盘，也不扩展为覆盖率、正在执行任务等已排除功能。

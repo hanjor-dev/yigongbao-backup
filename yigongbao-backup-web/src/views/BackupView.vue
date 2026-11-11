@@ -3,7 +3,7 @@ import JobTable from '../components/jobs/JobTable.vue';
 import JobDetail from '../components/jobs/JobDetail.vue';
 import { useBackupContext } from '../composables/useBackupContext.js';
 
-const { loadJobs, runScheduledBackupNow, scheduledBackupRunning } = useBackupContext();
+const { loadJobs, runScheduledBackupNow, scheduledBackupRunning, backupJobFilters, clearBackupJobFilters } = useBackupContext();
 </script>
 
 <template>
@@ -16,6 +16,7 @@ const { loadJobs, runScheduledBackupNow, scheduledBackupRunning } = useBackupCon
       </div>
     </section>
     <el-alert title="错过当天配置的开始时间时不补跑，将等待下一个计划时间。管理员可使用“立即执行扫描”进行受控补偿；单订单任一文件失败则整单失败，但不阻断同批其他订单。" type="info" show-icon :closable="false" />
+    <el-alert v-if="backupJobFilters && Object.values(backupJobFilters).some(Boolean)" type="info" show-icon :closable="false"><template #title>已应用管理概览下钻筛选</template>任务 {{ backupJobFilters.jobId || '全部' }} · 完成区间 {{ backupJobFilters.finishedFrom || '—' }} 至 {{ backupJobFilters.finishedTo || '—' }} · 订单结果 {{ backupJobFilters.orderResult || '全部' }} <el-button link type="primary" @click="clearBackupJobFilters">清除筛选</el-button></el-alert>
     <el-card shadow="never" class="table-card mb-16"><template #header>备份任务列表</template><JobTable /></el-card>
     <JobDetail />
   </div>

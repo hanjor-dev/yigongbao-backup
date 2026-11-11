@@ -210,6 +210,7 @@ public class AdminStorageVolumeController {
     /** 管理页读取最近一次健康探测的容量快照，避免列表请求被慢速或离线网络卷阻塞。 */
     public record StorageVolumeView(Long id, String volumeCode, String displayName, String rootPath, String tier,
                                     String mountStatus, String writeStatus, Integer priority, java.time.LocalDateTime lastProbedAt,
+                                    java.time.LocalDateTime capacityObservedAt,
                                     String lastErrorMessage, Long totalBytes, Long usableBytes, Long usedBytes,
                                     Double usedPercent, Integer warningThresholdPercent, Boolean capacityWarning,
                                     String adminStatus, String operationStatus, String archiveNote, String offlineLabelNote,
@@ -221,12 +222,14 @@ public class AdminStorageVolumeController {
             Long usable = value.getUsableBytes();
             boolean capacityKnown = total != null && total > 0 && usable != null && usable >= 0;
             Long used = total == null || usable == null ? null : Math.max(0L, Math.min(total, total - usable));
-            Double usedPercent = capacityKnown
-                    ? Math.round(used * 1000.0d / total) / 10.0d : null;
+            java.math.BigDecimal usedRatio = com.yigongbao.backup.storage.volume.StorageVolumeCapacitySnapshotPolicy
+                    .usedPercent(total, usable);
+            Double usedPercent = usedRatio == null ? null : usedRatio.doubleValue();
             Boolean capacityWarning = capacityKnown
                     ? used * 100.0d >= total * (double) warningThresholdPercent : null;
             return new StorageVolumeView(value.getId(), value.getVolumeCode(), value.getDisplayName(), value.getRootPath(), value.getTier(),
-                    value.getMountStatus(), value.getWriteStatus(), value.getPriority(), value.getLastProbedAt(), value.getLastErrorMessage(),
+                    value.getMountStatus(), value.getWriteStatus(), value.getPriority(), value.getLastProbedAt(),
+                    value.getCapacityObservedAt(), value.getLastErrorMessage(),
                     total, usable, used, usedPercent, warningThresholdPercent, capacityWarning,
                     value.getAdminStatus(), value.getOperationStatus(), value.getArchiveNote(), value.getOfflineLabelNote(),
                     value.getPhysicalLocation(), value.getArchivedAt(), value.getOrderCreatedFrom(), value.getOrderCreatedTo(),

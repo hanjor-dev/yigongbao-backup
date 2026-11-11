@@ -157,7 +157,7 @@ public class CleanupTaskService {
             entity.setNonce(evidence.nonce());
         }
         entity.setIssuedAt(LocalDateTime.now());
-        if (permit.expiresAt() != null) entity.setExpiresAt(LocalDateTime.ofInstant(permit.expiresAt(), java.time.ZoneOffset.UTC));
+        if (permit.expiresAt() != null) entity.setExpiresAt(com.yigongbao.backup.common.time.BusinessTimeCodec.toLocalDateTime(permit.expiresAt()));
         entity.setCreateBy(actor);
         entity.setUpdateBy(actor);
         permitMapper.insert(entity);

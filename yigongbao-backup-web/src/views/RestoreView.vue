@@ -3,6 +3,9 @@ import { onMounted } from 'vue';
 import RestoreTaskTable from '../components/restores/RestoreTaskTable.vue';
 import RestoreTaskDetail from '../components/restores/RestoreTaskDetail.vue';
 import { useRestoreTasks } from '../composables/useRestoreTasks.js';
+import { useBackupContext } from '../composables/useBackupContext.js';
+
+const { consumeRouteQuery } = useBackupContext();
 
 const {
   tasks, current, size, total, selected, detailVisible, detailTab, orders, orderCurrent, orderSize, orderTotal,
@@ -17,11 +20,8 @@ const {
 
 onMounted(async () => {
   await refresh();
-  const focused = sessionStorage.getItem('backup-restore-task-focus');
-  if (focused) {
-    sessionStorage.removeItem('backup-restore-task-focus');
-    await selectTask({ id: focused });
-  }
+  const { jobId } = consumeRouteQuery(['jobId']);
+  if (jobId) await selectTask({ id: jobId });
 });
 </script>
 

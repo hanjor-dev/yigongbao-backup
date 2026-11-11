@@ -32,6 +32,8 @@ test('backup task refresh does not pass the pointer event as the page number', (
     loadJobs: (...args) => calls.push(args),
     runScheduledBackupNow: () => {},
     scheduledBackupRunning: false,
+    backupJobFilters: {},
+    clearBackupJobFilters: () => {},
   });
   const refreshButton = findVNode(vnode, (item) => item.type === 'el-button' && containsText(item, '刷新任务'));
 

@@ -1,12 +1,16 @@
 server:
   port: ${BACKUP_SERVER_PORT:18080}
 spring:
+  jackson:
+    time-zone: Asia/Shanghai
   application:
     name: yigongbao-backup-server
   datasource:
     url: ${BACKUP_DB_URL}
     username: ${BACKUP_DB_USERNAME}
     password: ${BACKUP_DB_PASSWORD}
+    hikari:
+      connection-init-sql: "SET time_zone = '+08:00'"
   servlet:
     multipart:
       # 基础配置也必须声明协议层上限；否则未启用 prod profile 时 Spring 默认仅允许 1MB。

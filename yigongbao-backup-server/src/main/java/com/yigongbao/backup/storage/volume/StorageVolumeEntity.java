@@ -38,6 +38,7 @@ public class StorageVolumeEntity extends BaseEntity {
     private LocalDateTime lastVerifiedAt;
     private Integer priority;
     private LocalDateTime lastProbedAt;
+    private LocalDateTime capacityObservedAt;
     private String lastErrorCode;
     private String lastErrorMessage;
     private Long totalBytes;

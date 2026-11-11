@@ -1,5 +1,6 @@
 package com.yigongbao.backup;
 
+import com.yigongbao.backup.common.time.BusinessTimeConfiguration;
 import org.springframework.scheduling.annotation.EnableScheduling;
 import org.springframework.boot.SpringApplication;
 import org.springframework.boot.autoconfigure.SpringBootApplication;
@@ -9,6 +10,7 @@ import org.springframework.boot.autoconfigure.SpringBootApplication;
 @EnableScheduling
 public class BackupServerApplication {
     public static void main(String[] args) {
+        BusinessTimeConfiguration.initializeProcessTimezone();
         SpringApplication.run(BackupServerApplication.class, args);
     }
 }

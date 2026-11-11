@@ -16,6 +16,9 @@ import org.springframework.web.bind.annotation.*;
 
 import java.util.List;
 import java.util.UUID;
+import java.time.LocalDate;
+import java.time.LocalDateTime;
+import java.time.OffsetDateTime;
 
 /** 订单备份任务管理接口；候选发现与任务创建由定时调度自动完成。 */
 @RestController
@@ -32,9 +35,20 @@ public class AdminBackupController {
     @GetMapping("/jobs")
     public ApiResponse<PersistentJobService.JobPage> listJobs(
             @RequestParam(value = "current", defaultValue = "1") long current,
-            @RequestParam(value = "size", defaultValue = "20") long size) {
+            @RequestParam(value = "size", defaultValue = "20") long size,
+            @RequestParam(value = "jobId", required = false) Long jobId,
+            @RequestParam(value = "finishedFrom", required = false) String finishedFrom,
+            @RequestParam(value = "finishedTo", required = false) String finishedTo,
+            @RequestParam(value = "orderResult", required = false) String orderResult) {
         StpUtil.checkRole("ADMIN");
-        return ApiResponse.ok(jobs.listBackupJobs(current, size), requestId());
+        return ApiResponse.ok(jobs.listBackupJobs(current, size, new PersistentJobService.BackupJobFilter(
+                jobId, parseBoundary(finishedFrom, "finishedFrom"),
+                parseBoundary(finishedTo, "finishedTo"), orderResult)), requestId());
+    }
+
+    /** 保留直接调用兼容入口；HTTP 契约使用完整筛选签名。 */
+    ApiResponse<PersistentJobService.JobPage> listJobs(long current, long size) {
+        return listJobs(current, size, null, null, null, null);
     }
 
     /**
@@ -109,5 +123,19 @@ public class AdminBackupController {
 
     private static String requestId() {
         return UUID.randomUUID().toString();
+    }
+
+    private static LocalDateTime parseBoundary(String value, String field) {
+        if (value == null || value.isBlank()) return null;
+        try {
+            if (value.matches("\\d{4}-\\d{2}-\\d{2}")) return LocalDate.parse(value).atStartOfDay();
+            return OffsetDateTime.parse(value).toLocalDateTime();
+        } catch (RuntimeException ignored) {
+            try {
+                return LocalDateTime.parse(value);
+            } catch (RuntimeException invalid) {
+                throw new IllegalArgumentException(field + " 时间格式非法", invalid);
+            }
+        }
     }
 }

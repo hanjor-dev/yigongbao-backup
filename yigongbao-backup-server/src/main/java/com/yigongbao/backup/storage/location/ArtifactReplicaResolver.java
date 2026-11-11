@@ -1,6 +1,9 @@
 package com.yigongbao.backup.storage.location;
 
 import com.baomidou.mybatisplus.core.toolkit.Wrappers;
+import com.yigongbao.backup.storage.archive.VolumeArchiveEntity;
+import com.yigongbao.backup.storage.archive.VolumeArchiveMapper;
+import com.yigongbao.backup.storage.volume.StorageVolumeAccessPolicy;
 import com.yigongbao.backup.storage.volume.StorageVolumeEntity;
 import com.yigongbao.backup.storage.volume.StorageVolumeMapper;
 import com.yigongbao.backup.storage.volume.StorageVolumeUnavailableException;
@@ -22,6 +25,8 @@ import java.time.LocalDateTime;
 public class ArtifactReplicaResolver {
     private final ArtifactCopyMapper copyMapper;
     private final StorageVolumeMapper volumeMapper;
+    private final VolumeArchiveMapper archiveMapper;
+    private final StorageVolumeAccessPolicy accessPolicy;
 
     /**
      * 选择当前可读副本。若已存在副本但所属卷均离线，必须返回卷不可用而非文件不存在。
@@ -58,15 +63,27 @@ public class ArtifactReplicaResolver {
             List<StorageVolumeEntity> volumeRows = volumeMapper.selectBatchIds(volumeIds);
             if (volumeRows != null) volumeRows.forEach(volume -> volumeById.put(volume.getId(), volume));
         }
+        List<Long> archiveIds = volumeById.values().stream()
+                .filter(volume -> "ARCHIVE_GUARD".equals(volume.getOperationStatus()))
+                .map(StorageVolumeEntity::getOperationRefId).filter(Objects::nonNull).distinct().toList();
+        Map<Long, StorageVolumeAccessPolicy.ArchiveGuardContext> guardByArchiveId = new HashMap<>();
+        if (!archiveIds.isEmpty()) {
+            List<VolumeArchiveEntity> archives = archiveMapper.selectBatchIds(archiveIds);
+            if (archives != null) archives.forEach(archive -> guardByArchiveId.put(archive.getId(),
+                    new StorageVolumeAccessPolicy.ArchiveGuardContext(archive.getId(), archive.getSuccessorVolumeId(),
+                            archive.getPhase(), !Integer.valueOf(1).equals(archive.getIsDeleted()))));
+        }
         Map<Long, List<ArtifactCopyEntity>> byArtifact = new LinkedHashMap<>();
         copies.forEach(copy -> byArtifact.computeIfAbsent(copy.getArtifactId(), ignored -> new java.util.ArrayList<>()).add(copy));
         Map<Long, ArtifactStorageProjection> result = new LinkedHashMap<>();
-        byArtifact.forEach((artifactId, artifactCopies) -> result.put(artifactId, projection(artifactCopies, volumeById)));
+        byArtifact.forEach((artifactId, artifactCopies) -> result.put(artifactId,
+                projection(artifactCopies, volumeById, guardByArchiveId)));
         return result;
     }
 
-    private static ArtifactStorageProjection projection(List<ArtifactCopyEntity> copies,
-                                                        Map<Long, StorageVolumeEntity> volumeById) {
+    private ArtifactStorageProjection projection(List<ArtifactCopyEntity> copies,
+                                                 Map<Long, StorageVolumeEntity> volumeById,
+                                                 Map<Long, StorageVolumeAccessPolicy.ArchiveGuardContext> guardByArchiveId) {
         List<Candidate> candidates = copies.stream().map(copy -> new Candidate(copy, volumeById.get(copy.getStorageVolumeId())))
                 .filter(candidate -> candidate.volume != null && !Integer.valueOf(1).equals(candidate.volume.getIsDeleted()))
                 .toList();
@@ -83,7 +100,7 @@ public class ArtifactReplicaResolver {
         boolean hotPresent = !"ABSENT".equals(hotRollup);
         boolean coldPresent = !"ABSENT".equals(coldRollup);
         Candidate selected = candidates.stream().sorted(Comparator
-                        .comparing((Candidate candidate) -> !readable(candidate))
+                        .comparing((Candidate candidate) -> !readable(candidate, guardByArchiveId))
                         .thenComparing(candidate -> !healthyCopy(candidate.copy))
                         .thenComparing(candidate -> tierRank(candidate.volume.getTier()))
                         .thenComparing(candidate -> candidate.copy.getLastVerifiedAt(), Comparator.nullsLast(Comparator.reverseOrder()))
@@ -98,14 +115,14 @@ public class ArtifactReplicaResolver {
                     "STORAGE_VOLUME_MISSING：存储卷台账不存在", diagnosticReason);
         }
         StorageVolumeEntity volume = selected.volume;
-        boolean readable = readable(selected);
+        boolean readable = readable(selected, guardByArchiveId);
         return new ArtifactStorageProjection(selected.copy.getId(), volume.getId(), selected.copy.getStorageKey(), selected.copy.getSha256(),
                 volume.getDisplayName(), volume.getTier(), volume.getMountStatus(), volume.getWriteStatus(),
                 volume.getAdminStatus(), volume.getOperationStatus(), volume.getArchiveNote(), volume.getOfflineLabelNote(),
                 volume.getPhysicalLocation(),
                 volume.getOrderCreatedFrom(), volume.getOrderCreatedTo(), volume.periodLabel(),
                 hotPresent, coldPresent, hotRollup, coldRollup, readable,
-                readable ? null : unavailableReason(selected), diagnosticReason);
+                readable ? null : unavailableReason(selected, guardByArchiveId), diagnosticReason);
     }
 
     private static String tierRollup(List<Candidate> candidates, String tier) {
@@ -122,34 +139,30 @@ public class ArtifactReplicaResolver {
         return copy != null && ("VERIFIED".equals(copy.getState()) || "PRESENT".equals(copy.getState()));
     }
 
-    private static boolean readable(Candidate candidate) {
-        return candidate != null && healthyCopy(candidate.copy) && readable(candidate.volume);
+    private boolean readable(Candidate candidate,
+                             Map<Long, StorageVolumeAccessPolicy.ArchiveGuardContext> guardByArchiveId) {
+        return candidate != null && healthyCopy(candidate.copy)
+                && accessPolicy.readable(candidate.volume, guard(candidate.volume, guardByArchiveId)).allowed();
     }
 
-    private static String unavailableReason(Candidate candidate) {
+    private String unavailableReason(Candidate candidate,
+                                     Map<Long, StorageVolumeAccessPolicy.ArchiveGuardContext> guardByArchiveId) {
         if (!healthyCopy(candidate.copy)) {
             return "ARTIFACT_COPY_" + (candidate.copy.getState() == null ? "INVALID" : candidate.copy.getState())
                     + "：文件副本状态异常，不能读取";
         }
         StorageVolumeEntity volume = candidate.volume;
         if (volume == null) return "STORAGE_VOLUME_MISSING：存储卷台账不存在";
-        if (!"ONLINE".equals(volume.getMountStatus())) return "STORAGE_VOLUME_" + volume.getMountStatus() + "：文件副本所属存储卷不可访问";
-        if ("RETIRED".equals(volume.getAdminStatus())) return "STORAGE_VOLUME_RETIRED：文件副本所属存储卷已退役";
-        if ("DISABLED".equals(volume.getWriteStatus())) return "STORAGE_VOLUME_DISABLED：文件副本所属存储卷已停用";
-        if (volume.getOperationStatus() != null && !"IDLE".equals(volume.getOperationStatus())) {
-            return "STORAGE_VOLUME_" + volume.getOperationStatus() + "：存储卷正在执行生命周期操作";
-        }
-        return "STORAGE_VOLUME_UNAVAILABLE：文件副本所属存储卷不可访问";
+        StorageVolumeAccessPolicy.AccessDecision decision = accessPolicy.readable(
+                volume, guard(volume, guardByArchiveId));
+        return decision.code() + "：" + decision.message();
     }
 
-    private static boolean readable(StorageVolumeEntity volume) {
-        return volume != null
-                && !Integer.valueOf(1).equals(volume.getIsDeleted())
-                && "ONLINE".equals(volume.getMountStatus())
-                && (volume.getAdminStatus() == null || "ENABLED".equals(volume.getAdminStatus()))
-                && !"DISABLED".equals(volume.getWriteStatus())
-                && ("HOT".equals(volume.getTier()) || ("COLD".equals(volume.getTier()) && "READ_ONLY".equals(volume.getWriteStatus())))
-                && (volume.getOperationStatus() == null || "IDLE".equals(volume.getOperationStatus()));
+    private static StorageVolumeAccessPolicy.ArchiveGuardContext guard(
+            StorageVolumeEntity volume,
+            Map<Long, StorageVolumeAccessPolicy.ArchiveGuardContext> guardByArchiveId) {
+        return volume == null || volume.getOperationRefId() == null
+                ? null : guardByArchiveId.get(volume.getOperationRefId());
     }
 
     private static int tierRank(String tier) {

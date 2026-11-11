@@ -1,9 +1,14 @@
 <script setup>
 import { useBackupContext } from '../../composables/useBackupContext.js';
 const { keyword, createdFrom, createdTo, status, businessType, needsPhysicalDelivery,
-  cloudRollup, hotRollup, coldRollup, orderFilterOptions, loadOrders, resetOrderFilters } = useBackupContext();
+  cloudRollup, hotRollup, coldRollup, backupMode, storageAccessible, storageIssue,
+  orderFilterOptions, loadOrders, resetOrderFilters } = useBackupContext();
 
 function submit() {
+  // 用户主动使用常规筛选时退出概览下钻语境，避免两组筛选条件互相遮蔽。
+  backupMode.value = '';
+  storageAccessible.value = '';
+  storageIssue.value = '';
   loadOrders(1);
 }
 </script>

@@ -48,12 +48,19 @@ public class OrderController {
     private final ArtifactReplicaResolver replicas;
     private final OrderStorageLocationService locations;
     private final StorageVolumeReadLeaseService readLeases;
+    private final OrderOverviewFilterMapper overviewFilters;
 
     /** 显式声明唯一注入构造器，避免多构造器导致 Spring 回退查找无参构造器。 */
-    @Autowired
     public OrderController(OrderSnapshotMapper snapshots, AssetMapper assets,
                            OrderPackageMapper packages, VolumeArtifactStore store, ArtifactReplicaResolver replicas,
                            OrderStorageLocationService locations, StorageVolumeReadLeaseService readLeases) {
+        this(snapshots,assets,packages,store,replicas,locations,readLeases,null);
+    }
+    @Autowired
+    public OrderController(OrderSnapshotMapper snapshots, AssetMapper assets,
+                           OrderPackageMapper packages, VolumeArtifactStore store, ArtifactReplicaResolver replicas,
+                           OrderStorageLocationService locations, StorageVolumeReadLeaseService readLeases,
+                           OrderOverviewFilterMapper overviewFilters) {
         this.snapshots = snapshots;
         this.assets = assets;
         this.packages = packages;
@@ -61,6 +68,7 @@ public class OrderController {
         this.replicas = replicas;
         this.locations = locations;
         this.readLeases = readLeases;
+        this.overviewFilters=overviewFilters;
     }
 
     private static String rid() {
@@ -126,7 +134,10 @@ public class OrderController {
             @RequestParam(name = "needsPhysicalDelivery", required = false) Integer needsPhysicalDelivery,
             @RequestParam(name = "cloudRollup", required = false) String cloudRollup,
             @RequestParam(name = "hotRollup", required = false) String hotRollup,
-            @RequestParam(name = "coldRollup", required = false) String coldRollup) {
+            @RequestParam(name = "coldRollup", required = false) String coldRollup,
+            @RequestParam(name = "backupMode", required = false) String backupMode,
+            @RequestParam(name = "storageAccessible", required = false) Boolean storageAccessible,
+            @RequestParam(name = "storageIssue", required = false) String storageIssue) {
         StpUtil.checkLogin();
         if (current < 1 || size < 1) {
             throw new IllegalArgumentException("分页参数必须大于零");
@@ -134,6 +145,10 @@ public class OrderController {
         if (keyword != null && keyword.trim().length() > 128) {
             throw new IllegalArgumentException("关键词筛选条件过长");
         }
+        if(backupMode!=null&&!List.of("REAL","METADATA_SIMULATION").contains(backupMode))throw new IllegalArgumentException("备份模式非法");
+        if(storageIssue!=null&&!"UNREADABLE".equals(storageIssue))throw new IllegalArgumentException("存储问题类型非法");
+        boolean overviewFilter=backupMode!=null||storageAccessible!=null||storageIssue!=null;
+        if(overviewFilter){if(overviewFilters==null)throw new IllegalStateException("订单概览筛选器未配置");long safeSize=Math.min(size,100);List<Long> ids=overviewFilters.selectIds(backupMode,storageAccessible,storageIssue,(current-1)*safeSize,safeSize);long total=overviewFilters.count(backupMode,storageAccessible,storageIssue);Map<Long,OrderSnapshotEntity> byId=new HashMap<>();if(!ids.isEmpty())snapshots.selectBatchIds(ids).forEach(v->byId.put(v.getId(),v));List<OrderSnapshotEntity> records=ids.stream().map(byId::get).filter(java.util.Objects::nonNull).toList();Page<OrderSnapshotEntity> page=new Page<>(current,safeSize,total);page.setRecords(records);enrichAssetScale(records);enrichStorageLocations(records);return ApiResponse.ok(page,rid());}
         LambdaQueryWrapper<OrderSnapshotEntity> query = new LambdaQueryWrapper<>();
         if (keyword != null && !keyword.isBlank()) {
             String normalizedKeyword = keyword.trim();
@@ -184,6 +199,12 @@ public class OrderController {
         enrichAssetScale(page.getRecords());
         enrichStorageLocations(page.getRecords());
         return ApiResponse.ok(page, rid());
+    }
+
+    /** 兼容既有 Java 调用；HTTP 入口使用包含首页下钻参数的重载。 */
+    public ApiResponse<Page<OrderSnapshotEntity>> list(long current,long size,String keyword,String createdFrom,String createdTo,
+            Integer status,String businessType,Integer needsPhysicalDelivery,String cloudRollup,String hotRollup,String coldRollup){
+        return list(current,size,keyword,createdFrom,createdTo,status,businessType,needsPhysicalDelivery,cloudRollup,hotRollup,coldRollup,null,null,null);
     }
 
     /** 查询单个订单快照；不存在时按契约返回 404。 */

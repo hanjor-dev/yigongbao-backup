@@ -1,4 +1,5 @@
 -- 备份子系统业务配置最终基线。
+SET time_zone = '+08:00';
 -- 同一个业务配置只存在于 bk_config；仅在配置键不存在时插入，不覆盖现场值。
 SET NAMES utf8mb4 COLLATE utf8mb4_0900_ai_ci;
 

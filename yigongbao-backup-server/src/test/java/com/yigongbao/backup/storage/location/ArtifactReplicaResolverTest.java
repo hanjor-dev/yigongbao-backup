@@ -1,5 +1,7 @@
 package com.yigongbao.backup.storage.location;
 
+import com.yigongbao.backup.storage.archive.VolumeArchiveEntity;
+import com.yigongbao.backup.storage.archive.VolumeArchiveMapper;
 import com.yigongbao.backup.storage.volume.*;
 import org.junit.jupiter.api.Test;
 import java.time.LocalDateTime;
@@ -16,7 +18,7 @@ class ArtifactReplicaResolverTest {
         when(copies.selectList(any())).thenReturn(List.of(busy, ready));
         StorageVolumeEntity a = volume(10L, "HOT", "SEALING"); StorageVolumeEntity b = volume(20L, "COLD", "IDLE");
         when(volumes.selectBatchIds(anyCollection())).thenReturn(List.of(a, b));
-        assertThat(new ArtifactReplicaResolver(copies, volumes).resolveReadable("ORDER_PACKAGE", 9L).storageVolumeId()).isEqualTo(20L);
+        assertThat(resolver(copies, volumes, mock(VolumeArchiveMapper.class)).resolveReadable("ORDER_PACKAGE", 9L).storageVolumeId()).isEqualTo(20L);
     }
 
     @Test void projectsOfflineColdCopyAsPresentButNotReadable() {
@@ -34,7 +36,7 @@ class ArtifactReplicaResolverTest {
         when(volumes.selectBatchIds(anyCollection())).thenReturn(List.of(cold));
 
         Map<Long, ArtifactReplicaResolver.ArtifactStorageProjection> result =
-                new ArtifactReplicaResolver(copies, volumes).project("ORDER_PACKAGE", List.of(9L));
+                resolver(copies, volumes, mock(VolumeArchiveMapper.class)).project("ORDER_PACKAGE", List.of(9L));
 
         ArtifactReplicaResolver.ArtifactStorageProjection projection = result.get(9L);
         assertThat(projection.hotPresent()).isFalse();
@@ -61,7 +63,7 @@ class ArtifactReplicaResolverTest {
         when(volumes.selectBatchIds(anyCollection())).thenReturn(List.of(hot, cold));
 
         ArtifactReplicaResolver.ArtifactStorageProjection projection =
-                new ArtifactReplicaResolver(copies, volumes).project("ORDER_PACKAGE", List.of(9L)).get(9L);
+                resolver(copies, volumes, mock(VolumeArchiveMapper.class)).project("ORDER_PACKAGE", List.of(9L)).get(9L);
 
         assertThat(projection.readable()).isTrue();
         assertThat(projection.storageVolumeId()).isEqualTo(10L);
@@ -79,11 +81,43 @@ class ArtifactReplicaResolverTest {
         when(volumes.selectBatchIds(anyCollection())).thenReturn(List.of(hot));
 
         ArtifactReplicaResolver.ArtifactStorageProjection projection =
-                new ArtifactReplicaResolver(copies, volumes).project("ORDER_PACKAGE", List.of(9L)).get(9L);
+                resolver(copies, volumes, mock(VolumeArchiveMapper.class)).project("ORDER_PACKAGE", List.of(9L)).get(9L);
 
         assertThat(projection.readable()).isTrue();
         assertThat(projection.storageVolumeId()).isEqualTo(10L);
         assertThat(projection.diagnosticReason()).contains("STORAGE_VOLUME_MISSING").contains("99");
+    }
+
+    @Test void readsArchiveGuardsInOneBatchAndAcceptsOnlyTheMatchingActiveGuard() {
+        ArtifactCopyMapper copies = mock(ArtifactCopyMapper.class);
+        StorageVolumeMapper volumes = mock(StorageVolumeMapper.class);
+        VolumeArchiveMapper archives = mock(VolumeArchiveMapper.class);
+        ArtifactCopyEntity first = copy(1L, 10L, LocalDateTime.now());
+        ArtifactCopyEntity second = copy(2L, 20L, LocalDateTime.now().minusHours(1));
+        first.setArtifactId(9L); second.setArtifactId(10L);
+        StorageVolumeEntity valid = volume(10L, "HOT", "ARCHIVE_GUARD");
+        valid.setOperationRefId(100L);
+        StorageVolumeEntity invalid = volume(20L, "HOT", "ARCHIVE_GUARD");
+        invalid.setOperationRefId(200L);
+        VolumeArchiveEntity active = new VolumeArchiveEntity();
+        active.setId(100L); active.setSuccessorVolumeId(10L); active.setPhase("VERIFYING"); active.setIsDeleted(0);
+        VolumeArchiveEntity terminal = new VolumeArchiveEntity();
+        terminal.setId(200L); terminal.setSuccessorVolumeId(20L); terminal.setPhase("ARCHIVED"); terminal.setIsDeleted(0);
+        when(copies.selectList(any())).thenReturn(List.of(first, second));
+        when(volumes.selectBatchIds(anyCollection())).thenReturn(List.of(valid, invalid));
+        when(archives.selectBatchIds(anyCollection())).thenReturn(List.of(active, terminal));
+
+        Map<Long, ArtifactReplicaResolver.ArtifactStorageProjection> projections =
+                resolver(copies, volumes, archives).project("ORDER_PACKAGE", List.of(9L, 10L));
+
+        assertThat(projections.get(9L).readable()).isTrue();
+        assertThat(projections.get(10L).readable()).isFalse();
+        verify(archives, times(1)).selectBatchIds(anyCollection());
+    }
+
+    private static ArtifactReplicaResolver resolver(ArtifactCopyMapper copies, StorageVolumeMapper volumes,
+                                                     VolumeArchiveMapper archives) {
+        return new ArtifactReplicaResolver(copies, volumes, archives, new StorageVolumeAccessPolicy());
     }
     private static ArtifactCopyEntity copy(long id,long volume,LocalDateTime verified){ ArtifactCopyEntity c=new ArtifactCopyEntity(); c.setId(id);c.setStorageVolumeId(volume);c.setArtifactType("ORDER_PACKAGE");c.setArtifactId(9L);c.setStorageKey("a.zip");c.setState("VERIFIED");c.setLifecycle("ACTIVE");c.setIsDeleted(0);c.setLastVerifiedAt(verified);return c; }
     private static StorageVolumeEntity volume(long id,String tier,String operation){ StorageVolumeEntity v=new StorageVolumeEntity();v.setId(id);v.setTier(tier);v.setWriteStatus("COLD".equals(tier)?"READ_ONLY":"ACTIVE");v.setMountStatus("ONLINE");v.setAdminStatus("ENABLED");v.setOperationStatus(operation);v.setIsDeleted(0);return v; }

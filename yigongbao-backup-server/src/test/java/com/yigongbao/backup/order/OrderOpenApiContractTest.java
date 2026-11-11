@@ -2,6 +2,7 @@ package com.yigongbao.backup.order;
 
 import org.junit.jupiter.api.Test;
 import org.springframework.web.bind.annotation.RequestParam;
+import org.springframework.web.bind.annotation.GetMapping;
 import org.yaml.snakeyaml.Yaml;
 
 import java.lang.reflect.Method;
@@ -30,6 +31,7 @@ class OrderOpenApiContractTest {
                 .collect(Collectors.toSet());
         Method list = java.util.Arrays.stream(OrderController.class.getDeclaredMethods())
                 .filter(method -> method.getName().equals("list"))
+                .filter(method -> method.isAnnotationPresent(GetMapping.class))
                 .findFirst().orElseThrow();
         Set<String> controllerParameters = java.util.Arrays.stream(list.getParameters())
                 .map(parameter -> parameter.getAnnotation(RequestParam.class))

@@ -8,6 +8,7 @@ import com.baomidou.mybatisplus.extension.plugins.pagination.Page;
 import org.junit.jupiter.api.Test;
 
 import java.time.Duration;
+import java.time.LocalDateTime;
 import java.util.List;
 import com.yigongbao.backup.order.OrderSnapshotMapper;
 import com.yigongbao.backup.backup.BackupStageMapper;
@@ -17,6 +18,45 @@ import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.Mockito.*;
 
 class PersistentJobServiceTest {
+    @Test
+    void backupJobOverviewFilterRunsBeforeDatabasePagination() {
+        com.baomidou.mybatisplus.core.metadata.TableInfoHelper.initTableInfo(
+                new org.apache.ibatis.builder.MapperBuilderAssistant(
+                        new com.baomidou.mybatisplus.core.MybatisConfiguration(), "backupJobOverviewFilter"),
+                JobEntity.class);
+        JobMapper jobs = mock(JobMapper.class);
+        when(jobs.selectPage(any(Page.class), any())).thenAnswer(invocation -> {
+            Page<JobEntity> page = invocation.getArgument(0);
+            page.setRecords(List.of()); page.setTotal(0L);
+            return page;
+        });
+        PersistentJobService service = new PersistentJobService(jobs);
+        LocalDateTime from = LocalDateTime.of(2026, 11, 11, 0, 0);
+        LocalDateTime to = from.plusDays(1);
+
+        service.listBackupJobs(1, 20,
+                new PersistentJobService.BackupJobFilter(42L, from, to, "FAILED"));
+
+        @SuppressWarnings("unchecked")
+        org.mockito.ArgumentCaptor<LambdaQueryWrapper<JobEntity>> wrapper =
+                org.mockito.ArgumentCaptor.forClass(LambdaQueryWrapper.class);
+        verify(jobs).selectPage(any(Page.class), wrapper.capture());
+        assertThat(wrapper.getValue().getSqlSegment().toLowerCase())
+                .contains("id", "finished_at", "exists", "bk_job_order", "jo.status='failed'", "order by");
+        assertThat(wrapper.getValue().getParamNameValuePairs().values()).contains(42L, from, to);
+    }
+
+    @Test
+    void backupJobOverviewFilterRejectsUnknownResultAndInvalidHalfOpenRange() {
+        PersistentJobService service = new PersistentJobService(mock(JobMapper.class));
+        LocalDateTime point = LocalDateTime.of(2026, 11, 11, 0, 0);
+        org.assertj.core.api.Assertions.assertThatThrownBy(() -> service.listBackupJobs(1, 20,
+                new PersistentJobService.BackupJobFilter(null, null, null, "UNKNOWN")))
+                .isInstanceOf(IllegalArgumentException.class).hasMessageContaining("orderResult");
+        org.assertj.core.api.Assertions.assertThatThrownBy(() -> service.listBackupJobs(1, 20,
+                new PersistentJobService.BackupJobFilter(null, point, point, null)))
+                .isInstanceOf(IllegalArgumentException.class).hasMessageContaining("时间区间");
+    }
     @Test
     void taskFilePageToleratesOrderEvidenceWithoutBusinessOrderCode() {
         JobOrderMapper orders = mock(JobOrderMapper.class);

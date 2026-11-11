@@ -33,10 +33,8 @@ public class StorageVolumeHealthScheduler {
                         ? StorageVolumeStatus.Mount.ONLINE.name() : volume.getMountStatus())
                     : StorageVolumeStatus.Mount.UNAVAILABLE.name();
             boolean changed = !next.equals(volume.getMountStatus());
-            volume.setMountStatus(next); volume.setLastProbedAt(LocalDateTime.now());
-            volume.setLastErrorCode(snapshot.errorCode()); volume.setLastErrorMessage(snapshot.errorMessage());
-            volume.setTotalBytes(snapshot.accessible() && snapshot.totalBytes() > 0 ? snapshot.totalBytes() : null);
-            volume.setUsableBytes(snapshot.accessible() && snapshot.totalBytes() > 0 ? snapshot.usableBytes() : null);
+            volume.setMountStatus(next);
+            StorageVolumeCapacitySnapshotPolicy.apply(volume, snapshot, LocalDateTime.now());
             volumes.updateById(volume);
             if (changed && !snapshot.accessible()) {
                 audit.append(new AuditLogService.Event(AuditLogService.DEFAULT_CHAIN, null, "SYSTEM", null,

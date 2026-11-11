@@ -1,799 +1,672 @@
-# 本地备份系统：首页管理概览需求说明
+# 本地备份系统：管理概览首页需求与技术设计
+
+> 文档版本：2.0
+> 重写日期：2026-11-11
+> 状态：已实施，待预发布环境容量基准与浏览器联调
+> 说明：本文完全替代同路径旧版内容。旧版仅作为历史讨论记录，不再作为实现或验收依据。
 
 ## 1. 文档目的
 
-本文定义本地备份系统“管理概览”首页的业务目标、统计口径、当前有效告警规则、页面结构、交互行为、数据来源、接口契约和验收标准，作为后续技术设计、实施计划、开发、测试与验收的统一依据。
+本文基于当前代码已经实现的订单备份、降级备份、线上恢复、整盘冷备封存、存储卷生命周期、COS 清理、账号同步、系统配置和统一任务日志能力，重新定义管理员首页“管理概览”的产品需求、统计口径、状态语义、数据来源、页面布局、后端接口、前端交互和验收标准。
 
-本文所称“首页”是管理员登录后进入的 `管理概览` 页面。首页用于回答三个问题：
+本文同时承担需求说明和技术设计职责。实施人员应以本文和对应实施计划为唯一依据，不再从旧版概览文档恢复已被本文删除的规则。
 
-1. 当前本地可用的真实订单备份有多少、包含多少文件；
-2. 当前存储卷容量是否健康、哪些卷需要处理；
-3. 系统此刻是否存在需要管理员采取行动的异常。
+## 2. 当前系统事实
 
-首页不是报表中心，也不是任务中心。它应帮助管理员在数秒内判断系统是否健康，并能从异常或摘要直接进入对应业务页面处理。
+### 2.1 已实现的业务模块
 
-## 2. 背景与现状问题
+当前管理员控制台已经包含：
 
-当前前端首页展示“订单快照、关联文件、热备容量、运行任务”四个指标和后端原始 JSON，但现有 `/api/v1/admin/overview` 仅返回存储探测结果与系统配置，未返回前三类业务统计，导致部分卡片长期显示为 `0`，无法代表真实业务状态。
+- 订单文件：查询真实或模拟订单快照、文件资产、存储位置、下载、补传和发起恢复；
+- 订单备份：自动扫描、管理员立即扫描、手工备份、失败订单重试和管理员显式降级备份；
+- 线上恢复：任务列表、任务弹窗、订单抽屉、文件明细和执行日志；
+- 冷备管理：整盘封存任务、逐文件校验、冷备介质离线与重新接入；
+- 存储卷管理：卷纳管、健康探测、活动/备用卷、卷切换、封存和生命周期操作；
+- COS 清理：清理预览、许可确认和执行任务；
+- 本地账号：线上账号同步、本地启停和本地密码修改；
+- 系统配置：数据库配置、运行时校验、分类展示和版本控制；
+- 通用任务：持久化任务、订单级结果、文件级证据和任务执行日志。
 
-当前后端首页请求还会逐个实时探测已纳管存储卷。对于离线冷备盘、不可达 NAS 或访问缓慢的目录，这会造成首页请求阻塞、超时或把一次短暂 I/O 波动直接暴露为页面故障。
+### 2.2 当前首页问题
 
-现状还存在以下问题：
+现有 `/api/v1/admin/overview` 会在请求过程中逐卷执行存储探测并返回原始配置列表；现有前端则读取接口没有提供的统计字段、固定显示“服务正常”并直接展示原始 JSON。因此当前页面不是可信的管理概览，且访问离线盘或慢速网络卷时可能阻塞。
 
-- 首页直接展示原始 JSON，不具备管理决策价值；
-- “订单快照”混合真实备份、模拟备份和不可读副本，容易夸大可恢复订单数量；
-- “文件数”未区分订单包内逻辑文件、订单包本身和物理副本；
-- 未区分在线卷当前容量与离线冷备卷最后一次容量快照；
-- 缺少当前有效告警的统一判断规则；
-- 审计日志、历史失败记录和当前异常状态之间没有明确边界。
+### 2.3 当前实现对新首页的约束
 
-因此，本需求不是仅调整首页样式，而是建立可信、可解释、可下钻的管理概览。
+- 正式完整备份为 `REAL + COMPLETE`；
+- 成功降级备份为 `REAL + INCOMPLETE`，是正式终态备份，不再自动补偿，不等同于模拟备份；
+- 元数据模拟为 `METADATA_SIMULATION + NOT_APPLICABLE`，不得计入生产备份指标；
+- 整盘冷备是卷状态转换，不复制、不移动订单包；
+- 封存尝试是不可变历史，不能由卷当前层级覆盖；
+- 订单下载和线上恢复通过制品副本与当前卷状态选择可读副本；
+- 备份、恢复、补传、清理等任务使用 `bk_job`；整盘封存同时有独立的 `bk_volume_archive` 业务状态；
+- 自动备份错过当天计划时间后不自动补跑，管理员可通过“立即执行扫描”补偿；
+- 首页必须复用现有状态语义，不能建立与详情页冲突的第二套判断规则。
 
-## 3. 已确认的业务决策
+## 3. 首页定位
 
-1. 首页保留备份订单统计、文件统计、存储容量、近 7 日趋势、当前有效告警和近期任务。
-2. 首页不展示“订单备份覆盖率”。本地系统无法仅凭现有数据准确得知线上全部应备份订单的完整分母，展示覆盖率会产生误导。
-3. 首页不展示“正在执行的任务”独立指标卡；运行中任务仍可出现在近期任务列表中。
-4. 告警仅展示当前有效告警。触发条件消失后，告警自动从首页消失。
-5. 首期不提供告警确认、静默、手动关闭、告警历史或通知升级机制。
-6. 审计日志不是告警事实来源。审计记录用于追溯历史，不决定某条告警当前是否有效。
-7. 首页查询不得执行文件系统、磁盘、NAS 或线上服务实时探测；容量和健康信息读取后台健康检查已持久化的快照。
-8. 正常封存且主动离线的 `COLD/OFFLINE/READ_ONLY` 冷备卷不是异常，不产生“卷离线”告警。
-9. 模拟备份不计入真实可用订单、有效备份文件、真实新增容量和今日真实备份结果。
-10. 首页所有状态展示使用中文名称和统一状态标签，但接口继续返回稳定英文状态码供程序判断。
+管理概览是管理员登录后的运行工作台，应让管理员在数秒内回答四个问题：
+
+1. 系统现在还能否安全接收新的订单备份；
+2. 已有正式备份中，有多少当前可读取和恢复；
+3. 自动备份、账号同步、封存和其他运行活动最近是否正常；
+4. 此刻有哪些问题需要管理员采取行动，应该进入哪个页面处理。
+
+首页不是长期统计报表、任务中心、审计中心或系统配置页。首页提供结论、证据摘要和处理入口，详细操作仍在现有业务页面完成。
 
 ## 4. 目标、非目标与反目标
 
 ### 4.1 目标
 
-- 展示可信且口径明确的本地真实备份订单和文件统计；
-- 展示在线存储容量总览及逐卷容量、状态和数据新鲜度；
-- 从权威当前状态聚合需要管理员处理的有效告警；
-- 提供近 7 日备份结果和新增数据量趋势；
-- 展示近期任务并支持进入对应功能详情；
-- 首页每个异常、卷和任务均可下钻至可处理页面；
-- 页面在离线冷备盘或慢速 NAS 存在时仍能稳定、快速加载；
-- 统计与订单文件页、订单备份页、存储卷管理页采用一致的数据语义。
+- 展示可信的正式备份订单、文件和物理副本规模；
+- 明确区分完整备份与成功降级备份；
+- 展示今日和近 7 日真实备份结果；
+- 展示活动热备卷、备用卷和冷备介质的运行能力；
+- 根据当前事实生成可恢复、可消失、可下钻的有效告警；
+- 统一展示备份、恢复、封存、补传和清理的近期运行活动；
+- 展示自动备份、账号同步和自动清理的运行状态；
+- 首页访问稳定、快速，不触发磁盘、NAS 或线上接口调用；
+- 部分查询失败时保留可用分区，不使用零值伪装未知结果。
 
 ### 4.2 非目标
 
-- 不计算线上全部订单的备份覆盖率；
-- 不在首页执行存储卷“重新探测”；
-- 不在首页直接执行卷切换、封存、重试、恢复等风险操作；
-- 不建设通用告警平台、告警表、告警确认流或外部消息通知；
-- 不替代订单文件、订单备份、线上恢复、冷备管理和存储卷管理详情页；
-- 不展示完整系统配置、原始 JSON 或异常堆栈；
-- 不统计已逻辑删除数据；
-- 不将模拟备份视为生产备份成果。
+- 不计算“备份覆盖率”；当前系统没有线上全部应备订单的可靠分母；
+- 不在首页执行切卷、封存、重试、恢复、清理或同步等写操作；
+- 不建设告警确认、静默、指派、通知和历史生命周期平台；
+- 不展示完整任务日志、逐文件校验列表、审计日志或原始 JSON；
+- 不在首页实时探测存储卷、访问文件系统或调用线上服务；
+- 不用首页替代订单文件、任务详情、冷备管理和存储卷详情；
+- 不引入长期报表、容量预测或增长预测。
 
 ### 4.3 反目标
 
-出现以下任一结果，即使页面能够打开，也视为需求未完成：
+出现以下任一情况，即使页面可以打开也视为未完成：
 
-- 无数据或查询失败时用 `0` 伪装为真实统计结果；
-- 将不可读、损坏或卷台账缺失的订单包计入“可用备份订单”；
-- 对同一订单的多个副本重复计算订单数或逻辑文件数；
-- 把正常离线冷备盘显示为系统异常；
-- 把历史审计失败事件永久当作当前告警；
-- 每次打开或刷新首页都访问磁盘、NAS 或线上接口；
-- 把离线卷最后一次容量快照当成当前在线可用容量汇总；
-- 仅在前端根据展示字符串临时推断告警，导致不同页面口径不一致。
+- 固定显示“系统正常”或根据前端字符串自行推导健康状态；
+- 将模拟备份计入真实订单、文件、今日结果或新增容量；
+- 将成功降级备份排除出正式备份，或将其伪装为完整备份；
+- 将正常离线冷备介质显示为异常；
+- 将历史失败任务永久显示为当前有效告警；
+- 将封存历史绑定到卷当前 `HOT/COLD` 状态，导致卷重新接入后历史消失；
+- 首页刷新触发磁盘、NAS、Marker、容量或线上连接探测；
+- 查询失败时使用 `0`、空数组或“无告警”掩盖未知；
+- 同一订单因多个任务或多个物理副本被重复计数；
+- 首页与下载、恢复或备份预检对同一卷给出相反的可用性结论。
 
-## 5. 用户与核心使用场景
+## 5. 产品信息架构
 
-### 5.1 目标用户
+页面按“风险优先、核心规模、运行趋势、处理入口”的顺序组织：
 
-首页面向具有 `ADMIN` 权限的本地备份系统管理员。非管理员沿用现有权限策略，不获得管理概览接口数据。
+1. 页面标题、数据观察时间和刷新状态；
+2. 系统健康结论与当前待处理问题；
+3. 三张核心指标卡；
+4. 近 7 日备份趋势与存储运行状态；
+5. 近期运行活动与自动化运行状态。
 
-### 5.2 核心场景
+桌面端推荐布局：
 
-1. 管理员每天登录后确认系统是否健康、是否需要处理告警；
-2. 管理员查看当前可直接下载或线上恢复的真实备份订单规模；
-3. 管理员判断活动热备卷是否接近阈值、是否需要准备备用卷；
-4. 管理员确认冷备卷离线是否属于正常状态；
-5. 管理员查看今日和近 7 日备份结果是否出现异常变化；
-6. 管理员从失败封存、异常卷或损坏副本告警进入对应页面处理；
-7. 管理员从近期任务快速进入订单备份、线上恢复或冷备任务详情。
+```text
+┌──────────────────────────────────────────────────────────────┐
+│ 管理概览                     数据截至 17:30     [刷新数据]   │
+├───────────────────┬──────────────────────────────────────────┤
+│ 系统健康结论      │ 当前待处理问题 Top 3                    │
+│ 严重 1 / 警告 2  │ 问题摘要 + 对象 + 处理入口              │
+├───────────────────┴──────────────────────────────────────────┤
+│ 可恢复订单        │ 可恢复文件          │ 今日任务结果      │
+├──────────────────────────────────┬───────────────────────────┤
+│ 近 7 日备份结果与新增容量        │ 存储运行状态              │
+├──────────────────────────────────┼───────────────────────────┤
+│ 近期运行活动                     │ 自动化运行状态            │
+└──────────────────────────────────┴───────────────────────────┘
+```
 
-## 6. 页面信息架构
+## 6. 系统健康与当前告警
 
-首页采用“先风险、后规模、再趋势与明细”的平衡式工作台结构，自上而下为：
+### 6.1 健康级别
 
-1. 页面标题、数据观察时间和手动刷新；
-2. 系统健康摘要与当前有效告警；
-3. 三个核心统计卡；
-4. 存储容量总览与逐卷容量；
-5. 近 7 日备份趋势；
-6. 近期任务。
+后端返回唯一健康级别，前端只负责展示：
 
-页面不再展示后端原始 JSON。
-
-### 6.1 系统健康摘要
-
-- 无有效告警时显示“系统运行正常”，使用成功色；
-- 仅存在提示或警告级告警时显示“存在需要关注的问题”，使用警告色；
-- 存在严重级告警时显示“存在影响备份或读取的严重问题”，使用危险色；
-- 核心统计或告警数据无法可靠计算时显示“系统状态暂时未知”，使用中性色；即使当前返回零条告警，也不得显示“系统运行正常”；
-- 全新系统尚未纳管任何存储卷时显示“待完成存储初始化”，使用中性色并提供纳管入口；该状态不是有效告警；
-- 摘要同时显示有效告警数量和最后统计时间；
-- 系统健康结论由后端根据 `activeAlerts`、分区可用性与核心 `dataQuality` 统一计算；前端不得扫描其他字段另行推断一套健康状态。
-
-后端按以下优先级生成唯一健康级别：
-
-| 优先级 | `health.level` | 条件 |
+| 级别 | 中文结论 | 条件 |
 |---|---|---|
-| 1 | `CRITICAL` | 告警分区可用且存在至少一条 `CRITICAL` 告警 |
-| 2 | `UNKNOWN` | 告警分区不可用、订单/容量等核心分区发生无法可靠计算的查询失败，或存在 `BLOCKING` 级数据质量问题 |
-| 3 | `WARNING` | 不满足以上条件，且存在 `WARNING`/`INFO` 告警或 `WARNING` 级数据质量问题 |
-| 4 | `SETUP_REQUIRED` | 数据完整可用、无有效告警，且系统从未纳管任何存储卷 |
-| 5 | `NORMAL` | 数据完整可用、无有效告警，且存储体系已初始化 |
+| `CRITICAL` | 存在影响备份或读取的严重问题 | 至少一条有效严重告警 |
+| `UNKNOWN` | 系统状态暂时无法可靠判断 | 告警或核心统计分区不可用，或存在阻断级数据质量问题 |
+| `WARNING` | 存在需要关注的问题 | 至少一条警告，且不存在更高级别条件 |
+| `SETUP_REQUIRED` | 待完成存储初始化 | 从未纳管存储卷且其他分区可用 |
+| `NORMAL` | 系统运行正常 | 所有核心分区可用且无有效告警 |
 
-整体接口请求失败时没有新的 `health` 可用，前端使用“刷新失败”连接状态覆盖上次健康结论，不把上次 `NORMAL` 当作当前结论。
+整体请求失败时，前端必须用“刷新失败”覆盖旧健康结论。即使上一次成功结果为 `NORMAL`，也不能继续把它当作当前结论。
 
-### 6.2 核心统计卡
+### 6.2 告警模型
 
-仅展示以下三张卡：
+当前告警由后端根据当前数据库事实动态生成，不新增告警实例表。每条告警至少包含 `alertKey`、`severity`、`category`、`code`、`title`、`message`、`evidenceAt`、`targetType`、`targetId`、`actionRoute` 和 `actionQuery`。
 
-1. **可用备份订单**：当前至少存在一个可读真实订单包的去重订单数；
-2. **有效备份文件**：可用真实订单包内的逻辑文件数，并附带受管物理数据量；
-3. **今日订单备份**：今日完成的真实备份订单结果，展示成功、失败、跳过。
+相同 `alertKey` 只返回一条。大量文件或订单异常必须聚合，不允许产生逐文件告警风暴。
 
-不增加“正在执行任务”和“备份覆盖率”卡片。
+`alertKey` 必须由 `code + targetType + targetId` 稳定生成。同一对象同一根因只显示最高优先级告警：检查点不存在时只产生 `*_CHECKPOINT_MISSING`；已有明确失败检查点时 `*_FAILED` 抑制同一槽位的 `*_MISSED` 或 `*_STALE`；首次启用且尚未到首次应执行时间不告警。
 
-## 7. 统计指标口径
+首次应执行时间以当前有效开关配置行的 `bk_config.changed_at` 为启用时间：自动备份取不早于启用时间的第一个 `backup.schedule.start-time` 计划分钟；账号同步取 `enabledAt + account.sync-delay-minutes`。有效开关配置行缺失或时间非法时，自动化分区返回 `UNKNOWN` 和数据质量消息，不猜测启用时间，也不产生“检查点缺失”告警。
 
-### 7.1 通用时间与过滤规则
+### 6.3 告警规则
 
-- 业务日期边界统一使用系统时区 `Asia/Shanghai`；
-- “今日”指 `[当日 00:00:00, 次日 00:00:00)`；
-- “近 7 日”包含今天和此前 6 个自然日；
-- 所有统计排除 `is_deleted=1` 的记录；
-- 所有真实备份统计排除 `backup_mode=METADATA_SIMULATION`、订单结果 `SIMULATED` 与 `SIMULATION_FAILED`；
-- 接口返回原始数值，前端负责千分位、容量单位和本地时间格式化；
-- 统计未知与真实数值 `0` 必须严格区分：未知返回 `null` 或明确的 `available=false`，不得返回伪造的 `0`。
+#### 存储与写入能力
 
-### 7.2 可读副本定义
-
-首页沿用文件读取路由的统一语义。订单包副本同时满足以下条件才是可读副本：
-
-- `bk_artifact_copy.artifact_type=ORDER_PACKAGE`；
-- 副本 `lifecycle=ACTIVE` 且未逻辑删除；
-- 副本 `state` 为 `PRESENT` 或 `VERIFIED`；
-- `storage_volume_id` 能关联到未删除的存储卷；
-- 存储卷 `mount_status=ONLINE`；
-- 存储卷未退役、未停用；
-- 存储卷处于允许读取的层级和写入状态；
-- 存储卷 `operation_status` 为空、`IDLE`，或属于明确允许读取的合法保护状态。当前仅允许“唯一 ACTIVE 接替卷上、且能关联合法执行中封存尝试”的 `ARCHIVE_GUARD`；其他卷上的孤立 `ARCHIVE_GUARD` 视为状态异常。
-
-如同一订单包存在多个副本，只要至少一个副本可读，该订单包即视为可读；多个副本不得重复计算逻辑订单与逻辑文件。
-
-真实订单成果必须沿同一条关联链判定：
-
-```text
-bk_order_snapshot.id
-  -> bk_order_package.snapshot_id
-  -> bk_artifact_copy.artifact_type = ORDER_PACKAGE
-     and bk_artifact_copy.artifact_id = bk_order_package.id
-```
-
-该链上的快照与订单包都必须为真实备份模式。不得把订单 A 的真实快照与同订单另一次模拟备份生成的包或副本拼接后计为真实可用。关联链模式矛盾或缺失时排除该成果，并计入数据质量异常。
-
-### 7.2.1 存储卷状态谓词
-
-为保证首页、下载和线上恢复口径一致，以下谓词为本需求的唯一状态定义：
-
-| 术语 | 可执行条件 |
-|---|---|
-| 可读 HOT 卷 | `tier=HOT`、`mount_status=ONLINE`、`admin_status` 为空或 `ENABLED`、`write_status in (ACTIVE, STANDBY, READ_ONLY)`，操作状态为 `IDLE`/空或合法 ACTIVE `ARCHIVE_GUARD` |
-| 可读 COLD 卷 | `tier=COLD`、`mount_status=ONLINE`、`admin_status` 为空或 `ENABLED`、`write_status=READ_ONLY`、操作状态为 `IDLE`/空 |
-| 可读制品 | 副本本身健康且所属卷满足可读 HOT 或可读 COLD；`IMPORT` 卷不计入本期可用订单 |
-| 主动离线冷备 | `tier=COLD`、`mount_status=OFFLINE`、`write_status=READ_ONLY`、`admin_status` 为空或 `ENABLED`、操作状态为 `IDLE`/空 |
-| 预期在线卷异常 | 未删除且未退役/停用的卷为 `UNAVAILABLE`；由于健康调度不会把已是 `OFFLINE` 的卷自动改成 `UNAVAILABLE`，该状态代表原本预期在线但探测失败 |
-| 明确停用卷 | `write_status=DISABLED` 且不承担 `ACTIVE` 角色；不参与读取、写入、容量汇总或普通不可用告警 |
-| 已退役卷 | `admin_status=RETIRED`；不参与读取、写入、容量汇总或普通不可用告警，但若仍存在非法 `ACTIVE` 角色则优先按 ACTIVE 异常处理 |
-
-任何未列出的状态组合均视为未知或非法组合，不能静默当作正常可读。
-
-### 7.3 可用备份订单
-
-`readableOrderCount` 定义为：
-
-> 具有真实备份快照，且当前至少有一个可读订单包副本的不同 `source_order_id` 数量。
-
-规则：
-
-- 同一订单存在多个历史快照或多个物理副本时只计一个订单；
-- 只有模拟快照的订单不计入；
-- 仅有损坏副本、缺失卷台账副本或离线副本的订单不计入当前可用数；
-- 冷备盘重新确认挂载并满足读取条件后，其订单自动重新计入；
-- 冷备盘准备离线后，其订单自动移出当前可用数，但订单和副本台账不得删除。
-
-卡片可下钻到“订单文件”页，并默认使用“当前可读、真实备份”筛选。
-
-### 7.4 有效备份文件
-
-`readableLogicalFileCount` 定义为：
-
-> 每个可读真实订单选取其最新可读真实订单包，汇总订单包 `file_count` 得到的逻辑源文件数。
-
-规则：
-
-- 逻辑文件位于订单 ZIP 包内，不等同于 ZIP 包数量；
-- 同一订单包的多个物理副本不重复累计 `file_count`；
-- 同一订单的多个可读历史包仅选取最新完成的真实包，排序固定为 `snapshot.backup_completed_at DESC, package.create_time DESC, package.id DESC`；`backup_completed_at` 为空时排在非空记录之后；
-- `file_count` 缺失的包不伪造数量，计入 `unknownFileCountPackageCount`，并在卡片说明中提示存在口径不完整数据；
-- 补传文件不混入该逻辑文件数，补传属于独立制品，后续如需展示应新增独立指标。
-
-### 7.5 受管物理数据量
-
-`managedArtifactBytes` 定义为：
-
-> 所有未删除、`lifecycle=ACTIVE`、`state in (PRESENT, VERIFIED)`，且能关联到未删除存储卷台账的受管物理副本 `size` 之和。
-
-该值反映系统已登记的实际物理副本占用，包含订单包和补传文件；同一制品有多个有效副本时按实际副本分别累计。它不同于逻辑源文件大小，也不同于文件系统卷的“已用容量”。
-
-若副本 `size` 缺失，则该副本不计入字节和，并通过 `unknownSizeCopyCount` 显示数据质量提示。活动副本引用的卷不存在或已删除时，该副本不计入可信受管字节，并通过 `unresolvedCopyCount` 提示。前端不得把 `managedArtifactBytes` 标注为磁盘总已用空间。
-
-### 7.6 今日订单备份结果
-
-`todayBackup` 按订单级最终结果统计，而不是按任务数量统计。
-
-- 仅统计任务类型 `ORDER_BACKUP`、`MANUAL_BACKUP` 中的真实备份订单；
-- 以任务 `finished_at` 归属业务日期；
-- 同一任务内同一订单只取最终订单状态；
-- 同一订单今日存在多个已终结真实备份尝试时，只取最新一次，排序固定为 `job.finished_at DESC, job.id DESC, job_order.id DESC`，避免重试重复累计；终态任务的 `finished_at` 缺失时该行进入数据质量异常，不参与今日统计；
-- `SUCCEEDED` 计入成功；
-- `FAILED` 计入失败；
-- `SKIPPED` 计入跳过；
-- 模拟、未终结和无法归类的状态不进入三项，但通过 `excludedCount` 返回，便于发现数据口径异常；
-- 三项均为零时显示“今日暂无已完成的真实订单备份”，不得显示为错误。
-
-卡片点击后进入“订单备份”页，并带入今日时间范围和对应订单结果筛选。
-
-## 8. 存储容量信息
-
-### 8.1 数据来源与探测边界
-
-首页只读取 `bk_storage_volume.total_bytes`、`usable_bytes`、最后一次容量成功观测时间、`last_probed_at`、当前卷状态及错误字段。上述快照由存储卷健康调度或管理员在存储卷管理页主动探测时更新。
-
-首页请求禁止调用 `StorageProbe`、`Files.getFileStore` 或任何磁盘/NAS I/O。手动刷新首页只是重新读取数据库当前快照，不等于“重新探测存储卷”。
-
-`last_probed_at` 表示最近一次探测尝试时间，不能证明该次探测取得了有效容量。系统必须新增 `capacity_observed_at` 或提供语义等价的字段，记录最近一次成功取得合法容量的时间。探测失败、卷主动离线或卷不可达时：
-
-- 不得用失败探测时间刷新 `capacity_observed_at`；
-- 不得清除最后一次合法的 `total_bytes` 和 `usable_bytes`，以便离线冷备展示“离线前快照”；
-- 必须通过挂载状态、最后错误和快照时间明确说明旧值不是当前在线容量；
-- 在线容量汇总与快照新鲜度必须依据 `capacity_observed_at`，不能依据 `last_probed_at`。
-
-### 8.2 在线容量总览
-
-在线容量汇总仅包含以下存储卷：
-
-- 未删除、未退役；
-- `admin_status` 为空或 `ENABLED`，且 `write_status != DISABLED`；
-- `mount_status=ONLINE`；
-- `total_bytes` 和 `usable_bytes` 均已知且合法；
-- 容量快照未过期。
-
-汇总字段：
-
-- `onlineTotalBytes`：在线已知容量卷的总容量之和；
-- `onlineUsedBytes`：`total_bytes - usable_bytes` 之和，负值按数据异常处理而非静默修正；
-- `onlineUsableBytes`：可用容量之和；
-- `onlineUsagePercent`：总已用除以总容量；
-- `includedVolumeCount`：参与汇总卷数；
-- `excludedVolumeCount`：因离线、未知或过期而未参与汇总卷数。
-
-如果没有任何可参与汇总的卷，容量显示“暂无可靠容量数据”，不得显示 `0 B / 0 B` 并宣称正常。
-
-### 8.3 容量快照新鲜度
-
-快照过期阈值为：
-
-```text
-max(storage.volume-health.interval-minutes × 3, 15 分钟)
-```
-
-后端返回 `capacityObservedAt`、`capacityFresh` 和 `snapshotAgeSeconds`。阈值计算使用请求时生效配置；缺少配置时健康间隔默认按 5 分钟处理。
-
-### 8.4 逐卷容量列表
-
-逐卷列表展示全部未删除的已纳管卷，包括正常离线冷备卷，但不同状态采用不同语义：
-
-- 在线且快照新鲜：展示当前已用、可用、总容量和使用率；
-- 在线但快照未知或过期：显示“容量待更新”或“容量数据已过期”；
-- 正常离线冷备：可展示最后一次已知容量，但必须明确标记“离线前快照”和探测时间，不计入在线总容量；
-- 预期在线但不可用：展示异常状态和最后错误，不把旧值描述为当前容量；
-- 已退役卷默认折叠或置底，不计入汇总与容量告警。
-
-每个卷至少展示：卷名称、卷代码、层级、挂载状态、写入状态、操作状态、容量、使用率、数据时间和是否计入在线汇总。点击进入“存储卷管理”对应卷详情。
-
-### 8.5 容量阈值
-
-- `HOT/ACTIVE` 使用 `storage.volume-switch.threshold-percent` 判断是否需要准备或切换活动卷；
-- 其他在线可写 HOT 卷使用 `storage.threshold.hot.percent`；
-- 正常只读 COLD 卷容量高不产生容量告警，因为其不再接收写入，但仍展示使用率；
-- `storage.volume-switch.threshold-percent` 缺失时默认 90%，`storage.threshold.hot.percent` 缺失时默认 75%；配置非法时使用同一默认值并返回配置数据质量提示；
-- 不允许前端自行设定另一套阈值。
-
-## 9. 当前有效告警
-
-### 9.1 告警模型
-
-首页告警由后端在每次概览查询时根据当前权威状态推导，不新增持久化告警表。告警条件恢复后，下一次查询即不再返回。
-
-每条告警至少包含：
-
-| 字段 | 含义 |
-|---|---|
-| `alertKey` | 稳定去重键，同一当前问题在多次刷新中保持一致 |
-| `severity` | `CRITICAL`、`WARNING` 或 `INFO` |
-| `category` | `STORAGE`、`CAPACITY`、`SCHEDULE`、`ARCHIVE`、`ARTIFACT` 或 `DATA_QUALITY` |
-| `code` | 稳定机器码 |
-| `title` | 面向管理员的中文标题 |
-| `message` | 简洁、可行动的中文说明，不包含堆栈和敏感信息 |
-| `evidenceAt` | 支撑当前结论的最近事实时间，不宣称是问题首次出现时间 |
-| `targetType` / `targetId` | 关联对象类型和 ID |
-| `actionRoute` | 前端可识别的页面路由键 |
-| `actionQuery` | 下钻所需的筛选参数 |
-
-告警按严重级别、事实时间倒序排列。相同 `alertKey` 只返回一条；同类大量文件异常必须聚合，不能按每个文件生成首页告警风暴。
-
-首期 `alertKey` 和事实时间规则固定如下：
-
-| 告警 | `alertKey` 模板 | `evidenceAt` 来源 |
+| 代码 | 级别 | 触发条件 |
 |---|---|---|
-| ACTIVE 数量异常 | `STORAGE:ACTIVE_VOLUME_COUNT_INVALID` | 涉及卷的最近 `update_time`；无卷时为本次 `observedAt` |
-| ACTIVE 不可用 | `STORAGE:ACTIVE_VOLUME_UNAVAILABLE:{volumeId}` | `last_probed_at` 与卷 `update_time` 的较晚值 |
-| 容量高/未知 | `CAPACITY:{code}:{volumeId}` | `capacity_observed_at`；完全未知时使用 `last_probed_at` |
-| 预期在线卷不可用 | `STORAGE:EXPECTED_VOLUME_UNAVAILABLE:{volumeId}` | `last_probed_at` |
-| 自动备份/账号同步 | `SCHEDULE:{code}` | 检查点 `last_attempt_at`、`last_success_at` 中与规则相关的时间 |
-| 账号同步检查点缺失 | `SCHEDULE:ACCOUNT_SYNC_CHECKPOINT_MISSING` | 本次 `observedAt` |
-| 封存需处理 | `ARCHIVE:VOLUME_ARCHIVE_ATTENTION:{sourceVolumeId}` | 最新封存尝试 `update_time` |
-| 聚合制品异常 | `ARTIFACT:{code}` | 受影响记录最近 `update_time`，无法取得时使用本次 `observedAt` |
+| `ACTIVE_VOLUME_COUNT_INVALID` | `CRITICAL` | 系统已经纳管卷，但不存在唯一活动热备卷 |
+| `ACTIVE_VOLUME_UNAVAILABLE` | `CRITICAL` | 活动卷离线、不可用、停用、退役、Marker 异常或处于不允许写入的操作状态 |
+| `ACTIVE_VOLUME_CAPACITY_HIGH` | `WARNING` | 活动卷的最新成功容量快照达到切换阈值 |
+| `ACTIVE_VOLUME_CAPACITY_UNKNOWN` | `WARNING` | 活动卷没有合法或足够新的成功容量快照 |
+| `STANDBY_VOLUME_NOT_READY` | `WARNING` | 活动卷已接近切换阈值或不可用，且不存在满足条件的备用卷 |
+| `EXPECTED_VOLUME_UNAVAILABLE` | `WARNING` | 预期在线的启用卷不可用；正常主动离线冷备卷除外 |
 
-聚合告警成员数量变化不改变 `alertKey`。由于首期不持久化告警生命周期，首页不展示或承诺“首次发现时间”；如果未来需要精确持续时长，必须引入告警实例表后另行设计。
+备用卷“满足条件”仅依据持久化事实判断：`HOT/ONLINE/STANDBY/ENABLED/IDLE`，容量快照新鲜且未达到阈值。首页不为判断备用卷而执行探测。
 
-### 9.2 告警严重级别
+#### 制品与可恢复性
 
-- `CRITICAL`：已经阻止新备份、下载/恢复或表明核心数据不可读，需要立即处理；
-- `WARNING`：当前仍可运行，但容量、调度、介质或数据质量已经偏离预期，需要尽快处理；
-- `INFO`：需要管理员知晓或完成后续人工动作，但尚未影响核心路径。首期应谨慎使用，避免首页噪音。
+| 代码 | 级别 | 触发条件 |
+|---|---|---|
+| `UNREADABLE_BACKUP_ARTIFACTS` | `CRITICAL` | 正式可用订单包因副本损坏、卷缺失或预期在线卷异常而完全不可读 |
+| `DEGRADED_ARTIFACT_REDUNDANCY` | `WARNING` | 至少一个副本可读，但同一制品的其他活动副本异常 |
+| `ARTIFACT_METADATA_INCOMPLETE` | `WARNING` | 活动副本缺少卷 ID、相对键、大小或必要校验信息 |
 
-### 9.3 告警规则表
+仅存在于健康、主动离线的 `COLD/OFFLINE/READ_ONLY/ENABLED/IDLE` 卷时，订单当前不计入“可恢复订单”，但不产生不可读制品告警。`REPAIR_REQUIRED`、卷引用缺失、预期在线卷不可用和零活动副本均不属于正常离线。
 
-| 告警代码 | 级别 | 触发条件 | 恢复条件 | 事实来源 | 跳转 |
-|---|---|---|---|---|---|
-| `ACTIVE_VOLUME_COUNT_INVALID` | CRITICAL | 存储体系已初始化，但 `HOT/ACTIVE` 卷数量不等于 1 | 恢复为唯一 ACTIVE | `bk_storage_volume` | 存储卷管理 |
-| `ACTIVE_VOLUME_UNAVAILABLE` | CRITICAL | 唯一 ACTIVE 卷非 `ONLINE`、已停用/退役、处于阻止写入的操作状态或存在卷标记/访问错误 | ACTIVE 卷恢复为可写健康状态，或管理员完成故障切换 | `bk_storage_volume` | 存储卷详情 |
-| `HOT_VOLUME_CAPACITY_HIGH` | WARNING | ACTIVE 或可写 HOT 卷的容量字段合法、`capacityFresh=true`，且使用率达到适用阈值 | 使用率低于阈值、快照变为未知/非法/过期，或卷不再承担写入角色 | 卷容量快照与配置 | 存储卷详情 |
-| `VOLUME_CAPACITY_UNKNOWN` | WARNING | 预期在线且启用的 HOT 卷容量未知、非法或快照过期 | 获得新鲜合法容量快照 | `bk_storage_volume` 与配置 | 存储卷详情 |
-| `EXPECTED_VOLUME_UNAVAILABLE` | WARNING | 非主动离线、非退役的预期在线卷为 `UNAVAILABLE` | 重新探测/确认挂载后恢复 ONLINE，或管理员按合法流程改为 OFFLINE/RETIRED | `bk_storage_volume` | 存储卷详情 |
-| `BACKUP_SCHEDULE_FAILED` | WARNING | 自动备份已启用且备份候选检查点当前状态为 `FAILED` | 后续候选扫描成功 | `bk_sync_cursor` 的 `BACKUP_CANDIDATE` | 订单备份 |
-| `BACKUP_SCHEDULE_OVERDUE` | WARNING | 自动备份已启用，当前时间达到或超过下一计划时间加宽限期，但没有新的成功检查点，且当前检查点不是 `FAILED` | 后续候选扫描成功，或关闭自动备份 | 备份配置与检查点 | 订单备份 |
-| `ACCOUNT_SYNC_FAILED` | WARNING | 账号同步已启用且同步检查点当前状态为 `FAILED` | 后续同步成功，或关闭账号同步 | `bk_sync_cursor` 的 `USER` | 账号管理 |
-| `ACCOUNT_SYNC_STALE` | WARNING | 账号同步已启用，按第 9.5 节锚点计算已经陈旧，且当前检查点不是 `FAILED` | 同步成功或关闭同步 | 同步配置与检查点 | 账号管理 |
-| `ACCOUNT_SYNC_CHECKPOINT_MISSING` | WARNING | 账号同步已启用、应用启动初始化已经完成，但不存在 `USER` 检查点 | 创建检查点或关闭账号同步 | `bk_sync_cursor` 与同步配置 | 账号管理 |
-| `VOLUME_ARCHIVE_ATTENTION` | CRITICAL | 源卷最新未删除封存尝试（`attempt_no DESC, id DESC`）处于失败、准备失败、提交失败，或源卷 `REPAIR_REQUIRED` | 重新封存成功，或管理员按业务流程放弃/退役并解除修复状态 | `bk_volume_archive`、`bk_storage_volume` | 冷备管理详情 |
-| `UNREADABLE_ARTIFACTS` | CRITICAL | 存在真实订单包，且全部活动副本均损坏、卷台账缺失、位于预期在线但不可用的卷，或因非法状态无法读取；仅有健康的主动离线冷备副本不属于该告警 | 至少恢复一个可读副本、仅保留可定位的健康离线冷备副本，或该制品按合法流程退役/删除 | `bk_artifact_copy`、`bk_storage_volume` | 订单文件异常筛选 |
-| `DEGRADED_ARTIFACT_COPIES` | WARNING | 制品存在异常活动副本，但仍有其他可读副本 | 异常副本修复或退出活动生命周期 | `bk_artifact_copy`、`bk_storage_volume` | 订单文件异常筛选 |
-| `ARTIFACT_METADATA_INCOMPLETE` | WARNING | 活动副本缺少卷 ID、相对路径、大小或必要校验值，或引用已删除/不存在卷 | 元数据补齐或异常记录退出活动生命周期 | 制品及卷台账 | 订单文件异常筛选 |
+成功降级备份 `REAL + INCOMPLETE` 本身不是告警。它在指标卡中单独标识，以表达完整性而不是故障。
 
-### 9.4 告警抑制与去重
+#### 整盘封存
 
-为避免同一根因生成多条噪音告警，后端应执行以下抑制规则：
+| 代码 | 级别 | 触发条件 |
+|---|---|---|
+| `VOLUME_ARCHIVE_REPAIR_REQUIRED` | `CRITICAL` | 最新失败封存尝试仍对应源卷 `REPAIR_REQUIRED`，或卷与封存操作引用不一致 |
+| `VOLUME_ARCHIVE_STATE_INCONSISTENT` | `CRITICAL` | 活动封存尝试与源卷/保障卷的操作状态不匹配 |
 
-1. `ACTIVE_VOLUME_COUNT_INVALID` 已由唯一 ACTIVE 不变量破坏触发时，不再为“缺少 ACTIVE”重复生成派生容量告警；
-2. 同一 ACTIVE 卷同时不可用和容量未知时，只保留 `ACTIVE_VOLUME_UNAVAILABLE`；
-3. 正常 `COLD/OFFLINE/READ_ONLY`、已退役的非 ACTIVE 卷和管理员明确停用的非 ACTIVE 卷不触发普通不可用或容量过期告警；退役卷若仍非法保留 `ACTIVE` 角色，必须优先触发 ACTIVE 异常；
-4. 同一制品同时满足不可读和元数据不完整时，归入更严重的 `UNREADABLE_ARTIFACTS`；
-5. 文件类告警按异常类型聚合，消息展示受影响订单数、制品数和副本数，最多附带少量示例 ID；
-6. 封存失败与源卷 `REPAIR_REQUIRED` 属于同一封存根因时合并为一条告警；
-7. 已关闭的自动备份或账号同步不产生对应失败、过期告警；配置关闭本身不是异常。
-8. 制品仅因所属 `COLD/OFFLINE/READ_ONLY` 卷按流程主动离线而暂时不可读时，不触发 `UNREADABLE_ARTIFACTS`；卷标记、存放备注和副本元数据缺失仍按数据质量规则告警。
-9. 自动备份检查点为 `FAILED` 时，`BACKUP_SCHEDULE_FAILED` 抑制 `BACKUP_SCHEDULE_OVERDUE`；账号同步检查点为 `FAILED` 时，`ACCOUNT_SYNC_FAILED` 抑制 `ACCOUNT_SYNC_STALE`。
-10. 同一 HOT 卷容量快照未知、非法或过期时，只返回 `VOLUME_CAPACITY_UNKNOWN`，不得继续使用旧使用率生成 `HOT_VOLUME_CAPACITY_HIGH`。
+单独存在历史 `PREPARE_FAILED/VERIFY_FAILED/COMMIT_FAILED/CANCELLED/ABANDONED` 记录不构成当前告警。告警必须由未解除的当前卷状态支撑。
 
-存储体系“已初始化”定义为数据库中存在任一未逻辑删除的存储卷记录，包括已退役卷。全新部署且从未纳管任何卷时不触发 `ACTIVE_VOLUME_COUNT_INVALID`；一旦完成过纳管，即使后续所有卷离线、停用或退役，没有唯一 ACTIVE 仍属于需要处理的异常。
+#### 自动备份
 
-ACTIVE 卷的 `ARCHIVE_GUARD` 是整盘封存期间保护接替卷角色的合法临时状态，只要关联封存尝试仍在合法执行且卷保持在线可写，就不得触发 `ACTIVE_VOLUME_UNAVAILABLE`。`SEALING`、`GOING_OFFLINE`、`MOUNTING`、`REPAIR_REQUIRED` 或无法关联合法操作的未知状态出现在 ACTIVE 卷上时，才视为阻止写入或状态不一致。
+| 代码 | 级别 | 触发条件 |
+|---|---|---|
+| `BACKUP_SCHEDULE_FAILED` | `WARNING` | `BACKUP_CANDIDATE` 检查点当前状态为 `FAILED` |
+| `BACKUP_SCHEDULE_MISSED` | `WARNING` | 自动备份开启，最近应执行的计划槽位已经过去，但该槽位后没有成功检查点 |
+| `BACKUP_SCHEDULE_CHECKPOINT_MISSING` | `WARNING` | 自动备份开启但检查点不存在 |
 
-### 9.5 自动备份逾期宽限
+自动备份遵循当前实现的“不补跑”语义。错过计划槽位后，首页显示已错过和下一次计划时间，并提供进入订单备份页的入口；首页不自动触发补偿扫描。管理员显式执行“立即扫描”且扫描成功后，`BACKUP_CANDIDATE.lastSuccessAt` 成为新的周期锚点；下一槽位精确按 `lastSuccessAt.toLocalDate().plusDays(intervalDays).atTime(configuredStartTime)` 计算，而不是在强制扫描时刻直接加天数。
 
-自动备份逾期宽限首期默认 120 分钟。所有计算使用 `Asia/Shanghai`，边界采用“当前时间大于或等于截止时间即触发”。
+#### 账号同步
 
-自动备份采用“成功相对周期”，即上一次成功日期决定下一周期；延迟成功跨日会从实际成功所在日期重新计算后续周期，不承诺保持最初日历槽位。下一应成功时间计算如下：
+| 代码 | 级别 | 触发条件 |
+|---|---|---|
+| `ACCOUNT_SYNC_FAILED` | `WARNING` | 账号同步开启且检查点当前状态为 `FAILED` |
+| `ACCOUNT_SYNC_STALE` | `WARNING` | 最近成功时间超过 `max(syncDelay × 3, 60 分钟)` |
+| `ACCOUNT_SYNC_CHECKPOINT_MISSING` | `WARNING` | 账号同步开启但检查点不存在 |
 
-```text
-last_success_at 存在：
-  next_due = (last_success_at 的本地日期 + interval_days) + start_time
+账号同步或线上通信被管理员关闭时显示为“已停用”，不产生告警。
 
-last_success_at 不存在：
-  若当前时间尚早于今天 start_time：next_due = 今天 start_time
-  否则：next_due = 今天 start_time
+### 6.4 不进入当前告警的内容
 
-overdue = now >= next_due + 120 分钟，且该 due 之后没有成功检查点
-```
+- 历史失败、部分失败或取消的备份和恢复任务；
+- 当前已经解除卷异常的历史封存失败；
+- 成功降级备份；
+- 正常离线冷备介质；
+- 管理员主动关闭的自动备份、同步、清理或恢复功能；
+- 审计日志中的历史失败事件。
 
-首次部署在当天计划时间之后启动时，调度器应立即获得执行机会；如果在宽限期内成功，不产生逾期告警。服务停机跨越多个周期时只生成一条逾期告警，不按漏过周期数重复。`interval_days` 非法时使用 1 天、`start_time` 非法时使用 `05:00`，同时返回配置数据质量提示；正常配置写入仍应由配置校验器提前拒绝非法值。
+上述内容可以出现在近期运行活动或状态说明中，但不能影响当前健康结论。
 
-账号同步陈旧阈值为 `max(account.sync-delay-minutes × 3, 60 分钟)`：
+## 7. 核心指标
 
-```text
-last_success_at 存在：anchor = last_success_at
-last_success_at 不存在且 last_attempt_at 存在：anchor = last_attempt_at
-last_success_at 与 last_attempt_at 都不存在但检查点存在：anchor = checkpoint.create_time
-检查点不存在：不伪造陈旧时间，返回 ACCOUNT_SYNC_CHECKPOINT_MISSING 有效告警
-stale = now >= anchor + stale_threshold
-```
+### 7.1 通用规则
 
-账号同步模块启用时，应用启动初始化必须先确保 `USER/IDLE` 检查点存在，再对外提供概览服务；因此初始化完成后的检查点缺失属于当前异常。账号同步首次运行在阈值内不产生陈旧告警；当前状态为 `FAILED` 时只显示失败告警。后续如需开放自动备份宽限配置，可新增专用配置项；前端不得硬编码任何时间阈值。
+- 业务时区固定为 `Asia/Shanghai`。应用必须在 Spring 初始化和任何时间事实写入前，把进程默认时区设置为上海，并把 JDBC 会话、Jackson 及每个可独立执行的数据库初始化入口统一为 `+08:00`；因此现有 `LocalDateTime.now()`、MyBatis 自动填充和数据库 `CURRENT_TIMESTAMP` 写入同一上海本地时间。数据库 `DATETIME` 与 `Instant` 的转换必须使用统一上海时区编解码器，不得直接按 `ZoneOffset.UTC` 解释；外部协议要求 UTC 时，也必须先把上海本地时间绑定 `Asia/Shanghai`，再转换为同一瞬间的 UTC 偏移时间。概览策略额外注入 `Clock` 以便确定性测试，前端不使用浏览器时区重算；
+- `REAL` 为生产备份，`METADATA_SIMULATION` 为模拟；
+- 逻辑删除数据不参与统计；
+- `null` 表示未知或不可计算，`0` 只表示可靠计算出的零；
+- 同一订单按 `source_order_id` 去重；
+- 订单、逻辑文件与物理副本分别计量，不能混用；
+- 所有读写可用性规则必须来自共享策略，不能在概览 SQL 中复制另一套硬编码真值表。
 
-### 9.6 告警与审计的边界
+### 7.2 可恢复订单
 
-- 告警回答“现在是否仍有问题”；
-- 审计回答“过去发生过什么操作或异常”；
-- 任务日志回答“一次任务具体执行了什么”；
-- 首页可使用状态字段中的错误摘要生成告警消息，但不得扫描审计日志来恢复当前状态；
-- 告警消失不删除审计、任务或封存尝试记录。
+“可恢复订单”指当前至少存在一个可读正式订单包的去重订单。
 
-## 10. 近 7 日备份趋势
+必须同时满足：
 
-### 10.1 展示内容
+1. 快照 `backup_mode=REAL`；
+2. 快照 `snapshot_status=AVAILABLE`；
+3. 订单包 `backup_mode=REAL` 且 `status=AVAILABLE`；
+4. 存在 `artifact_type=ORDER_PACKAGE`、`lifecycle=ACTIVE`、`state in (PRESENT, VERIFIED)` 的活动副本；
+5. 副本关联的存储卷当前满足共享可读策略。
 
-趋势图按自然日展示：
+同一订单存在多个正式包时，按以下规则归并：
 
-- 成功订单数；
-- 失败订单数；
-- 跳过订单数；
-- 当日新增真实订单包数据量。
+1. 先找出当前至少有一个可读副本的正式可用包；查询必须保留零活动副本的正式包，不能因内连接提前丢弃；
+2. 按 `(backup_completed_at IS NULL) ASC, backup_completed_at DESC, snapshot_id DESC, package_id DESC` 选择最新可读代表包；完成时间缺失同时进入数据质量摘要；
+3. `complete`、`incomplete` 和 `file_count` 全部取自代表包，因此 `complete + incomplete = total`；
+4. 最新正式包不可读但旧正式包可读时，允许回退到最新可读代表包，确保当前仍可恢复的历史版本不被误报为不可恢复。
 
-### 10.2 统计口径
+每个订单最终只进入一个顶层互斥分类，优先级如下：
 
-- 订单结果沿用第 7.6 节口径；
-- 同一订单同一天存在多次已终结真实备份时取当天最后一次结果；
-- 指标名称明确为“新增真实订单包逻辑字节”，不称为磁盘新增占用；
-- 以真实订单包关联快照的 `backup_completed_at` 归属日期；该时间缺失时不回退到其他时间列，而是排除并计入数据质量异常；
-- 仅统计 `backup_mode=REAL`、`status=AVAILABLE` 的不同 `package.id`，每个包只计一次 `package_size`；
-- 同一订单因多个真实成功尝试生成多个不同可用包时，各包都属于实际新增逻辑产物并分别计入；
-- 多物理副本不重复增加“新增真实订单包逻辑字节”；
-- 模拟包、删除记录和大小未知包不计入字节和，大小未知数量单独返回；
-- 无数据日期补零，保证固定返回 7 个日期点；
-- 图表图例和悬浮提示使用中文，容量使用统一格式化方法。
+1. 任一正式可用包存在可读副本 → `readable`；
+2. 否则只要存在损坏副本、卷引用缺失、预期在线卷不可用、元数据缺失或零活动副本 → `abnormalUnreadable`；
+3. 只有全部健康活动副本都位于 `COLD/OFFLINE/READ_ONLY/ENABLED/IDLE` 的预期离线卷时 → `temporarilyOffline`。
 
-趋势用于快速发现变化，不替代统计报表。点击某日数据可进入订单备份页并带入日期和结果筛选。
+卡片返回 `total`、`complete`、`incomplete`、`temporarilyOffline` 和 `abnormalUnreadable`。`total` 仅等于当前可读订单数，`complete` 与 `incomplete` 是其互斥拆分且两者之和必须等于 `total`；`temporarilyOffline` 与 `abnormalUnreadable` 是另外两个互斥的不可读分类，不包含在 `total` 中。不得将 `incomplete` 文案显示为“完整成功”。可读订单中其他异常冗余副本仍可产生 `DEGRADED_ARTIFACT_REDUNDANCY`，但不改变订单分类。
 
-## 11. 近期任务
+### 7.3 可恢复文件和受管物理容量
 
-### 11.1 展示范围
+“可恢复文件”使用 7.2 所定义的每个可恢复订单代表包 `file_count` 求和。同一订单即使存在多个历史包或物理副本也只计算一次逻辑文件数。
 
-展示最近 10 条未删除任务，按 `requested_at` 或创建时间倒序，覆盖：
+“受管物理容量”统计 `ORDER_PACKAGE` 和 `SUPPLEMENT_FILE` 的活动健康物理副本 `size` 之和：
 
-- 订单备份；
-- 线上恢复；
-- 整盘冷备封存；
-- 清理、补传等已有任务类型。
+- 多个真实物理副本分别占用空间，应分别计量；
+- 正常离线冷备副本仍属于受管物理容量；
+- 缺少大小的副本不补零，返回已知下限及未知副本数量；
+- 该值不是磁盘已用容量，也不是近 7 日新增容量。
 
-### 11.2 展示字段
+卡片返回 `logicalFileCount`、`managedArtifactBytes`、`unknownFileCountPackageCount` 和 `unknownSizeCopyCount`。
 
-- 任务编号与任务类型中文名；
-- 当前状态中文标签；
-- 订单进度或文件进度；
-- 创建时间、开始时间、完成时间；
-- 目标/源存储卷摘要（适用时）；
-- 失败摘要（失败时，截断展示）；
-- “查看详情”入口。
+### 7.4 今日结束任务中的订单结果
 
-运行中任务可正常出现，但首页不为其设置独立 KPI。任务类型决定下钻页面；未知任务类型进入通用任务详情或仅展示只读摘要，不能导致整个首页失败。
+统计父任务 `job.finished_at` 落在 `Asia/Shanghai` 当日 `[00:00, 次日 00:00)` 的真实订单最终结果。该口径表示“今日结束任务中的订单结果”，不是订单自身在当天某时刻完成；现有 `bk_job_order` 没有独立完成时间，不伪造订单级时间精度。
 
-## 12. 页面交互与状态展示
+纳入 `ORDER_BACKUP`、`MANUAL_BACKUP` 和 `DEGRADED_BACKUP`；排除模拟执行、`SIMULATED/SIMULATION_FAILED`、未终结任务和逻辑删除记录。
 
-### 12.1 刷新
+同一订单在当日结束的多个任务中出现时，按 `job.finished_at DESC, job.id DESC` 取最后一次订单结果。返回 `completeSucceeded`、`incompleteSucceeded`、`failed`、`skipped` 和 `total`。成功完整性优先根据最终发布快照的 `backup_completeness` 判断，不能仅依赖任务类型。
 
-- 页面首次进入自动加载；
-- 点击“刷新数据”重新请求概览；
-- 刷新期间保留已有数据并显示局部加载状态，避免整页闪空；
-- 防止重复点击产生并发请求；
-- 刷新不触发存储卷探测、任务执行或任何写操作；
-- 成功后更新“统计时间”，失败时保留上次成功数据并提示其已过期。
-- 如果后端使用短缓存，管理员点击“刷新数据”必须绕过响应缓存并读取最新已提交数据库状态；仍然不得触发外部探测。
+## 8. 近 7 日趋势
 
-### 12.2 下钻
+趋势固定返回今天及此前 6 个自然日，无数据日期补零。
 
-所有下钻使用应用内部路由键和结构化查询参数，不拼接不受控 URL。至少支持：
+页面在同一面板内使用两个独立图表：
 
-- 订单统计 → 订单文件；
-- 今日结果/趋势 → 订单备份；
-- 卷容量/卷告警 → 存储卷管理；
-- 封存告警 → 冷备管理；
-- 账号同步告警 → 账号管理；
-- 近期任务 → 对应任务详情。
+1. 订单结果堆叠柱状图：完整成功、降级成功、失败、跳过；
+2. 新增正式订单包逻辑容量趋势：每天新增可用正式订单包 `package_size`。
 
-若目标记录已被合法删除或不可见，目标页展示“记录不存在或已不可用”，不得退回首页或无提示失败。
+不使用双 Y 轴，不将物理副本容量与逻辑新增容量混为一条曲线。
 
-### 12.3 状态中文化与视觉语义
+每日订单结果沿用今日结果的去重规则；新增容量按快照 `backup_completed_at` 归日，只统计 `REAL + AVAILABLE` 的不同订单包。多物理副本不重复增加逻辑新增容量；缺少完成时间或大小的包被排除并进入数据质量摘要。
 
-- 复用统一 `StatusBadge` 状态字典，不在首页复制另一份英文到中文映射；
-- `HOT` 使用暖色，`COLD` 使用冷色；
-- 正常、警告、严重、不可用使用一致的全局色彩语义；
-- 颜色不是唯一信息载体，标签必须包含中文文字；
-- 未知状态展示“未知（原始码）”或安全兜底中文，不直接裸露英文枚举；
-- 容量进度条颜色随阈值变化，但必须同时展示数值与百分比。
+点击某日或某个结果段进入订单备份页，并携带日期和订单结果筛选。
 
-### 12.4 响应式与可读性
+## 9. 存储运行状态
 
-- 桌面宽屏优先，兼容常见 1366×768 分辨率；
-- 窄屏时统计卡和图表纵向重排，不产生水平溢出；
-- 告警标题、卷名和失败摘要过长时省略并提供完整提示；
-- 空态、错误态、未知态不能只依赖颜色区分。
+### 9.1 首页展示内容
 
-## 13. 空态、异常态与部分数据不可用
+存储面板按运行优先级展示：
 
-### 13.1 全新系统
+1. 当前活动热备卷；
+2. 可用备用热备卷；
+3. 当前冷备介质摘要；
+4. 在线卷容量汇总。
 
-数据库尚无订单、任务或存储卷时：
+活动热备卷展示卷名称、卷代码、挂载/写入/操作状态、已用/可用/总量、使用率、告警阈值、最近探测时间和最近成功容量观测时间。
 
-- 订单和文件统计显示真实 `0`；
-- 今日结果与趋势显示零值；
-- 容量区显示“尚未纳管存储卷”；
-- 在尚未纳管任何卷的初始状态不生成 `ACTIVE_VOLUME_COUNT_INVALID`，顶部显示 `SETUP_REQUIRED/待完成存储初始化`，并提供“前往纳管存储卷”引导。
+备用卷展示满足持久化条件的数量和优先级最高候选卷。如果活动卷健康且容量充足，没有备用卷只是信息；只有活动卷接近阈值或不可用时才升级为警告。
 
-### 13.2 查询失败
+冷备摘要展示当前 `COLD` 卷在线、正常离线和需要修复数量，同时展示累计成功封存次数和最近成功封存时间。封存历史来自 `bk_volume_archive`；原卷后来转为 `HOT/ACTIVE` 时历史仍然保留。
 
-- 整体接口失败时前端不得清空上一次成功数据；
-- 页面显式显示“数据刷新失败”和上次成功时间；
-- 不显示“系统运行正常”；
-- 后端记录 requestId、失败分区和异常摘要，不记录敏感配置或完整绝对路径；
-- 前端展示可复制的 requestId 便于排查。
+### 9.2 容量快照规则
 
-### 13.3 数据质量异常
+首页只读取持久化容量快照，不执行探测。存储卷需要区分：
 
-可局部计算但存在缺失字段时：
+- `last_probed_at`：最近一次探测尝试时间；
+- `capacity_observed_at`：最近一次合法成功容量快照时间。
 
-- 返回已知结果及 `dataQuality` 摘要；
-- 相关位置显示“部分数据不完整”，不得把未知值补为零；
-- 满足第 9 节规则时同时生成聚合数据质量告警；
-- 单条脏数据不得导致整个首页不可用。
+探测失败只更新探测时间和错误，必须保留最近合法容量和 `capacity_observed_at`。
 
-`dataQuality.messages` 每项至少包含 `code`、`severity`、`section`、`affectedCount` 和中文 `message`。数据质量严重级别及其健康影响固定如下：
+合法容量必须满足 `totalBytes > 0` 且 `0 <= usableBytes <= totalBytes`。使用率按 `(totalBytes - usableBytes) / totalBytes × 100` 计算，使用可防溢出的十进制定点运算并四舍五入保留 1 位小数；总量非法时返回 `null`，不返回 `0%`。
 
-| 数据质量问题 | 级别 | 健康影响 | 处理 |
-|---|---|---|---|
-| `unknownFileCountPackageCount > 0` | `BLOCKING` | 若无更高优先级严重告警则为 `UNKNOWN` | 文件 KPI 显示已知值与未知包数，不伪造完整总数 |
-| `unknownSizeCopyCount > 0` | `BLOCKING` | 若无更高优先级严重告警则为 `UNKNOWN` | 受管字节显示已知下限并标注不完整 |
-| 真实/模拟成果关联模式矛盾 | `BLOCKING` | 若无更高优先级严重告警则为 `UNKNOWN` | 排除冲突成果并显示受影响数量 |
-| 活动副本引用卷缺失或关键定位元数据不完整 | `WARNING` | 至少为 `WARNING`；若导致真实订单包完全不可读则由对应 CRITICAL 告警升级 | 同时生成 `ARTIFACT_METADATA_INCOMPLETE` 或 `UNREADABLE_ARTIFACTS` |
-| 容量值非法或在线容量无法可靠汇总 | `BLOCKING` | `UNKNOWN` | 排除异常卷并明确不可计算范围 |
-| 配置非法而使用默认值 | `WARNING` | 至少为 `WARNING` | 返回配置项代码与已采用的默认规则，不返回敏感配置原文 |
-| 趋势包缺少 `backup_completed_at` 或 `package_size` | `WARNING` | 至少为 `WARNING` | 排除该包并返回受影响数量 |
-| 不影响任何核心数值或告警判断的展示字段缺失 | `INFO` | 不单独改变健康级别 | 局部显示未知占位 |
+容量新鲜度阈值为 `max(storage.volume-health.interval-minutes × 3, 15 分钟)`。
 
-`dataQuality.complete` 仅在不存在 `BLOCKING` 或 `WARNING` 项时为 `true`。数据质量问题可以不单独进入 `activeAlerts`，但必须按上表参与后端健康级别计算；已在第 9 节定义为当前告警的同一问题不得在页面重复显示两条告警卡。
+在线容量汇总只纳入启用、在线、非停用、容量合法且快照新鲜的卷。离线冷备卷可显示“离线前快照”，但不进入在线容量汇总。
 
-## 14. 后端接口需求
+### 9.3 共享卷访问策略
 
-### 14.1 接口
+首页、下载、恢复、副本解析和备份预检必须共用一个卷访问策略。
 
-沿用：
+可读卷至少满足：未逻辑删除、`ONLINE`、`ENABLED`、非 `DISABLED`、层级为 `HOT` 或 `COLD + READ_ONLY`，且操作状态为 `IDLE` 或匹配活动封存尝试的合法 `ARCHIVE_GUARD`。
+
+合法 `ARCHIVE_GUARD` 必须同时满足：卷仍为唯一 `HOT/ONLINE/ACTIVE`；`operation_ref_id` 指向未终结封存尝试；封存尝试的 `successor_volume_id` 等于该卷；封存阶段属于 `REQUESTED/SWITCHED/MANIFEST_FROZEN/VERIFYING/COMMITTING`。
+
+其他非 `IDLE` 状态均不能被首页自行视为可读或可写。
+
+共享策略必须同时提供 Java 判定和 SQL 谓词生成能力，两者来自同一规则定义并通过完整状态矩阵等价测试。概览聚合可读取候选行后在 Java 分类；订单列表的 `storageAccessible/storageIssue` 筛选必须在数据库分页和 `COUNT` 之前使用共享策略生成的谓词，禁止复制 SQL 真值表，也禁止分页后过滤。
+
+## 10. 近期运行活动
+
+### 10.1 展示范围
+
+首页展示最近 10 条运行活动，统一覆盖自动/手工/降级订单备份、线上恢复、整盘冷备封存、补传文件、COS 清理预览与执行、自动清理，以及历史冷备写出、导入和热备清理任务。
+
+### 10.2 统一活动模型
+
+每条活动至少包含 `activityId`、`sourceType=JOB|VOLUME_ARCHIVE`、`sourceId`、`activityType`、中文名称、`status`、进度、订单结果、请求/开始/完成时间、存储摘要、失败摘要和受控下钻目标。
+
+整盘封存状态以 `bk_volume_archive.phase` 为准，任务进度可以引用关联 `bk_job`；不能只看通用任务状态而丢失封存业务阶段。
+
+运行中活动正常显示，但不建立单独 KPI。历史失败活动只影响行状态，不自动生成当前告警。
+
+### 10.3 下钻
+
+- 备份活动 → 订单备份任务弹窗；
+- 恢复活动 → 线上恢复任务弹窗；
+- 封存活动 → 冷备封存详情抽屉；
+- 清理活动 → COS 清理页；
+- 补传活动 → 对应订单文件页，无法可靠定位时只显示摘要；
+- 未知历史任务类型 → 只读摘要，不导致整个首页失败。
+
+首页不读取 `bk_job_execution_log`。任务日志在进入详情后按现有分页接口加载。
+
+## 11. 自动化运行状态
+
+### 11.1 自动备份
+
+展示是否启用、当前执行模式、计划开始时间和周期、最近扫描尝试、最近扫描成功、最近扫描处理订单数、最近错误、下一次计划时间和是否错过最近计划槽位。`BACKUP_CANDIDATE` 成功仅表示候选扫描及任务创建阶段成功，不得标记为“最近备份成功”。
+
+当前调度语义是“错过不补跑”。首页只说明状态并提供进入订单备份页的入口，不执行“立即扫描”。
+
+### 11.2 账号同步
+
+展示账号同步开关、线上通信开关、当前检查点状态、最近尝试、最近成功、最近处理数量和错误摘要。
+
+### 11.3 COS 自动清理
+
+展示自动清理开关、配置周期、最近一条 `AUTO_CLEANUP` 任务状态和完成时间。自动清理当前没有独立检查点时，首页不得伪造“下一次精确运行时间”。
+
+### 11.4 线上恢复
+
+恢复是管理员按需操作，不属于自动化流水线。首页可以显示恢复功能是否启用，但关闭不影响健康级别。
+
+## 12. 权威数据来源
+
+| 展示内容 | 主要事实来源 | 不使用的来源 |
+|---|---|---|
+| 可恢复订单 | `bk_order_snapshot`、`bk_order_package`、`bk_artifact_copy`、`bk_storage_volume` | 审计日志、任务总状态 |
+| 完整/降级拆分 | `bk_order_snapshot.backup_completeness` | 仅凭任务类型猜测 |
+| 可恢复文件 | `bk_order_package.file_count` | 物理副本条数 |
+| 受管物理容量 | `bk_artifact_copy.size/state/lifecycle` | 存储卷已用容量 |
+| 今日结束任务中的订单结果 | `bk_job.finished_at`、`bk_job_order`、发布快照 | 任务条数、订单自身完成时间 |
+| 7 日新增容量 | `bk_order_snapshot.backup_completed_at`、`bk_order_package.package_size` | 多副本容量 |
+| 活动/备用/冷备卷 | `bk_storage_volume` 持久化状态与容量快照 | 首页实时探测 |
+| 封存历史 | `bk_volume_archive` | 卷当前层级 |
+| 封存进度 | `bk_volume_archive` 聚合字段与关联 `bk_job` | 首页扫描全部 `bk_volume_archive_item` |
+| 自动备份 | `bk_sync_cursor(BACKUP_CANDIDATE)` 与有效配置 | 调度器内存状态 |
+| 账号同步 | `bk_sync_cursor(USER)` 与有效配置 | 审计日志 |
+| 自动清理 | 有效配置与最近 `AUTO_CLEANUP` 任务 | 内存时间戳 |
+| 近期活动 | `bk_job`、`bk_job_order`、`bk_volume_archive` | 任务日志全文 |
+| 当前告警 | 以上当前事实动态推导 | 历史审计失败 |
+
+## 13. 后端设计
+
+### 13.1 接口
+
+沿用管理员接口：
 
 ```http
 GET /api/v1/admin/overview
+GET /api/v1/admin/overview?refresh=true
 ```
 
-接口保持管理员权限校验和统一 `ApiResponse` 包装。原接口的 `configs` 原始配置列表不再作为首页展示数据返回；前端只接收已计算、可展示且非敏感的结果。
+`refresh=true` 只绕过最多 30 秒的响应缓存并读取最新已提交数据库状态，仍然不得执行磁盘、NAS 或线上调用。
 
-### 14.2 建议响应结构
+### 13.2 响应结构
 
 ```json
 {
-  "observedAt": "2026-11-10T15:30:00",
-  "health": {
-    "level": "WARNING",
-    "activeAlertCount": 2,
-    "criticalAlertCount": 0
-  },
+  "observedAt": "2026-11-11T17:30:00",
+  "health": { "level": "WARNING", "activeAlertCount": 2, "criticalAlertCount": 0, "warningAlertCount": 2 },
   "sections": {
     "summary": "AVAILABLE",
     "storage": "AVAILABLE",
     "activeAlerts": "AVAILABLE",
     "backupTrend": "AVAILABLE",
-    "recentJobs": "AVAILABLE"
+    "automation": "AVAILABLE",
+    "recentActivities": "AVAILABLE"
   },
   "summary": {
-    "readableOrderCount": 1280,
-    "readableLogicalFileCount": 9650,
-    "managedArtifactBytes": 348966092800,
-    "unknownFileCountPackageCount": 0,
-    "unknownSizeCopyCount": 0,
-    "unresolvedCopyCount": 0,
-    "todayBackup": {
-      "succeeded": 35,
-      "failed": 2,
-      "skipped": 1,
-      "excludedCount": 0
-    }
+    "readableOrders": { "total": 1280, "complete": 1272, "incomplete": 8, "temporarilyOffline": 50, "abnormalUnreadable": 2 },
+    "readableFiles": { "logicalFileCount": 9650, "managedArtifactBytes": 348966092800, "unknownFileCountPackageCount": 0, "unknownSizeCopyCount": 0 },
+    "todayBackup": { "completeSucceeded": 34, "incompleteSucceeded": 1, "failed": 2, "skipped": 1, "total": 38 }
   },
-  "storageSummary": {
-    "onlineTotalBytes": 1099511627776,
-    "onlineUsedBytes": 734439407616,
-    "onlineUsableBytes": 365072220160,
-    "onlineUsagePercent": 66.8,
-    "includedVolumeCount": 2,
-    "excludedVolumeCount": 1,
-    "available": true
-  },
-  "storageVolumes": [],
+  "storage": { "activeVolume": {}, "standby": {}, "coldMedia": {}, "onlineCapacity": {} },
   "activeAlerts": [],
   "backupTrend": [],
-  "recentJobs": [],
-  "dataQuality": {
-    "complete": true,
-    "messages": []
-  },
+  "automation": {},
+  "recentActivities": [],
+  "dataQuality": { "complete": true, "messages": [] },
   "sectionErrors": []
 }
 ```
 
-字段可以在技术设计阶段细化，但不得改变本文定义的业务口径。数值字段使用整数或明确精度的小数，不返回已经拼接单位的字符串。
+### 13.3 分区失败契约
 
-`sections` 为前端区分“真实空数据”和“该分区未能计算”的机器契约，取值为 `AVAILABLE` 或 `UNAVAILABLE`。分区为 `UNAVAILABLE` 时，其数据字段返回 `null`，不得返回空数组或零值；`sectionErrors` 仅返回安全错误码、分区名和 requestId，不返回堆栈。`activeAlerts` 分区不可用时，`health.level` 必须为 `UNKNOWN`，除非已经可靠计算出更高优先级的 `CRITICAL`。
+`sections` 取值为 `AVAILABLE` 或 `UNAVAILABLE`。分区查询失败时对应数据字段必须为 `null`，不能返回零或空数组；`sectionErrors` 只返回分区、错误码、requestId 和安全中文消息。
 
-`dataQuality` 只描述查询成功后发现的脏数据、缺失元数据或口径不完整；`sections/sectionErrors` 描述聚合查询本身是否成功，两者不得混用。
+不得返回 SQL、堆栈、绝对路径、配置值或业务敏感原文。告警分区不可用时，健康级别至少为 `UNKNOWN`；已经可靠计算出的 `CRITICAL` 可以保留更高级别。
 
-### 14.3 查询与聚合原则
+### 13.4 后端组件边界
 
-- 将概览聚合放在独立查询服务中，控制器只负责鉴权、调用和响应；
-- 订单、文件、副本、趋势和任务统计使用数据库聚合或批量查询，禁止逐订单 N+1 查询；
-- 复用统一可读副本规则，避免首页与下载/恢复路由产生不同判断；
-- 告警规则集中在后端聚合服务中，前端不重复实现；
-- 允许使用不超过 30 秒的短缓存降低自动进入页面时的重复查询，但手动刷新必须绕过响应缓存并读取最新已提交数据库状态；
-- 缓存不得包含用户敏感数据，不得让已恢复严重告警长期残留；
-- 所有时间基于服务端统一时钟和时区生成。
+#### `AdminOverviewController`
 
-## 15. 权威数据来源
+只负责管理员鉴权、解析 `refresh`、调用服务和统一响应，不依赖 `StorageProbe`、卷 Mapper 或配置列表服务。
 
-| 展示内容 | 主要事实来源 | 说明 |
-|---|---|---|
-| 可用备份订单 | `bk_order_snapshot`、`bk_order_package`、`bk_artifact_copy`、`bk_storage_volume` | 真实快照 + 至少一个当前可读包副本 |
-| 有效逻辑文件 | `bk_order_package.file_count` 与可读副本投影 | 每订单最新可读真实包，避免副本重复 |
-| 受管物理数据量 | `bk_artifact_copy.size/state/lifecycle` | 统计实际活动物理副本，不等同磁盘已用 |
-| 今日备份结果 | `bk_job`、`bk_job_order` | 订单级最终结果，不按任务数 |
-| 在线容量 | `bk_storage_volume` 持久化容量快照 | 首页不实时探测 |
-| 自动备份告警 | `bk_sync_cursor(BACKUP_CANDIDATE)` 与运行配置 | 当前检查点与应执行时间 |
-| 账号同步告警 | `bk_sync_cursor(USER)` 与运行配置 | 当前检查点与同步间隔 |
-| 封存告警 | `bk_volume_archive`、`bk_storage_volume.operation_status` | 当前未解除失败状态 |
-| 制品告警 | `bk_artifact_copy`、`bk_storage_volume` | 当前副本与卷状态组合 |
-| 近期任务 | `bk_job` 及必要的卷投影 | 历史任务快照与卷当前状态分离 |
-| 历史证据 | 审计日志与任务日志 | 不作为当前告警事实来源 |
+#### `AdminOverviewService`
 
-## 16. 权限、安全与隐私
+负责编排分区、隔离失败、合并数据质量、调用告警和健康策略、管理短缓存并记录结构化耗时。缓存保存业务分区结果及其真实 `observedAt`；命中缓存时必须保留该数据观察时间，只重新绑定当前 `requestId` 和 `sectionErrors` 中的请求关联信息，禁止把首次请求 ID 返回给后续请求，也禁止把缓存数据伪装成刚查询的数据。
 
-- 概览接口仅允许管理员访问；
-- 不返回账号密码、令牌、完整配置值、卷标记原文或异常堆栈；
-- 卷展示优先使用卷名称和卷代码，绝对根路径仅在已有权限允许的卷详情中展示；
-- 错误消息应做长度限制和敏感信息清理；
-- 告警跳转参数只能由后端允许的目标类型和 ID 组成；
-- 首页为只读页面，加载和刷新不产生业务审计事件；
-- 管理员从下钻页面执行写操作时，沿用对应模块的权限、二次确认与审计要求。
+#### `AdminOverviewQueryMapper`
 
-## 17. 性能、可靠性与可观测性
+项目继续遵守“禁止 Mapper XML”的现有约束。`AdminOverviewQueryMapper` 使用 MyBatis 注解或 `@SelectProvider` 执行固定数量查询：可恢复性查询返回保留决策维度的副本候选行，由 Java 共享访问策略归类；今日和 7 日结果、新增容量、近期任务和最近自动清理可以在 SQL 中聚合。禁止在 SQL 中复制卷访问真值表，禁止 N+1。
 
-### 17.1 性能
+副本候选行至少保留 `sourceOrderId`、`snapshotId`、`packageId`、`backupCompletedAt`、`completeness`、`fileCount`、`copyId`、`copyState`、`copyLifecycle`、`volumeId`、卷状态、`operationRefId` 及判断合法 `ARCHIVE_GUARD` 所需封存上下文。制品问题统计必须复用同一批分类结果，不能另写第二套可读性 SQL。
 
-- 首页接口不得包含外部网络或文件系统调用；
-- 基准验收数据集至少包含 10 万订单快照、10 万订单包、100 万资产/关系记录、30 万制品副本、10 万任务、100 万任务订单和 100 个存储卷；
-- 基准环境为 MySQL 8、4 vCPU、8 GB 内存，完成必要索引并预热后，以 10 个并发客户端执行 100 次预热和至少 1000 次采样；接口 P95 响应时间目标不超过 1 秒，且测试期间不得发生外部 I/O；
-- 趋势固定查询 7 天，近期任务固定最多 10 条；
-- 文件异常返回聚合结果和有限示例，不返回全部异常明细；
-- 为常用过滤、时间与关联字段补充必要索引，但具体索引由技术设计与执行计划确定。
+#### `StorageVolumeAccessPolicy`
 
-### 17.2 可靠性
+统一卷的可读、可写、备用候选、正常离线和合法 `ARCHIVE_GUARD` 判断，并从同一规则定义生成 Java 判定与 MyBatis SQL 谓词。现有 `ArtifactReplicaResolver`、备份预检、概览策略和订单分页筛选必须复用该组件；Java/SQL 等价性由状态矩阵契约测试保证。
 
-- 单个异常卷或脏副本不得阻塞整页；
-- 数据库快照读取应保持同一次响应内口径尽可能一致；
-- 对超大计数使用 64 位整数；
-- 字节求和必须防止溢出；
-- 百分比在后端明确舍入精度，并处理总容量为零；
-- 新旧前端短期并行部署时，接口变更应避免返回结构导致白屏；必要时采用兼容字段或同步发布。
+#### `StorageVolumeCapacitySnapshotPolicy`
 
-### 17.3 日志
+统一更新探测尝试、最后成功容量和错误字段，确保失败探测不会清空合法历史容量。
 
-- 正常首页查询不输出逐卷、逐订单 INFO 日志；
-- 聚合失败输出结构化错误日志，至少包含 requestId、失败分区和耗时；
-- 慢查询可输出 WARN，包含各聚合阶段耗时，不包含敏感业务原文；
-- 告警是查询结果，不因每次刷新重复写审计或错误日志。
+#### `OverviewTimePolicy`
+
+注入 `Clock`，统一 `Asia/Shanghai` 今日/7 日边界、自动备份计划槽位、账号同步陈旧阈值和容量新鲜度；应用级时区配置保证现有全部权威时间写入路径与数据库会话使用同一上海本地时间。
+
+#### `AdminOverviewAlertService`
+
+根据当前事实生成去重告警并计算健康级别。前端不实现业务告警规则。
+
+### 13.5 数据库变更
+
+`bk_storage_volume` 新增：
+
+```sql
+capacity_observed_at DATETIME(3) NULL COMMENT '最近一次合法成功容量快照时间'
+```
+
+迁移只在现有 `total_bytes/usable_bytes` 合法时用 `last_probed_at` 回填。迁移脚本必须同时增加字段和索引；`01-schema.sql` 同步字段，`02-indexes.sql` 同步索引，`yigongbao-backup-full-init.sql` 同步两者，实体字段同步映射。
+
+至少补充概览查询索引：
+
+- `bk_job(job_type, finished_at, id, is_deleted)`；
+- `bk_job_order(source_order_id, status, job_id, is_deleted)`；
+- `bk_order_snapshot(backup_mode, snapshot_status, backup_completed_at, source_order_id, is_deleted)`；
+- `bk_order_package(backup_mode, status, snapshot_id, is_deleted)`；
+- `bk_artifact_copy(artifact_type, lifecycle, state, artifact_id, storage_volume_id, is_deleted)`；
+- `bk_volume_archive(phase, update_time, source_volume_id, is_deleted)`。
+
+## 14. 前端设计
+
+### 14.1 页面组件
+
+建议拆分：
+
+- `OverviewHealthPanel.vue`：健康结论与刷新失败覆盖状态；
+- `OverviewAlertList.vue`：Top 3 当前告警和处理入口；
+- `OverviewMetricGrid.vue`：三张核心指标卡；
+- `OverviewTrendPanel.vue`：两个 7 日图表与文本摘要；
+- `OverviewStoragePanel.vue`：活动卷、备用卷、冷备和容量；
+- `OverviewRecentActivity.vue`：统一近期活动；
+- `OverviewAutomationPanel.vue`：自动备份、同步和清理；
+- `overviewModel.js`：格式化、空值处理、状态展示和下钻目标纯函数。
+
+组件只通过 props/emits 工作，不直接访问接口或复制后端告警规则。
+
+### 14.2 路由与下钻
+
+现有 hash 路由扩展为结构化查询参数：
+
+```text
+#orders?backupMode=REAL&storageAccessible=true
+#backup?jobId=123
+#backup?finishedFrom=2026-11-11&finishedTo=2026-11-12&orderResult=FAILED
+#restore?jobId=456
+#cold-storage?archiveId=789
+#storage-volumes?volumeId=12
+#accounts?focus=sync
+```
+
+路由目标和参数使用白名单解析。目标页消费一次性聚焦参数后清理参数，避免普通返回页面时重复弹出抽屉。
+
+### 14.3 图表
+
+近 7 日只有固定 7 个点，不新增大型图表依赖。使用 Vue + 原生 SVG/CSS，并提供中文图例、悬浮提示、键盘焦点、`aria-label` 和同数据文本摘要。
+
+### 14.4 状态、空态和错误态
+
+- 首次加载：各分区独立骨架屏；
+- 刷新：保留旧数据并显示局部 loading；
+- 刷新失败且已有旧数据：保留旧数据，显示“数据可能已过期”、上次成功时间和 requestId；
+- 首次请求失败：显示错误态，不渲染正常结论；
+- 真实零数据：显示 `0` 和相应空态说明；
+- 未知数据：显示“暂不可用”或“已知下限”，不显示 `0`；
+- 全新系统：显示 `SETUP_REQUIRED` 和“前往纳管存储卷”；
+- 正常离线冷备：显示“正常离线”，不使用危险色；
+- 降级备份：使用警示色辅助标签“文件可能不完整”，不使用失败色。
+
+### 14.5 视觉与响应式
+
+- 复用 Element Plus 和现有 `StatusBadge`；
+- 扩充公共字典以覆盖健康级别、降级备份和全部活动类型；
+- 健康区域使用浅色状态背景，颜色不是唯一信息载体；
+- 主指标字号 28–32px，卡片保持高信息密度；
+- 容量进度条只对当前、新鲜、可计算数据使用阈值色；
+- 离线前容量快照使用中性色和明确文字；
+- 1366×768 下首屏能够看到健康区、三张指标卡和下一分区标题；
+- 1100px 以下两列，700px 以下单列；
+- 过长卷名、失败摘要和告警文本省略，并提供完整 tooltip。
+
+## 15. 数据质量
+
+查询成功但发现脏数据时返回 `dataQuality`，不得与分区查询失败混用。每项包含 `code`、`severity=BLOCKING|WARNING|INFO`、`section`、`affectedCount` 和中文安全消息。
+
+至少覆盖正式快照与模拟包模式矛盾、活动副本引用卷缺失、副本缺少关键字段、容量非法、趋势包缺少完成时间或大小、配置非法回退默认值、封存操作引用与卷状态不一致。
+
+`BLOCKING` 使健康级别至少为 `UNKNOWN`；`WARNING` 使健康级别至少为 `WARNING`。同一问题已经生成当前告警时，前端不重复显示第二张问题卡。
+
+## 16. 权限、安全与日志
+
+- 概览仅允许 `ADMIN`；
+- 不返回密码、令牌、密钥引用、完整配置值、绝对根路径、Marker JSON 或异常堆栈；
+- 错误摘要限制长度并清理敏感内容；
+- 下钻只能使用后端允许的路由和 ID；
+- 首页为只读页面，不写审计日志、不创建任务、不更新卷状态；
+- 正常请求不输出逐订单、逐卷 INFO 日志；
+- 成功请求记录总耗时和各分区耗时的结构化 DEBUG 或慢查询 WARN；
+- 分区失败记录 requestId、分区、耗时和异常类型；
+- 告警是查询结果，不因刷新重复写审计或错误日志。
+
+## 17. 性能与可靠性
+
+- 首页请求不得包含文件系统、NAS、Marker、容量或线上网络调用；
+- 趋势固定 7 天，近期活动最多 10 条，告警返回聚合结果；
+- 复杂统计使用数据库聚合或批量查询；
+- 单条脏数据或单个异常卷不得阻塞整页；
+- 所有计数和字节使用 64 位整数并防止溢出；
+- 百分比由后端按 9.2 的公式和精度计算；
+- 允许 30 秒短缓存，手动刷新绕过缓存；缓存保留真实 `observedAt`，不包含 requestId 等请求关联字段；
+- 基准数据集：10 万订单快照、10 万订单包、30 万副本、10 万任务、100 万任务订单、100 个卷；
+- MySQL 8、4 vCPU、8 GB、10 并发预热后，接口 P95 目标不超过 1 秒；
+- 性能验证必须确认没有 N+1 和外部 I/O。
 
 ## 18. 测试要求
 
-### 18.1 后端单元与集成测试
+### 18.1 后端
 
 至少覆盖：
 
-1. 真实可读订单、模拟订单、仅离线副本、仅损坏副本的统计差异；
-2. 同一订单多快照、多订单包、多副本的去重，以及“真实快照 + 另一次模拟包”不能拼接成真实成果；
-3. 文件数或副本大小缺失时的数据质量结果；
-4. 今日边界、近 7 日零值补齐和 Asia/Shanghai 日期归属；
-5. 今日同一订单多次尝试只取最后一次；
-6. 在线卷、离线冷备、不可用卷、退役卷的容量汇总差异；
-7. 容量快照过期与未知、在线但明确停用卷不进入容量汇总，以及旧快照曾超过阈值但过期后只生成容量未知告警；
-8. 每一种告警的触发和恢复；
-9. 告警抑制、聚合与稳定 `alertKey`；
-10. 自动备份/账号同步关闭时不告警；
-11. 正常离线冷备盘不告警；
-12. 无存储卷的全新系统返回 `SETUP_REQUIRED`，不误报 ACTIVE 数量异常；
-13. 退役 ACTIVE、退役非 ACTIVE、停用非 ACTIVE 的告警差异；
-14. 调度/同步失败告警对逾期/陈旧告警的抑制；
-15. 自动备份延迟成功跨日后重置周期、服务跨多个周期及恰好等于逾期阈值的结果；
-16. 账号同步检查点缺失、首次运行宽限和恰好等于陈旧阈值的结果；
-17. 容量恰好等于阈值的结果；
-18. 各类数据质量严重级别对健康状态的映射；
-19. 分区真实空数据与分区查询失败的响应差异；
-20. 接口鉴权；
-21. 概览请求没有调用 `StorageProbe`；
-22. 单条脏数据不导致整页失败；
-23. 基准数据量下无 N+1 查询且响应满足目标。
+1. 完整、降级、模拟和失败快照的统计差异；
+2. 同订单多正式包按“最新可读”选代表包，覆盖旧完整+新降级、新包不可读但旧包可读，且多个副本不重复订单和逻辑文件；
+3. 降级成功计入可恢复订单并单独拆分；
+4. 正常离线冷备订单不计当前可恢复，但不告警；
+5. 冷盘重新接入后订单重新计入；
+6. 卷重新转为 HOT/ACTIVE 后封存历史仍存在；
+7. 合法与非法 `ARCHIVE_GUARD` 的可读、可写和告警差异；
+8. 探测失败保留最后成功容量与观测时间；
+9. 容量合法性、1 位小数舍入、64 位防溢出、活动卷高容量、容量未知和无备用卷的告警抑制；
+10. 自动备份失败、错过计划槽位、管理员关闭、首次无检查点、告警抑制及强制扫描后的新周期锚点；
+11. 账号同步失败、陈旧、关闭、首次无检查点及告警抑制；
+12. 历史失败任务不产生当前告警；
+13. 封存失败且卷仍需修复才产生当前告警；
+14. 分区真实空数据与分区查询失败的差异；
+15. 数据质量严重度对健康级别的影响；
+16. 近期活动覆盖已知和未知任务类型；
+17. 管理员鉴权、OpenAPI 与实现一致；
+18. 概览链路没有依赖或调用 `StorageProbe`，且刷新不写审计；
+19. 固定查询数量且无 N+1；
+20. 基准数据量下满足性能目标；
+21. 进程启动前默认时区不是上海、UTC 日期边界和管理员强制扫描场景下，应用启动后全部权威时间写入、首页与调度器结论一致；
+22. 错误摘要脱敏，缓存命中响应使用当前 requestId，正常请求无逐记录 INFO 日志。
 
-### 18.2 前端测试
+### 18.2 前端
 
-至少覆盖：
+至少覆盖五种健康状态、真实零值和未知值、完整/降级拆分、正常与异常离线、趋势零数据和混合数据、告警下钻、已知和未知活动、结构化路由、刷新失败保留旧数据、禁止原始 JSON 和裸英文状态、三档响应式布局及图表无障碍兜底。
 
-1. 正常、警告、严重、状态未知、待初始化五种顶部摘要；
-2. 三个核心统计卡的真实零值、未知值和数据不完整提示；
-3. 正常离线冷备卷显示“离线前快照”且不显示为告警；
-4. 告警中文标签、级别样式、排序和下钻参数；
-5. 容量未知、过期、在线与离线的差异化展示；
-6. 近 7 日趋势零数据和混合结果；
-7. 近期任务不同任务类型的跳转；
-8. 手动刷新防重复、失败后保留旧数据；
-9. 页面不出现原始 JSON、裸英文状态或 `NaN%`；
-10. 1366×768 和窄屏布局无关键内容遮挡。
+### 18.3 回归
 
-### 18.3 回归测试
-
-- 订单文件下载和线上恢复的副本选择逻辑不受首页聚合影响；
-- 订单备份、线上恢复、冷备封存和存储卷管理列表/详情状态保持一致；
-- 后台存储卷健康调度仍能更新容量快照；
-- 状态中文化公共组件的已有页面不发生回归；
-- 首页访问不创建任务、不更新卷状态、不写审计记录。
+- 订单包下载和线上恢复的副本选择结果与首页一致；
+- 备份任务创建和预检使用同一卷访问策略；
+- 冷备详情逐文件分页和历史数据不受影响；
+- 恢复任务弹窗、订单抽屉和多 Tab 详情不受影响；
+- 账号同步、COS 清理和系统配置原有功能不受影响；
+- 首页访问不创建任务、不探盘、不写审计。
 
 ## 19. 验收场景
 
-1. 系统有一个健康 ACTIVE 热备卷、无异常数据时，首页显示“系统运行正常”，无告警。
-2. 真实订单在在线 HOT 卷存在可读包时计入可用订单；卷正常转冷备并离线后不再计入当前可用订单，但不产生离线告警。
-3. 同一冷备盘重新确认挂载后，其可读订单自动重新计入，无需重新备份或导入。
-4. 同一订单存在两个有效物理副本时，订单数和逻辑文件数只计一次，受管物理字节按两个副本实际累计。
-5. 模拟备份存在时，不增加真实订单、真实文件、今日成功和趋势新增容量。
-6. ACTIVE 卷不可用时出现严重告警；恢复挂载或完成故障切换后告警自动消失。
-7. 正常 `COLD/OFFLINE/READ_ONLY` 卷只显示离线前容量快照，不进入在线容量汇总且不告警。
-8. HOT 卷容量达到阈值时出现警告并可进入对应卷详情；低于阈值后告警消失。
-9. 自动备份检查点失败时出现警告；下一次扫描成功后告警消失，历史失败仍可在日志或审计中追溯。
-10. 存在完全不可读真实订单包时，首页只生成聚合严重告警，并可进入订单文件异常筛选。
-11. 打开或刷新首页时，即使存在离线盘或不可达 NAS，也不发生磁盘/NAS 访问和等待超时。
-12. 首页查询失败时保留上次成功数据、显示失败提示和 requestId，不显示虚假的“系统正常”。
-13. 页面只出现三张核心统计卡，不出现“订单备份覆盖率”和“正在执行任务”卡片。
-14. 页面所有状态使用中文标签，HOT/COLD、正常/警告/严重视觉语义一致。
-15. 全新系统显示“待完成存储初始化”而不是“系统运行正常”；退役 ACTIVE 卷产生严重告警，退役或停用的非 ACTIVE 卷不产生普通不可用告警。
+1. 有唯一健康活动卷且无异常时显示“系统运行正常”。
+2. 全新系统没有卷时显示“待完成存储初始化”，不显示严重告警。
+3. 完整真实备份和成功降级备份都计入可恢复订单，并明确拆分。
+4. 模拟备份不进入任何生产指标和趋势。
+5. 同订单两个健康副本时订单和逻辑文件只计一次，物理容量计两份。
+6. 订单仅存在于正常离线冷备卷时暂不计可恢复，但不告警。
+7. 冷备原盘重新接入后，无需复制文件即可重新计入可恢复订单。
+8. 已封存卷重新设为 HOT/ACTIVE 后，封存历史和逐文件校验历史仍可下钻查看。
+9. 活动卷不可用时显示严重告警；恢复后下一次查询自动消失。
+10. 活动卷达到阈值且无备用卷时同时说明容量风险和接替能力不足。
+11. 探测失败后仍显示上次成功容量，并标注数据时间和当前探测失败。
+12. 自动备份错过计划时间时显示警告和下一次计划，不自动执行补偿。
+13. 历史失败的恢复任务只出现在近期活动，不使系统健康永久告警。
+14. 封存失败但卷已经修复后只保留历史活动，不继续告警。
+15. 首页刷新不会访问磁盘、NAS、Marker 或线上服务。
+16. 任一分区失败时其他分区继续展示，失败分区不伪装为零。
+17. 点击备份、恢复、封存、卷和账号问题能够打开正确页面和详情。
+18. 页面不展示原始配置、原始 JSON、绝对路径或异常堆栈。
+19. 同订单存在旧完整和新降级可读包时，按最新可读包归类；新包不可读但旧包可读时回退旧包。
+20. 同订单没有可读副本且同时存在正常离线冷备和损坏热备副本时，只计入异常不可读并产生告警。
+21. 宿主默认时区不是上海时，应用启动会在任何业务写入前统一为上海；“今日”、权威时间事实、计划槽位和真实调度结果保持一致。
+22. 缓存命中、部分失败和手动刷新均返回本次请求的 requestId，不泄漏上次请求标识。
 
-## 20. 实施边界与后续演进
+## 20. 完成定义
 
-本期实施应完成本文全部首页能力，但不要求新增持久化告警表。后续若出现以下需求，应另行设计：
+只有同时满足以下条件，管理概览才视为完成：
 
-- 告警确认、静默、指派、处理意见和历史生命周期；
-- 邮件、短信、企业微信等外部通知；
-- 自定义告警阈值与规则编辑器；
-- 长周期统计报表和备份覆盖率；
-- 多租户或按组织隔离的管理概览；
-- 容量预测、增长趋势预测和智能换盘建议。
-
-## 21. 完成定义
-
-只有同时满足以下条件，首页需求才视为完成：
-
-1. 页面结构、统计口径和告警规则符合本文；
-2. 接口不再实时探测存储卷，不再返回首页使用的原始配置列表；
-3. 统计、容量、告警、趋势和近期任务均来自明确权威数据源；
-4. 当前问题恢复后告警自动消失，正常离线冷备不误报；
-5. 前后端单元、集成与回归测试通过；
-6. 性能、权限、中文状态和异常降级满足要求；
-7. 用户可从首页异常和摘要进入对应业务页面完成后续处理；
-8. 不存在已知且尚未关闭的 P1/P2 业务逻辑问题。本文中 P1 指会造成核心流程不可用、统计或状态严重失真、数据损坏或安全风险的问题；P2 指会造成重要场景错误、误导管理员或缺少合理替代路径的问题。问题来源包括实现审查、自动化测试和验收测试，只有完成修复并通过对应回归验证后才视为关闭。
+1. 本文所有信息架构、指标口径、告警和下钻要求已实现；
+2. 首页统计正确区分完整、降级和模拟备份；
+3. 容量读取最后成功持久化快照，首页无外部 I/O；
+4. 卷访问语义在首页、下载、恢复和备份预检之间一致；
+5. 封存历史不受卷当前状态变化影响；
+6. 后端分区失败、数据质量、权限和日志满足要求；
+7. 前端正常、空、未知、失败和过期状态清晰；
+8. 后端测试、前端测试、生产构建、数据库迁移和性能验证通过；
+9. 验收场景全部通过；
+10. 不存在已知 P1/P2 业务逻辑问题。

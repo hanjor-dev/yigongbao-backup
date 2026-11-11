@@ -82,6 +82,12 @@ CALL add_backup_index_if_missing('bk_job_order','uk_bk_job_order','CREATE UNIQUE
 CALL add_backup_index_if_missing('bk_job_order','idx_bk_job_order_snapshot','CREATE INDEX idx_bk_job_order_snapshot ON bk_job_order(snapshot_id)');
 CALL add_backup_index_if_missing('bk_job_order','idx_bk_job_order_source_volume','CREATE INDEX idx_bk_job_order_source_volume ON bk_job_order(source_storage_volume_id,status)');
 CALL add_backup_index_if_missing('bk_job_order','idx_bk_job_order_storage_volume','CREATE INDEX idx_bk_job_order_storage_volume ON bk_job_order(storage_volume_id,job_id)');
+CALL add_backup_index_if_missing('bk_job','idx_bk_job_overview','CREATE INDEX idx_bk_job_overview ON bk_job(job_type,finished_at,id,is_deleted)');
+CALL add_backup_index_if_missing('bk_job_order','idx_bk_job_order_overview','CREATE INDEX idx_bk_job_order_overview ON bk_job_order(source_order_id,status,job_id,is_deleted)');
+CALL add_backup_index_if_missing('bk_order_snapshot','idx_bk_snapshot_overview','CREATE INDEX idx_bk_snapshot_overview ON bk_order_snapshot(backup_mode,snapshot_status,backup_completed_at,source_order_id,is_deleted)');
+CALL add_backup_index_if_missing('bk_order_package','idx_bk_package_overview','CREATE INDEX idx_bk_package_overview ON bk_order_package(backup_mode,status,snapshot_id,is_deleted)');
+CALL add_backup_index_if_missing('bk_artifact_copy','idx_bk_artifact_overview','CREATE INDEX idx_bk_artifact_overview ON bk_artifact_copy(artifact_type,lifecycle,state,artifact_id,storage_volume_id,is_deleted)');
+CALL add_backup_index_if_missing('bk_volume_archive','idx_bk_volume_archive_overview','CREATE INDEX idx_bk_volume_archive_overview ON bk_volume_archive(phase,update_time,source_volume_id,is_deleted)');
 CALL add_backup_index_if_missing('bk_job_file','uk_bk_job_file_step','CREATE UNIQUE INDEX uk_bk_job_file_step ON bk_job_file(job_id,asset_identity,step)');
 CALL add_backup_index_if_missing('bk_job_file','idx_bk_job_file_status','CREATE INDEX idx_bk_job_file_status ON bk_job_file(job_id,status,id)');
 CALL add_backup_index_if_missing('bk_job_file','idx_bk_job_file_storage_volume','CREATE INDEX idx_bk_job_file_storage_volume ON bk_job_file(storage_volume_id,job_id)');

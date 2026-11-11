@@ -25,3 +25,4 @@ Thumbs.db
 
 # Internal planning state is not part of the distributable system source
 .superpowers/
+.worktrees/

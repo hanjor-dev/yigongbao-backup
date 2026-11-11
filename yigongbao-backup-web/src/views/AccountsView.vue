@@ -1,8 +1,11 @@
 <script setup>
+import { onMounted, ref } from 'vue';
 import { useBackupContext } from '../composables/useBackupContext.js';
 const { accounts, toggleAccount, accountPassword, resetAccountPassword,
   accountPage, accountSize, accountTotal, changeAccountPage, changeAccountSize,
-  accountSyncStatus, accountSyncRunning, syncAccountsNow, loadAccounts } = useBackupContext();
+  accountSyncStatus, accountSyncRunning, syncAccountsNow, loadAccounts, consumeRouteQuery } = useBackupContext();
+const focusSync = ref(false);
+onMounted(() => { const { focus } = consumeRouteQuery(['focus']); focusSync.value = focus === 'sync'; });
 
 function time(value) {
   return value ? new Date(value).toLocaleString('zh-CN', { hour12: false }) : '尚未执行';
@@ -15,7 +18,7 @@ function time(value) {
       <div class="heading-actions"><el-button @click="loadAccounts()"><el-icon><Refresh /></el-icon>刷新</el-button><el-button type="primary" :loading="accountSyncRunning" :disabled="!accountSyncStatus?.syncEnabled || !accountSyncStatus?.onlineEnabled" @click="syncAccountsNow">立即同步</el-button></div>
     </section>
     <el-alert v-if="accountSyncStatus && (!accountSyncStatus.syncEnabled || !accountSyncStatus.onlineEnabled)" type="warning" show-icon :closable="false" title="账号同步当前不可执行" description="请同时开启账号同步和线上通信，并确认线上连接认证配置完整。" />
-    <el-card shadow="never" class="table-card">
+    <el-card shadow="never" class="table-card" :class="{ 'is-route-focus': focusSync }">
       <template #header><div class="sync-summary"><strong>同步状态</strong><status-badge :value="accountSyncStatus?.status || 'IDLE'" /><span>最近成功：{{ time(accountSyncStatus?.lastSuccessAt) }}</span><span>最近处理：{{ accountSyncStatus?.lastItemCount || 0 }} 条</span></div></template>
       <el-alert v-if="accountSyncStatus?.lastErrorMessage" type="error" show-icon :closable="false" :title="accountSyncStatus.lastErrorMessage" />
       <el-table :data="accounts" class="data-table">
@@ -35,4 +38,5 @@ function time(value) {
 .sync-summary strong { color:var(--el-text-color-primary); }
 .heading-actions { display:flex; gap:10px; }
 .table-pagination { display:flex; justify-content:flex-end; padding:18px 4px 2px; }
+.is-route-focus { border-color:var(--el-color-primary)!important; box-shadow:0 0 0 3px var(--el-color-primary-light-8)!important; }
 </style>

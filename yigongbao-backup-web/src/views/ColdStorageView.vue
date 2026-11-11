@@ -7,7 +7,7 @@ import { confirmAction, promptAction } from '../uiFeedback.js';
 
 const { coldStorageArchives, selectedStorageArchive, coldStorageLoading, storageVolumes, storageCandidates,
   loadColdStorage, openColdStorageArchive, closeColdStorageArchive, scanColdMountCandidates, confirmColdVolumeMounted,
-  prepareColdVolumeOffline, abandonStorageArchive, navigate } = useBackupContext();
+  prepareColdVolumeOffline, abandonStorageArchive, navigate, consumeRouteQuery } = useBackupContext();
 const coldVolumes = computed(() => storageVolumes.value.filter((volume) => volume.tier === 'COLD'));
 const activeArchives = computed(() => coldStorageArchives.value.filter((item) => ['REQUESTED', 'SWITCHED', 'MANIFEST_FROZEN', 'VERIFYING', 'COMMITTING'].includes(item.archive?.phase)));
 const failedArchives = computed(() => coldStorageArchives.value.filter((item) => ['PREPARE_FAILED', 'VERIFY_FAILED', 'COMMIT_FAILED', 'CANCELLED'].includes(item.archive?.phase)));
@@ -46,7 +46,7 @@ async function abandon(archive) {
   const reason = await promptAction('请输入放弃原因', { title: '放弃封存尝试', inputValue: '管理员确认放弃本次失败尝试', inputPlaceholder: '请输入放弃原因' });
   if (reason && await abandonStorageArchive(archive.id, reason)) { closeColdStorageArchive(); await loadColdStorage(); }
 }
-onMounted(async () => { closeColdStorageArchive(); await loadColdStorage(); refreshTimer = window.setInterval(() => { if (activeArchives.value.length) refresh(); }, 5000); });
+onMounted(async () => { closeColdStorageArchive(); await loadColdStorage(); const { archiveId } = consumeRouteQuery(['archiveId']); if (archiveId) await openColdStorageArchive(archiveId); refreshTimer = window.setInterval(() => { if (activeArchives.value.length) refresh(); }, 5000); });
 onUnmounted(() => { if (refreshTimer) window.clearInterval(refreshTimer); closeColdStorageArchive(); });
 </script>
 

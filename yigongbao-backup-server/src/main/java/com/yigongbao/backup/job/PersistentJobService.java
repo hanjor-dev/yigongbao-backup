@@ -4,6 +4,7 @@ import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.baomidou.mybatisplus.core.toolkit.Wrappers;
 import com.baomidou.mybatisplus.core.conditions.update.UpdateWrapper;
+import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
 import com.baomidou.mybatisplus.extension.plugins.pagination.Page;
 import com.yigongbao.backup.order.OrderPackageEntity;
 import com.yigongbao.backup.order.OrderPackageMapper;
@@ -138,11 +139,43 @@ public class PersistentJobService {
 
     /** 服务端分页读取备份任务，避免任务历史增长后一次加载全部明细。 */
     public JobPage listBackupJobs(long current, long size) {
+        return listBackupJobs(current, size, new BackupJobFilter(null, null, null, null));
+    }
+
+    /** 按首页下钻条件在数据库分页前筛选备份任务。 */
+    public JobPage listBackupJobs(long current, long size, BackupJobFilter filter) {
         if (current < 1 || size < 1 || size > 100) throw new IllegalArgumentException("任务分页参数非法");
-        Page<JobEntity> page = mapper.selectPage(Page.of(current, size), Wrappers.<JobEntity>lambdaQuery()
-                .in(JobEntity::getJobType, "ORDER_BACKUP", "MANUAL_BACKUP", "DEGRADED_BACKUP").orderByDesc(JobEntity::getId));
+        filter = filter == null ? new BackupJobFilter(null, null, null, null) : filter;
+        if (filter.jobId() != null && filter.jobId() < 1) throw new IllegalArgumentException("jobId 参数非法");
+        if (filter.finishedFrom() != null && filter.finishedTo() != null
+                && !filter.finishedFrom().isBefore(filter.finishedTo())) {
+            throw new IllegalArgumentException("完成时间区间非法");
+        }
+        String resultPredicate = orderResultPredicate(filter.orderResult());
+        LambdaQueryWrapper<JobEntity> query = Wrappers.<JobEntity>lambdaQuery()
+                .in(JobEntity::getJobType, "ORDER_BACKUP", "MANUAL_BACKUP", "DEGRADED_BACKUP")
+                .eq(filter.jobId() != null, JobEntity::getId, filter.jobId())
+                .ge(filter.finishedFrom() != null, JobEntity::getFinishedAt, filter.finishedFrom())
+                .lt(filter.finishedTo() != null, JobEntity::getFinishedAt, filter.finishedTo());
+        if (resultPredicate != null) query.apply(resultPredicate);
+        query.orderByDesc(JobEntity::getId);
+        Page<JobEntity> page = mapper.selectPage(Page.of(current, size), query);
         return new JobPage(viewsWithEvidence(page.getRecords()),
                 page.getTotal(), page.getCurrent(), page.getSize(), page.getPages());
+    }
+
+    private static String orderResultPredicate(String result) {
+        if (result == null || result.isBlank()) return null;
+        String orderCondition = switch (result) {
+            case "COMPLETE_SUCCEEDED" -> "jo.status='SUCCEEDED' AND s.backup_completeness='COMPLETE'";
+            case "INCOMPLETE_SUCCEEDED" -> "jo.status='SUCCEEDED' AND s.backup_completeness='INCOMPLETE'";
+            case "FAILED" -> "jo.status='FAILED'";
+            case "SKIPPED" -> "jo.status='SKIPPED'";
+            default -> throw new IllegalArgumentException("orderResult 参数非法");
+        };
+        return "EXISTS (SELECT 1 FROM bk_job_order jo LEFT JOIN bk_order_snapshot s"
+                + " ON s.id=jo.snapshot_id AND s.is_deleted=0 WHERE jo.job_id=bk_job.id"
+                + " AND jo.is_deleted=0 AND " + orderCondition + ")";
     }
 
     /** 只返回线上恢复任务，避免恢复记录与订单备份调度批次混在同一管理列表。 */
@@ -162,6 +195,9 @@ public class PersistentJobService {
     }
 
     public record JobPage(List<Job> records, long total, long current, long size, long pages) { }
+
+    public record BackupJobFilter(Long jobId, LocalDateTime finishedFrom,
+                                  LocalDateTime finishedTo, String orderResult) { }
 
     public Job get(long id) {
         JobEntity entity = required(id);
@@ -637,7 +673,7 @@ public class PersistentJobService {
         job.setState(JobState.valueOf(entity.getStatus()));
         job.setFencingToken(entity.getFencingToken() == null ? 0 : entity.getFencingToken());
         job.setLeaseOwner(entity.getLeaseOwner());
-        job.setLeaseUntil(entity.getLeaseUntil() == null ? null : entity.getLeaseUntil().toInstant(ZoneOffset.UTC));
+        job.setLeaseUntil(com.yigongbao.backup.common.time.BusinessTimeCodec.toInstant(entity.getLeaseUntil()));
         job.setOrderTotal(orderTotal);
         job.setFileTotal(fileTotal);
         job.setFileCompleted(entity.getProgressCurrent() == null ? 0 : entity.getProgressCurrent().intValue());
@@ -649,7 +685,7 @@ public class PersistentJobService {
     }
 
     private static Instant toInstant(LocalDateTime value) {
-        return value == null ? null : value.atZone(java.time.ZoneId.systemDefault()).toInstant();
+        return com.yigongbao.backup.common.time.BusinessTimeCodec.toInstant(value);
     }
 
     private static int orderTotal(JobEntity entity) {

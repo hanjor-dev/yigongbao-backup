@@ -16,6 +16,7 @@ import com.yigongbao.backup.config.RuntimeConfigService;
 import java.util.List;
 import java.time.LocalDateTime;
 import java.time.ZoneOffset;
+import com.yigongbao.backup.common.time.BusinessTimeCodec;
 import java.time.format.DateTimeFormatter;
 
 /** 在配置的日期周期和开始时间汇总全部增量订单，并创建一个持久化备份任务。 */
@@ -91,7 +92,7 @@ public class ScheduledBackupService {
             if (remaining <= 0) break;
             int pageSize = Math.min(INTERNAL_CANDIDATE_PAGE_SIZE, remaining);
             OnlineCandidateClient.Page page = candidates.search(cursor, pageSize, highWatermark,
-                    orderCreatedBefore.atOffset(ZoneOffset.UTC));
+                    BusinessTimeCodec.toUtcOffset(orderCreatedBefore));
             int beforePage = orderIds.size();
             if (highWatermark.isBlank() && page.highWatermark() != null) highWatermark = page.highWatermark();
             page.items().stream()
@@ -122,7 +123,7 @@ public class ScheduledBackupService {
             String payload;
             try { payload = mapper.writeValueAsString(new ManualBackupJobHandler.Payload(List.copyOf(orderIds), orderIds.size(),
                     now.toLocalDate().format(DateTimeFormatter.BASIC_ISO_DATE), daysBefore,
-                    orderCreatedBefore.atOffset(ZoneOffset.UTC).toString(), executionModes.mode().name(),
+                    BusinessTimeCodec.toUtcOffset(orderCreatedBefore).toString(), executionModes.mode().name(),
                     executionModes.simulationRoot() == null ? null : executionModes.simulationRoot().toString())); }
             catch (Exception exception) { throw new IllegalStateException("定时备份任务参数序列化失败", exception); }
             String dailyPayload = now.toLocalDate() + ":" + payload;

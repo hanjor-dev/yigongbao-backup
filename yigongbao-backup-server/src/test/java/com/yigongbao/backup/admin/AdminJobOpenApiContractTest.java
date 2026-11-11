@@ -16,6 +16,34 @@ import static org.assertj.core.api.Assertions.assertThat;
 
 class AdminJobOpenApiContractTest {
     @Test
+    void backupJobOverviewParametersMatchControllerContract() throws Exception {
+        Map<String, Object> spec = new Yaml().load(Files.readString(
+                Path.of("src/main/resources/openapi/local-backup-v1.yaml")));
+        Map<String, Object> operation = map(map(map(spec.get("paths")).get("/api/v1/admin/backup/jobs")).get("get"));
+        Set<String> documented = list(operation.get("parameters")).stream().map(AdminJobOpenApiContractTest::map)
+                .map(parameter -> String.valueOf(parameter.get("name"))).collect(Collectors.toSet());
+        java.lang.reflect.Method endpoint = Arrays.stream(AdminBackupController.class.getDeclaredMethods())
+                .filter(method -> method.getName().equals("listJobs"))
+                .filter(method -> method.isAnnotationPresent(org.springframework.web.bind.annotation.GetMapping.class))
+                .findFirst().orElseThrow();
+        Set<String> controller = Arrays.stream(endpoint.getParameters())
+                .map(parameter -> parameter.getAnnotation(RequestParam.class))
+                .filter(java.util.Objects::nonNull)
+                .map(parameter -> parameter.name().isBlank() ? parameter.value() : parameter.name())
+                .collect(Collectors.toSet());
+
+        assertThat(documented).isEqualTo(controller).containsExactlyInAnyOrder(
+                "current", "size", "jobId", "finishedFrom", "finishedTo", "orderResult");
+        assertThat(list(operation.get("parameters")).stream().map(AdminJobOpenApiContractTest::map)
+                .filter(parameter -> List.of("finishedFrom","finishedTo").contains(parameter.get("name")))
+                .map(parameter -> map(parameter.get("schema")).get("$ref")))
+                .containsOnly("#/components/schemas/OrderDateBoundary");
+        Map<String,Object> schemas=map(map(spec.get("components")).get("schemas"));
+        assertThat(map(schemas.get("AdminOverview")).get("additionalProperties")).isEqualTo(false);
+        assertThat(schemas).containsKeys("OverviewHealth","OverviewSummary","OverviewStorage","OverviewAutomationItem","OverviewActivity");
+    }
+
+    @Test
     void taskFilePageParametersAndEnvelopeMatchControllerContract() throws Exception {
         Map<String, Object> spec = new Yaml().load(Files.readString(
                 Path.of("src/main/resources/openapi/local-backup-v1.yaml")));

@@ -5,10 +5,10 @@ export function statusTone(value) {
   if (normalized === 'HOT') return 'warm';
   if (normalized === 'COLD') return 'cold';
   if (['IMPORT', 'LOCAL', 'HOT_NAS', 'COS'].includes(normalized)) return 'info';
-  if (['SUCCESS', 'SUCCEEDED', 'SIMULATED', 'COMPLETED', 'VERIFIED', 'PRESENT', 'EXISTS', 'AVAILABLE', 'ENABLED', 'ACTIVE', 'ONLINE', 'CLEANED', 'CLEARED', 'REGISTERED', 'COMMITTED', 'UPLOADED', 'RELEASED', 'ISSUED', 'CONSUMED', 'DELETED'].includes(normalized)) return 'success';
+  if (['SUCCESS', 'SUCCEEDED', 'SIMULATED', 'COMPLETED', 'VERIFIED', 'PRESENT', 'EXISTS', 'AVAILABLE', 'ENABLED', 'ACTIVE', 'ONLINE', 'CLEANED', 'CLEARED', 'REGISTERED', 'COMMITTED', 'UPLOADED', 'RELEASED', 'ISSUED', 'CONSUMED', 'DELETED', 'NORMAL', 'HEALTHY'].includes(normalized)) return 'success';
   if (['CREATED', 'RUNNING', 'WRITING', 'PENDING', 'PENDING_RECEIPT', 'PREPARED', 'PROCESSING', 'RETRYING', 'RETRY_PENDING', 'RETRYING_FAILED_ORDERS', 'RESTORING', 'UPLOADING', 'SEALING', 'ARCHIVE_GUARD', 'GOING_OFFLINE', 'MOUNTING', 'REQUESTED', 'VERIFYING', 'COMMITTING', 'CLAIMED'].includes(normalized)) return 'progress';
-  if (['PARTIAL', 'PAUSED', 'READY', 'SWITCHED', 'MANIFEST_FROZEN', 'UPLOAD_UNKNOWN', 'UNVERIFIED'].includes(normalized)) return 'warning';
-  if (['FAILED', 'PARTIAL_FAILED', 'PREPARE_FAILED', 'VERIFY_FAILED', 'COMMIT_FAILED', 'SIMULATION_FAILED', 'CANCELLED', 'CANCELED', 'ABANDONED', 'ABSENT', 'DISABLED', 'UNAVAILABLE', 'ERROR', 'DAMAGED', 'REPAIR_REQUIRED', 'EXPIRED', 'REVOKED'].includes(normalized)) return 'danger';
+  if (['PARTIAL', 'PAUSED', 'READY', 'SWITCHED', 'MANIFEST_FROZEN', 'UPLOAD_UNKNOWN', 'UNVERIFIED', 'WARNING', 'DEGRADED', 'MISSED', 'MISSING', 'STALE', 'CHECKPOINT_MISSING'].includes(normalized)) return 'warning';
+  if (['FAILED', 'PARTIAL_FAILED', 'PREPARE_FAILED', 'VERIFY_FAILED', 'COMMIT_FAILED', 'SIMULATION_FAILED', 'CANCELLED', 'CANCELED', 'ABANDONED', 'ABSENT', 'UNAVAILABLE', 'ERROR', 'DAMAGED', 'REPAIR_REQUIRED', 'EXPIRED', 'REVOKED', 'CRITICAL'].includes(normalized)) return 'danger';
   if (['STANDBY', 'READ_ONLY', 'RETIRED', 'OFFLINE'].includes(normalized)) return 'neutral';
   return 'neutral';
 }
@@ -19,6 +19,8 @@ const STATUS_LABELS = {
   CANCELLED: '已取消', CANCELED: '已取消', PENDING: '待处理', PROCESSING: '处理中',
   RETRYING: '重试中', RETRY_PENDING: '等待重试', SIMULATED: '模拟完成', SIMULATION_FAILED: '模拟失败',
   AVAILABLE: '可用', UNAVAILABLE: '不可用', PRESENT: '存在', EXISTS: '存在', ABSENT: '缺失', SKIPPED: '已跳过', UNKNOWN: '未知', ERROR: '异常',
+  NORMAL: '正常', HEALTHY: '健康', CRITICAL: '严重', DEGRADED: '降级', MISSED: '已错过',
+  MISSING: '缺少检查点', STALE: '数据陈旧', CHECKPOINT_MISSING: '尚无检查点', IDLE: '尚未运行', SETUP_REQUIRED: '待初始化',
   RESTORING: '恢复中', UPLOADING: '上传中', PARTIAL: '部分异常', CLEARED: '已清理', ENABLED: '已启用', DISABLED: '已停用', RETIRED: '已退役',
   VERIFIED: '已校验', WRITING: '写入中', CLEANED: '已清理', READY: '待清理', DAMAGED: '已损坏', UNVERIFIED: '未校验',
 
@@ -33,7 +35,7 @@ const STATUS_LABELS = {
   VERIFY_FAILED: '校验失败', COMMIT_FAILED: '提交失败', ABANDONED: '已放弃',
 
   ORDER_PACKAGE: '订单备份包', SUPPLEMENT_FILE: '补传文件', ARTIFACT_COPY: '文件副本',
-  ORDER_BACKUP: '订单备份', MANUAL_BACKUP: '手动备份', RESTORE: '线上恢复', VOLUME_ARCHIVE: '整盘封存',
+  ORDER_BACKUP: '订单备份', MANUAL_BACKUP: '手动备份', DEGRADED_BACKUP: '降级备份', RESTORE: '线上恢复', VOLUME_ARCHIVE: '整盘封存',
   DOWNLOAD: '文件下载', BACKUP_DOWNLOAD: '备份下载', RESTORE_UPLOAD: '恢复包上传',
   RESTORE_OBJECT_UPLOAD: '文件上传', SUPPLEMENT_UPLOAD: '补传上传',
 

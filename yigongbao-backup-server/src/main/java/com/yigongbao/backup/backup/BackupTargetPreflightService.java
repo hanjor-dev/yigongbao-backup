@@ -2,6 +2,9 @@ package com.yigongbao.backup.backup;
 
 import com.yigongbao.backup.config.RuntimeConfigService;
 import com.yigongbao.backup.job.JobPreconditionException;
+import com.yigongbao.backup.storage.archive.VolumeArchiveEntity;
+import com.yigongbao.backup.storage.archive.VolumeArchiveMapper;
+import com.yigongbao.backup.storage.volume.StorageVolumeAccessPolicy;
 import com.yigongbao.backup.storage.volume.StorageVolumeEntity;
 import com.yigongbao.backup.storage.volume.StorageVolumeHealthService;
 import com.yigongbao.backup.storage.volume.StorageVolumeMapper;
@@ -20,25 +23,16 @@ public class BackupTargetPreflightService {
     private final StorageVolumeMarkerService markers;
     private final StorageVolumeHealthService health;
     private final RuntimeConfigService configs;
+    private final VolumeArchiveMapper archives;
+    private final StorageVolumeAccessPolicy accessPolicy;
 
     public void requireWritable(long volumeId) {
         StorageVolumeEntity volume = volumes.selectById(volumeId);
         if (volume == null || Integer.valueOf(1).equals(volume.getIsDeleted())) {
             throw unavailable("目标热备存储卷不存在或已删除");
         }
-        if (!StorageVolumeStatus.Tier.HOT.name().equals(volume.getTier())
-                || !StorageVolumeStatus.Mount.ONLINE.name().equals(volume.getMountStatus())
-                || !StorageVolumeStatus.Write.ACTIVE.name().equals(volume.getWriteStatus())) {
-            throw unavailable("目标热备存储卷已不再处于 HOT / ONLINE / ACTIVE 状态");
-        }
-        if (volume.getAdminStatus() != null
-                && !StorageVolumeStatus.Admin.ENABLED.name().equals(volume.getAdminStatus())) {
-            throw unavailable("目标热备存储卷已被管理员停用");
-        }
-        if (volume.getOperationStatus() != null
-                && !StorageVolumeStatus.Operation.IDLE.name().equals(volume.getOperationStatus())) {
-            throw unavailable("目标热备存储卷正在执行其他生命周期操作");
-        }
+        StorageVolumeAccessPolicy.AccessDecision access = accessPolicy.writable(volume, guard(volume));
+        if (!access.allowed()) throw unavailable(access.message());
         StorageVolumeMarkerService.VerificationResult marker = markers.verify(
                 Path.of(volume.getRootPath()), markers.expectedVolumeId(volume));
         if (!marker.valid()) throw unavailable("目标热备存储卷标记校验失败：" + marker.reason());
@@ -54,5 +48,14 @@ public class BackupTargetPreflightService {
 
     private static JobPreconditionException unavailable(String message) {
         return new JobPreconditionException("STORAGE_VOLUME_UNAVAILABLE", message);
+    }
+
+    private StorageVolumeAccessPolicy.ArchiveGuardContext guard(StorageVolumeEntity volume) {
+        if (volume == null || volume.getOperationRefId() == null
+                || !StorageVolumeStatus.Operation.ARCHIVE_GUARD.name().equals(volume.getOperationStatus())) return null;
+        VolumeArchiveEntity archive = archives.selectById(volume.getOperationRefId());
+        return archive == null ? null : new StorageVolumeAccessPolicy.ArchiveGuardContext(
+                archive.getId(), archive.getSuccessorVolumeId(), archive.getPhase(),
+                !Integer.valueOf(1).equals(archive.getIsDeleted()));
     }
 }

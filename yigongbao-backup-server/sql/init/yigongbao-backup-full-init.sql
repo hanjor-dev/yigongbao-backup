@@ -1,5 +1,6 @@
 /*
  * 医工宝本地备份系统——全新环境一体化初始化脚本（MySQL 8）
+ * 业务时间统一为 Asia/Shanghai（UTC+08:00）。
  *
  * 用途：一次执行完成数据库创建、领域表、默认管理员、索引、版本字段兼容处理和业务配置初始化。
  * 来源：sql/init/00-create-database.sql 至 04-functional-config-defaults.sql。
@@ -9,6 +10,7 @@
  *
  * 推荐执行：mysql --default-character-set=utf8mb4 -u <迁移账号> -p < sql/init/yigongbao-backup-full-init.sql
  */
+SET time_zone = '+08:00';
 
 SET NAMES utf8mb4 COLLATE utf8mb4_0900_ai_ci;
 
@@ -120,7 +122,7 @@ CREATE TABLE IF NOT EXISTS bk_backup_stage (
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci COMMENT='订单备份回执前暂存状态';
 
 CREATE TABLE IF NOT EXISTS bk_storage_volume (
- id BIGINT NOT NULL AUTO_INCREMENT COMMENT '主键ID', volume_code VARCHAR(64) NOT NULL COMMENT '逻辑卷编码', display_name VARCHAR(128) NOT NULL COMMENT '显示名称', access_type VARCHAR(32) NOT NULL COMMENT 'LOCAL/REMOVABLE/MAPPED_NETWORK', mount_path VARCHAR(1024) NOT NULL COMMENT 'Windows挂载点', root_path VARCHAR(1024) NOT NULL COMMENT '受控业务根目录', volume_fingerprint VARCHAR(255) NULL COMMENT '系统卷指纹', marker_json JSON NULL COMMENT '受控目录卷标记', capacity_pool_id BIGINT NULL COMMENT '容量域ID', tier VARCHAR(32) NOT NULL COMMENT 'HOT/COLD/IMPORT', mount_status VARCHAR(32) NOT NULL COMMENT 'ONLINE/OFFLINE/UNAVAILABLE', write_status VARCHAR(32) NOT NULL COMMENT 'ACTIVE/STANDBY/READ_ONLY/DISABLED', admin_status VARCHAR(32) NOT NULL DEFAULT 'ENABLED' COMMENT 'ENABLED/RETIRED', operation_status VARCHAR(32) NOT NULL DEFAULT 'IDLE' COMMENT '卷操作状态', operation_ref_id BIGINT NULL COMMENT '卷操作引用ID', archive_note VARCHAR(512) NULL COMMENT '冷备介质查找备注', offline_label_note VARCHAR(512) NULL COMMENT '线下标签备注', physical_location VARCHAR(512) NULL COMMENT '离线存放位置', archived_at DATETIME(3) NULL COMMENT '最近成功封存时间', order_created_from DATETIME(3) NULL COMMENT '封存订单创建时间起点', order_created_to DATETIME(3) NULL COMMENT '封存订单创建时间终点', archived_order_count BIGINT NULL, archived_file_count BIGINT NULL, archived_bytes BIGINT NULL, last_verified_at DATETIME(3) NULL, priority INT NOT NULL DEFAULT 0 COMMENT '切换优先级', last_probed_at DATETIME(3) NULL COMMENT '最近探测时间', last_error_code VARCHAR(64) NULL COMMENT '最近错误码', last_error_message TEXT NULL COMMENT '最近错误信息', total_bytes BIGINT NULL COMMENT '最近探测总容量', usable_bytes BIGINT NULL COMMENT '最近探测可用容量', hot_active_singleton TINYINT GENERATED ALWAYS AS (CASE WHEN tier='HOT' AND write_status='ACTIVE' AND is_deleted=0 THEN 1 ELSE NULL END) STORED COMMENT 'HOT活动卷唯一约束键', version INT NOT NULL DEFAULT 0 COMMENT '乐观锁版本',
+ id BIGINT NOT NULL AUTO_INCREMENT COMMENT '主键ID', volume_code VARCHAR(64) NOT NULL COMMENT '逻辑卷编码', display_name VARCHAR(128) NOT NULL COMMENT '显示名称', access_type VARCHAR(32) NOT NULL COMMENT 'LOCAL/REMOVABLE/MAPPED_NETWORK', mount_path VARCHAR(1024) NOT NULL COMMENT 'Windows挂载点', root_path VARCHAR(1024) NOT NULL COMMENT '受控业务根目录', volume_fingerprint VARCHAR(255) NULL COMMENT '系统卷指纹', marker_json JSON NULL COMMENT '受控目录卷标记', capacity_pool_id BIGINT NULL COMMENT '容量域ID', tier VARCHAR(32) NOT NULL COMMENT 'HOT/COLD/IMPORT', mount_status VARCHAR(32) NOT NULL COMMENT 'ONLINE/OFFLINE/UNAVAILABLE', write_status VARCHAR(32) NOT NULL COMMENT 'ACTIVE/STANDBY/READ_ONLY/DISABLED', admin_status VARCHAR(32) NOT NULL DEFAULT 'ENABLED' COMMENT 'ENABLED/RETIRED', operation_status VARCHAR(32) NOT NULL DEFAULT 'IDLE' COMMENT '卷操作状态', operation_ref_id BIGINT NULL COMMENT '卷操作引用ID', archive_note VARCHAR(512) NULL COMMENT '冷备介质查找备注', offline_label_note VARCHAR(512) NULL COMMENT '线下标签备注', physical_location VARCHAR(512) NULL COMMENT '离线存放位置', archived_at DATETIME(3) NULL COMMENT '最近成功封存时间', order_created_from DATETIME(3) NULL COMMENT '封存订单创建时间起点', order_created_to DATETIME(3) NULL COMMENT '封存订单创建时间终点', archived_order_count BIGINT NULL, archived_file_count BIGINT NULL, archived_bytes BIGINT NULL, last_verified_at DATETIME(3) NULL, priority INT NOT NULL DEFAULT 0 COMMENT '切换优先级', last_probed_at DATETIME(3) NULL COMMENT '最近探测时间', capacity_observed_at DATETIME(3) NULL COMMENT '最近一次合法成功容量快照时间', last_error_code VARCHAR(64) NULL COMMENT '最近错误码', last_error_message TEXT NULL COMMENT '最近错误信息', total_bytes BIGINT NULL COMMENT '最近探测总容量', usable_bytes BIGINT NULL COMMENT '最近探测可用容量', hot_active_singleton TINYINT GENERATED ALWAYS AS (CASE WHEN tier='HOT' AND write_status='ACTIVE' AND is_deleted=0 THEN 1 ELSE NULL END) STORED COMMENT 'HOT活动卷唯一约束键', version INT NOT NULL DEFAULT 0 COMMENT '乐观锁版本',
  create_time DATETIME(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3) COMMENT '创建时间', update_time DATETIME(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3) ON UPDATE CURRENT_TIMESTAMP(3) COMMENT '更新时间', create_by BIGINT NULL COMMENT '创建人ID', update_by BIGINT NULL COMMENT '更新人ID', is_deleted TINYINT NOT NULL DEFAULT 0 COMMENT '逻辑删除', PRIMARY KEY(id)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci COMMENT='动态存储卷台账';
 
@@ -375,6 +377,12 @@ CALL add_backup_index_if_missing('bk_job_order','uk_bk_job_order','CREATE UNIQUE
 CALL add_backup_index_if_missing('bk_job_order','idx_bk_job_order_snapshot','CREATE INDEX idx_bk_job_order_snapshot ON bk_job_order(snapshot_id)');
 CALL add_backup_index_if_missing('bk_job_order','idx_bk_job_order_source_volume','CREATE INDEX idx_bk_job_order_source_volume ON bk_job_order(source_storage_volume_id,status)');
 CALL add_backup_index_if_missing('bk_job_order','idx_bk_job_order_storage_volume','CREATE INDEX idx_bk_job_order_storage_volume ON bk_job_order(storage_volume_id,job_id)');
+CALL add_backup_index_if_missing('bk_job','idx_bk_job_overview','CREATE INDEX idx_bk_job_overview ON bk_job(job_type,finished_at,id,is_deleted)');
+CALL add_backup_index_if_missing('bk_job_order','idx_bk_job_order_overview','CREATE INDEX idx_bk_job_order_overview ON bk_job_order(source_order_id,status,job_id,is_deleted)');
+CALL add_backup_index_if_missing('bk_order_snapshot','idx_bk_snapshot_overview','CREATE INDEX idx_bk_snapshot_overview ON bk_order_snapshot(backup_mode,snapshot_status,backup_completed_at,source_order_id,is_deleted)');
+CALL add_backup_index_if_missing('bk_order_package','idx_bk_package_overview','CREATE INDEX idx_bk_package_overview ON bk_order_package(backup_mode,status,snapshot_id,is_deleted)');
+CALL add_backup_index_if_missing('bk_artifact_copy','idx_bk_artifact_overview','CREATE INDEX idx_bk_artifact_overview ON bk_artifact_copy(artifact_type,lifecycle,state,artifact_id,storage_volume_id,is_deleted)');
+CALL add_backup_index_if_missing('bk_volume_archive','idx_bk_volume_archive_overview','CREATE INDEX idx_bk_volume_archive_overview ON bk_volume_archive(phase,update_time,source_volume_id,is_deleted)');
 CALL add_backup_index_if_missing('bk_job_file','uk_bk_job_file_step','CREATE UNIQUE INDEX uk_bk_job_file_step ON bk_job_file(job_id,asset_identity,step)');
 CALL add_backup_index_if_missing('bk_job_file','idx_bk_job_file_status','CREATE INDEX idx_bk_job_file_status ON bk_job_file(job_id,status,id)');
 CALL add_backup_index_if_missing('bk_job_file','idx_bk_job_file_storage_volume','CREATE INDEX idx_bk_job_file_storage_volume ON bk_job_file(storage_volume_id,job_id)');

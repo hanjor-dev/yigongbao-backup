@@ -33,6 +33,12 @@ test('complex business pages expose reusable domain components', () => {
   }
 });
 
+test('management overview uses dedicated operational panels', () => {
+  for (const component of ['OverviewHealthHero', 'OverviewAlerts', 'OverviewMetrics', 'OverviewTrend', 'OverviewStorage', 'OverviewAutomation', 'OverviewActivity']) {
+    assert.ok(fs.existsSync(path.join(root, 'src', 'components', 'overview', `${component}.vue`)), `${component}.vue should exist`);
+  }
+});
+
 test('domain actions do not pass DOM events where business arguments are optional', () => {
   const orderDetail = fs.readFileSync(path.join(root, 'src', 'components', 'orders', 'OrderDetail.vue'), 'utf8');
   const coldDetail = fs.readFileSync(path.join(root, 'src', 'components', 'cold', 'ColdBatchDetail.vue'), 'utf8');

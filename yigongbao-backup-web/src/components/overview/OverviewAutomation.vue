@@ -1,0 +1,7 @@
+<script setup>
+import { formatTime } from '../../overviewModel.js';
+defineProps({ automation: Object });
+defineEmits(['navigate']);
+const rows = value => [{ key:'backup',label:'自动备份',note:'错过计划时间不补跑',...value?.backup },{key:'accountSync',label:'账号同步',note:'按计划拉取线上账号',...value?.accountSync},{key:'cleanup',label:'自动清理',note:'受许可与保留策略保护',...value?.cleanup}];
+</script>
+<template><el-card shadow="never" class="overview-panel overview-automation"><template #header><div class="overview-panel__title"><div><span>自动化状态</span><small>计划开关、最近结果与下次预期</small></div></div></template><div class="automation-list"><button v-for="item in rows(automation)" :key="item.key" type="button" @click="$emit('navigate',item)"><span class="automation-icon"><el-icon><Timer /></el-icon></span><span class="automation-copy"><strong>{{ item.label }} <status-badge :value="item.enabled ? item.state : 'DISABLED'" /></strong><small>{{ item.message || item.note }}</small><em><template v-if="item.executionMode">模式 {{ item.executionMode }} · </template><template v-if="item.schedule">开始 {{ item.schedule }} · </template><template v-if="item.intervalValue">周期 {{ item.intervalValue }} {{ item.intervalUnit }} · </template>最近处理 {{ item.lastProcessedCount ?? '—' }} · 最近成功 {{ formatTime(item.lastSuccessAt) }} · 下次预期 {{ formatTime(item.nextExpectedAt) }}</em><em v-if="item.lastError">最近错误：{{ item.lastError }}</em></span><el-icon><ArrowRight /></el-icon></button></div></el-card></template>

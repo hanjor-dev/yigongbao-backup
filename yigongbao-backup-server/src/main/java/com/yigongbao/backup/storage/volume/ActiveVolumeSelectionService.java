@@ -3,6 +3,8 @@ package com.yigongbao.backup.storage.volume;
 import com.baomidou.mybatisplus.core.toolkit.Wrappers;
 import lombok.RequiredArgsConstructor;
 import com.yigongbao.backup.config.RuntimeConfigService;
+import com.yigongbao.backup.storage.archive.VolumeArchiveEntity;
+import com.yigongbao.backup.storage.archive.VolumeArchiveMapper;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
@@ -17,6 +19,8 @@ public class ActiveVolumeSelectionService {
     private final StorageVolumeLifecycleService lifecycleService;
     private final RuntimeConfigService configs;
     private final StorageVolumeAlertService alerts;
+    private final VolumeArchiveMapper archiveMapper;
+    private final StorageVolumeAccessPolicy accessPolicy;
 
     /** 返回当前可写热备卷；没有合格卷时拒绝创建不可执行任务。 */
     public StorageVolumeEntity requireActiveHotVolume() {
@@ -87,9 +91,25 @@ public class ActiveVolumeSelectionService {
         StorageVolumeHealthService.HealthSnapshot health = healthService.probe(volume);
         int threshold = configs.getInt("storage.volume-switch.threshold-percent", 90, 1);
         if (threshold < 1 || threshold > 100) threshold = 90;
-        boolean belowThreshold = health.totalBytes() > 0
-                && (health.totalBytes() - health.usableBytes()) * 100L < health.totalBytes() * threshold;
-        return health.accessible() && health.writable() && belowThreshold && health.usableBytes() >= requiredBytes;
+        if (!health.accessible() || !health.writable() || health.usableBytes() < requiredBytes) return false;
+        volume.setTotalBytes(health.totalBytes());
+        volume.setUsableBytes(health.usableBytes());
+        boolean stateAllowed = StorageVolumeStatus.Write.STANDBY.name().equals(volume.getWriteStatus())
+                ? accessPolicy.standbyReady(volume, true, threshold)
+                : accessPolicy.writable(volume, guard(volume)).allowed()
+                && StorageVolumeCapacitySnapshotPolicy.usedPercent(health.totalBytes(), health.usableBytes()) != null
+                && StorageVolumeCapacitySnapshotPolicy.usedPercent(health.totalBytes(), health.usableBytes())
+                .compareTo(java.math.BigDecimal.valueOf(threshold)) < 0;
+        return stateAllowed;
+    }
+
+    private StorageVolumeAccessPolicy.ArchiveGuardContext guard(StorageVolumeEntity volume) {
+        if (volume == null || volume.getOperationRefId() == null
+                || !StorageVolumeStatus.Operation.ARCHIVE_GUARD.name().equals(volume.getOperationStatus())) return null;
+        VolumeArchiveEntity archive = archiveMapper.selectById(volume.getOperationRefId());
+        return archive == null ? null : new StorageVolumeAccessPolicy.ArchiveGuardContext(
+                archive.getId(), archive.getSuccessorVolumeId(), archive.getPhase(),
+                !Integer.valueOf(1).equals(archive.getIsDeleted()));
     }
 
     public record SelectionResult(StorageVolumeEntity volume, String failureCode, String failureMessage) {

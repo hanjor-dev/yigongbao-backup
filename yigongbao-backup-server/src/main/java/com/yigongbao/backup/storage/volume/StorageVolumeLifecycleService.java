@@ -32,6 +32,7 @@ import java.util.UUID;
 @RequiredArgsConstructor
 @Slf4j
 public class StorageVolumeLifecycleService {
+    private static final StorageVolumeAccessPolicy ACCESS_POLICY = new StorageVolumeAccessPolicy();
     private final StorageVolumeMapper volumeMapper;
     private final StorageVolumeDiscoveryService discoveryService;
     private final StorageVolumeMarkerService markerService;
@@ -103,10 +104,7 @@ public class StorageVolumeLifecycleService {
             StorageVolumeHealthService.HealthSnapshot health = healthService.probe(entity);
             entity.setMarkerJson(objectMapper.writeValueAsString(new MarkerInfo(markerId.toString(), 1)));
             entity.setMountStatus(health.accessible() ? StorageVolumeStatus.Mount.ONLINE.name() : StorageVolumeStatus.Mount.UNAVAILABLE.name());
-            entity.setLastProbedAt(LocalDateTime.now());
-            entity.setLastErrorCode(health.errorCode());
-            entity.setLastErrorMessage(health.errorMessage());
-            updateCapacitySnapshot(entity, health);
+            StorageVolumeCapacitySnapshotPolicy.apply(entity, health, LocalDateTime.now());
             if (StorageVolumeStatus.Tier.HOT.name().equals(entity.getTier())
                     && health.accessible() && health.writable() && health.totalBytes() > 0) {
                 entity.setWriteStatus(currentActive == null
@@ -131,10 +129,7 @@ public class StorageVolumeLifecycleService {
         }
         StorageVolumeHealthService.HealthSnapshot health = healthService.probe(entity);
         entity.setMountStatus(health.accessible() ? StorageVolumeStatus.Mount.ONLINE.name() : StorageVolumeStatus.Mount.UNAVAILABLE.name());
-        entity.setLastProbedAt(LocalDateTime.now());
-        entity.setLastErrorCode(health.errorCode());
-        entity.setLastErrorMessage(health.errorMessage());
-        updateCapacitySnapshot(entity, health);
+        StorageVolumeCapacitySnapshotPolicy.apply(entity, health, LocalDateTime.now());
         entity.setUpdateBy(operatorId);
         volumeMapper.updateById(entity);
         audit(operatorId, "CONFIRM_MOUNTED", entity, health.accessible() ? "SUCCESS" : "FAILED", health.errorMessage());
@@ -179,10 +174,7 @@ public class StorageVolumeLifecycleService {
                 && !java.util.Objects.equals(volumeMapper.findActiveForUpdate().getId(), entity.getId())) {
             entity.setWriteStatus(StorageVolumeStatus.Write.READ_ONLY.name());
         }
-        entity.setLastProbedAt(LocalDateTime.now());
-        entity.setLastErrorCode(health.errorCode());
-        entity.setLastErrorMessage(health.errorMessage());
-        updateCapacitySnapshot(entity, health);
+        StorageVolumeCapacitySnapshotPolicy.apply(entity, health, LocalDateTime.now());
         entity.setUpdateBy(operatorId);
         volumeMapper.updateById(entity);
         audit(operatorId, "CONFIRM_MOUNTED", entity, health.accessible() ? "SUCCESS" : "FAILED", health.errorMessage());
@@ -307,10 +299,7 @@ public class StorageVolumeLifecycleService {
                 || (health.totalBytes() - health.usableBytes()) * 100L >= health.totalBytes() * threshold) {
             throw new StorageVolumeUnavailableException("目标卷容量不足或已达切换阈值");
         }
-        updateCapacitySnapshot(entity, health);
-        entity.setLastProbedAt(LocalDateTime.now());
-        entity.setLastErrorCode(null);
-        entity.setLastErrorMessage(null);
+        StorageVolumeCapacitySnapshotPolicy.apply(entity, health, LocalDateTime.now());
         List<StorageVolumeEntity> activeVolumes = currentActive != null
                 && !java.util.Objects.equals(currentActive.getId(), volumeId)
                 ? List.of(currentActive)
@@ -343,13 +332,6 @@ public class StorageVolumeLifecycleService {
         }
         StorageVolumeEntity successor = volumeMapper.findByIdForUpdate(successorId);
         if (successor == null) throw new StorageVolumeOperationException("接替卷不存在");
-        if (!StorageVolumeStatus.Tier.HOT.name().equals(successor.getTier())
-                || !StorageVolumeStatus.Mount.ONLINE.name().equals(successor.getMountStatus())
-                || !StorageVolumeStatus.Write.STANDBY.name().equals(successor.getWriteStatus())
-                || !StorageVolumeStatus.Admin.ENABLED.name().equals(defaultAdmin(successor))
-                || !StorageVolumeStatus.Operation.IDLE.name().equals(defaultOperation(successor))) {
-            throw new StorageVolumeOperationException("接替卷必须是可用的 HOT/ONLINE/STANDBY 卷");
-        }
         ensureNoRunningWritesOrReservations(source);
         validateTransitionTarget(successor, StorageVolumeStatus.Tier.HOT, StorageVolumeStatus.Write.STANDBY);
         source.setWriteStatus(StorageVolumeStatus.Write.READ_ONLY.name());
@@ -440,12 +422,14 @@ public class StorageVolumeLifecycleService {
                 && !health.writable()) {
             throw new StorageVolumeOperationException("备用热备卷不可写");
         }
-        updateCapacitySnapshot(entity, health);
-    }
-
-    private void updateCapacitySnapshot(StorageVolumeEntity entity, StorageVolumeHealthService.HealthSnapshot health) {
-        entity.setTotalBytes(health.accessible() && health.totalBytes() > 0 ? health.totalBytes() : null);
-        entity.setUsableBytes(health.accessible() && health.totalBytes() > 0 ? health.usableBytes() : null);
+        StorageVolumeCapacitySnapshotPolicy.apply(entity, health, LocalDateTime.now());
+        if (StorageVolumeStatus.Write.STANDBY.name().equals(entity.getWriteStatus())) {
+            int threshold = configs.getInt("storage.volume-switch.threshold-percent", 90, 1);
+            if (threshold < 1 || threshold > 100) threshold = 90;
+            if (!ACCESS_POLICY.standbyReady(entity, true, threshold)) {
+                throw new StorageVolumeOperationException("接替卷必须是可用且容量充足的 HOT/ONLINE/STANDBY 卷");
+            }
+        }
     }
 
     /** 按主键读取逻辑卷。 */

@@ -1,0 +1,6 @@
+<script setup>
+import { activityPresentation, formatTime } from '../../overviewModel.js';
+defineProps({ activities: Array });
+defineEmits(['navigate']);
+</script>
+<template><el-card shadow="never" class="overview-panel overview-activity"><template #header><div class="overview-panel__title"><div><span>近期活动</span><small>备份、恢复与整盘封存统一时间线</small></div></div></template><el-empty v-if="!activities?.length" description="暂无近期活动" :image-size="72" /><div v-else class="activity-list"><component :is="activityPresentation(item).interactive ? 'button' : 'div'" v-for="item in activities" :key="item.activityId" class="activity-row" type="button" @click="activityPresentation(item).interactive && $emit('navigate',item)"><span class="activity-dot"></span><span class="activity-main"><strong>{{ item.name || activityPresentation(item).typeLabel }}</strong><small>{{ activityPresentation(item).typeLabel }} · {{ formatTime(item.finishedAt || item.startedAt || item.requestedAt) }}</small><em v-if="item.failureSummary">{{ item.failureSummary }}</em><em v-else-if="item.storageSummary">{{ item.storageSummary }}</em></span><span class="activity-result"><status-badge :value="item.status" /><small>完整 {{ item.completeSucceeded || 0 }} · 降级 {{ item.incompleteSucceeded || 0 }} · 失败 {{ item.failed || 0 }}</small></span></component></div></el-card></template>

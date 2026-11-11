@@ -20,6 +20,11 @@ import java.util.Set;
 public class RuntimeConfigService {
     private final PersistentConfigService configs;
 
+    /** 读取当前有效配置元数据，供需要启用时间等事实的只读投影使用。 */
+    public ConfigService.Entry entry(String key) {
+        return configs.get(key);
+    }
+
     /** 读取字符串配置；defaultValue仅保留二进制兼容，生产不再回退代码默认值。 */
     public String get(String key, String defaultValue) {
         try {

@@ -103,8 +103,8 @@ public class PersistentConfigService {
                 entity.getCategoryName() == null ? categoryName(entity.getCategoryCode() == null ? categoryCode(entity.getConfigKey()) : entity.getCategoryCode()) : entity.getCategoryName(),
                 entity.getValueType(), entity.getConfigValue(), entity.getOptionsJson(), entity.getDescription(),
                 entity.getConfigVersion(), entity.getChangedBy() == null ? 0L : entity.getChangedBy(),
-                entity.getChangedAt() == null ? entity.getUpdateTime().toInstant(java.time.ZoneOffset.UTC) :
-                        entity.getChangedAt().toInstant(java.time.ZoneOffset.UTC));
+                com.yigongbao.backup.common.time.BusinessTimeCodec.toInstant(
+                        entity.getChangedAt() == null ? entity.getUpdateTime() : entity.getChangedAt()));
     }
 
     private static String categoryCode(String key) {
