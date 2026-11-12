@@ -9,6 +9,9 @@ import cn.dev33.satoken.context.model.SaResponse;
 import cn.dev33.satoken.context.model.SaRequest;
 import com.baomidou.mybatisplus.extension.plugins.pagination.Page;
 import com.yigongbao.backup.storage.api.ArtifactStore;
+import com.yigongbao.backup.storage.api.VolumeArtifactStore;
+import com.yigongbao.backup.storage.location.ArtifactReplicaResolver;
+import com.yigongbao.backup.storage.lease.StorageVolumeReadLeaseService;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.Test;
 
@@ -143,6 +146,35 @@ class OrderControllerFilterTest {
                 .extracting(option -> option.get("value"))
                 .containsExactly("PRESENT", "PARTIAL", "ERROR", "ABSENT");
         verifyNoInteractions(snapshots);
+    }
+
+    @Test
+    void overviewAndBusinessFiltersAreCombinedInOnePagedSnapshotQuery() {
+        com.baomidou.mybatisplus.core.metadata.TableInfoHelper.initTableInfo(
+                new org.apache.ibatis.builder.MapperBuilderAssistant(
+                        new com.baomidou.mybatisplus.core.MybatisConfiguration(), "combinedOrderFilterTest"),
+                OrderSnapshotEntity.class);
+        SaManager.setSaTokenContext(new SaTokenContextForThreadLocal());
+        SaTokenContextForThreadLocalStorage.setBox(mock(SaRequest.class), mock(SaResponse.class), storage());
+        StpUtil.login(1L);
+        OrderSnapshotMapper snapshots = mock(OrderSnapshotMapper.class);
+        when(snapshots.selectPage(any(), any())).thenAnswer(invocation -> invocation.getArgument(0));
+        OrderOverviewFilterMapper overview = mock(OrderOverviewFilterMapper.class);
+        OrderController controller = new OrderController(snapshots, mock(AssetMapper.class),
+                mock(OrderPackageMapper.class), mock(VolumeArtifactStore.class),
+                mock(ArtifactReplicaResolver.class), mock(OrderStorageLocationService.class),
+                mock(StorageVolumeReadLeaseService.class), overview);
+
+        controller.list(1, 20, "patient", "2026-11-01", "2026-11-30", 2030,
+                "11.1", 1, null, null, null, "REAL", false, "UNREADABLE");
+
+        verify(snapshots).selectPage(any(Page.class), argThat(query -> {
+            String sql = query.getSqlSegment().toLowerCase();
+            return sql.contains("patient_name") && sql.contains("business_type")
+                    && sql.contains("backup_mode") && sql.contains("not exists")
+                    && sql.contains("snapshot_status");
+        }));
+        verifyNoInteractions(overview);
     }
 
     private static SaStorage storage() {

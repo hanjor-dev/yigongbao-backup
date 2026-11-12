@@ -35,8 +35,8 @@ public final class HttpCleanupClient implements CleanupClient {
             JsonNode data = http.data("POST", "/internal/cleanup/v1/evaluate", body,
                     stableKey("cleanup-evaluate", body));
             String taskId = text(data, "taskId", "id");
-            return new Evaluation(required(taskId, "清理评估响应缺少taskId"), strings(data, "objectKeys", "keys"),
-                    longValue(data, "estimatedBytes", "bytes"));
+            return new Evaluation(required(taskId, "清理评估响应缺少taskId"), evaluatedObjects(data),
+                    longValue(data, "estimatedBytes", "bytes"), text(data, "snapshotHash"), text(data, "objectSetHash"));
         } catch (Exception e) {
             throw translate(e, "线上清理评估失败");
         }
@@ -52,6 +52,7 @@ public final class HttpCleanupClient implements CleanupClient {
     }
 
     /** 提交完整清理证据；线上协议不支持无证据的 GET permit 查询。 */
+    @Override
     public Permit pollPermit(String taskId, PermitRequest request) {
         if (taskId == null || taskId.isBlank() || request == null) {
             throw new IllegalArgumentException("清理任务或授权证据不能为空");
@@ -70,8 +71,9 @@ public final class HttpCleanupClient implements CleanupClient {
                     body, stableKey("cleanup-permit", taskId, Integer.toString(request.attemptNo()),
                             request.snapshotHash(), request.objectSetHash()));
             return new Permit(required(text(data, "permitId", "id"), "清理授权响应缺少permitId"),
-                    required(text(data, "taskId"), "清理授权响应缺少taskId"), strings(data, "objectKeys", "keys"),
-                    text(data, "status"), instant(text(data, "expiresAt", "expireAt", "expires_at")));
+                    required(text(data, "taskId"), "清理授权响应缺少taskId"), permitObjects(data),
+                    text(data, "status"), instant(text(data, "expiresAt", "expireAt", "expires_at")),
+                    text(data, "objectSetHash"));
         } catch (Exception e) {
             throw translate(e, "线上清理授权查询失败");
         }
@@ -129,6 +131,43 @@ public final class HttpCleanupClient implements CleanupClient {
             }
         }
         return List.of();
+    }
+
+    private static List<PermitObject> permitObjects(JsonNode data) {
+        JsonNode objects = data == null ? null : data.get("objects");
+        if (objects != null && objects.isArray()) {
+            List<PermitObject> result = new ArrayList<>();
+            for (JsonNode item : objects) {
+                String key = text(item, "objectKey", "key");
+                String version = text(item, "versionIdentity", "versionId", "version");
+                if (key != null) result.add(new PermitObject(key, version));
+            }
+            return List.copyOf(result);
+        }
+        return strings(data, "objectKeys", "keys").stream().map(key -> new PermitObject(key, null)).toList();
+    }
+
+    private static List<EvaluatedObject> evaluatedObjects(JsonNode data) {
+        JsonNode objects = data == null ? null : data.get("objects");
+        if (objects != null && objects.isArray()) {
+            List<EvaluatedObject> result = new ArrayList<>();
+            for (JsonNode item : objects) {
+                String key = text(item, "objectKey", "key");
+                if (key != null) result.add(new EvaluatedObject(
+                        text(item, "platform"), text(item, "bucket"), key,
+                        text(item, "versionIdentity", "versionId", "version"),
+                        nullableLong(item, "sourceFileId"), text(item, "sharedReferenceStatus"),
+                        longValue(item, "versionBytes", "bytes")));
+            }
+            return List.copyOf(result);
+        }
+        return strings(data, "objectKeys", "keys").stream()
+                .map(key -> new EvaluatedObject("COS", "UNKNOWN", key, null, null, "UNVERIFIED", 0L)).toList();
+    }
+
+    private static Long nullableLong(JsonNode node, String name) {
+        JsonNode value = node == null ? null : node.get(name);
+        return value == null || value.isNull() ? null : value.asLong();
     }
 
     private static String sha256(String value) {

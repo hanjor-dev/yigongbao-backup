@@ -24,7 +24,9 @@ public final class AdminOverviewQuerySqlProvider {
                        COUNT(DISTINCT CASE WHEN c.id IS NOT NULL AND %s AND %s THEN c.id END) AS expectedOfflineCopyCount,
                        COUNT(DISTINCT CASE WHEN c.id IS NOT NULL THEN c.id END) AS activeCopyCount,
                        COUNT(DISTINCT CASE WHEN c.id IS NOT NULL AND (%s) THEN c.id END) AS invalidMetadataCount,
-                       COUNT(DISTINCT CASE WHEN c.id IS NOT NULL AND (%s) THEN c.id END) AS abnormalActiveCopyCount
+                       COUNT(DISTINCT CASE WHEN c.id IS NOT NULL AND (%s) THEN c.id END) AS abnormalActiveCopyCount,
+                       COUNT(DISTINCT CASE WHEN c.id IS NOT NULL AND %s AND v.is_deleted=0 AND v.tier='HOT' THEN c.id END) AS hotCopyCount,
+                       COUNT(DISTINCT CASE WHEN c.id IS NOT NULL AND %s AND v.is_deleted=0 AND v.tier='COLD' THEN c.id END) AS coldCopyCount
                 FROM bk_order_snapshot s
                 JOIN bk_order_package p ON p.snapshot_id=s.id AND p.is_deleted=0
                      AND p.backup_mode='REAL' AND p.status='AVAILABLE'
@@ -34,7 +36,7 @@ public final class AdminOverviewQuerySqlProvider {
                 LEFT JOIN bk_volume_archive a ON a.id=v.operation_ref_id
                 WHERE s.is_deleted=0 AND s.backup_mode='REAL' AND s.snapshot_status='AVAILABLE'
                 GROUP BY s.source_order_id,s.id,p.id,s.backup_completed_at,s.backup_completeness,p.file_count,p.package_size
-                """.formatted(healthy,readable,healthy,expectedOffline,invalid,abnormal);
+                """.formatted(healthy,readable,healthy,expectedOffline,invalid,abnormal,healthy,healthy);
     }
 
     public static String selectDataQualitySummary() {
@@ -60,7 +62,8 @@ public final class AdminOverviewQuerySqlProvider {
     public static String selectManagedArtifactSummary() {
         return """
                 SELECT COALESCE(SUM(CASE WHEN c.size IS NOT NULL THEN c.size ELSE 0 END),0) AS managedArtifactBytes,
-                       SUM(CASE WHEN c.size IS NULL THEN 1 ELSE 0 END) AS unknownSizeCopyCount
+                       SUM(CASE WHEN c.size IS NULL THEN 1 ELSE 0 END) AS unknownSizeCopyCount,
+                       COUNT(*) AS metadataRecordCount
                 FROM bk_artifact_copy c
                 WHERE c.is_deleted=0 AND c.lifecycle='ACTIVE'
                   AND c.state IN ('PRESENT','VERIFIED')
@@ -108,7 +111,7 @@ public final class AdminOverviewQuerySqlProvider {
     }
 
     public static String selectRecentJobs() {
-        return recentJobsSql("", "#{limit}");
+        return recentJobsSql("AND job_type<>'SUPPLEMENT_UPLOAD'", "#{limit}");
     }
 
     public static String selectLatestAutoCleanup() {

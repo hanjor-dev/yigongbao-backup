@@ -66,14 +66,14 @@ public class MetadataSimulationArtifactWriter {
         recoverInterruptedReplacement(previous, target);
         // 任务在数据库落终态前可能因进程退出而被重新领取；完整制品直接幂等复用，避免破坏已完成结果。
         if (isComplete(target)) {
-            SimulationArtifactResult result = publishPackage(target, safeDate, safeOrder, manifest.assets());
+            SimulationArtifactResult result = publishPackage(target, safeDate, safeOrder, manifest);
             deleteQuietly(target);
             return result;
         }
         try {
             Files.createDirectories(temporary);
             mapper.writerWithDefaultPrettyPrinter().writeValue(temporary.resolve("manifest.json").toFile(),
-                    redactedManifest(manifest));
+                    manifest.withoutTransientSourceKeys());
             mapper.writerWithDefaultPrettyPrinter().writeValue(temporary.resolve("_simulation.json").toFile(), Map.of(
                     "simulated", true, "executionMode", BackupExecutionMode.METADATA_SIMULATION.name(),
                     "jobId", jobId, "jobNo", jobNo, "orderId", orderId, "orderNo", orderNo,
@@ -94,7 +94,7 @@ public class MetadataSimulationArtifactWriter {
             if (Files.exists(target)) move(target, previous);
             move(temporary, target);
             deleteQuietly(previous);
-            SimulationArtifactResult result = publishPackage(target, safeDate, safeOrder, manifest.assets());
+            SimulationArtifactResult result = publishPackage(target, safeDate, safeOrder, manifest);
             // 模拟文件、manifest 和占位文件均已进入 ZIP；热备目录不再保留解压目录，避免重复占用空间。
             deleteQuietly(target);
             return result;
@@ -108,7 +108,8 @@ public class MetadataSimulationArtifactWriter {
 
     /** 将隔离目录压缩后提交到热备 ArtifactStore，使查询、详情和下载走真实链路。 */
     private SimulationArtifactResult publishPackage(Path directory, String safeDate, String safeOrder,
-                                                    java.util.List<BackupManifest.Asset> assets) {
+                                                    BackupManifest manifest) {
+        java.util.List<BackupManifest.Asset> assets = manifest.assets();
         Path zip = inside(directory.resolveSibling(directory.getFileName() + ".zip.tmp"));
         String storageKey = "orders/" + safeDate + "/" + safeOrder + ".zip";
         try {
@@ -137,7 +138,8 @@ public class MetadataSimulationArtifactWriter {
             }
             long expectedBytes = assets.stream().mapToLong(BackupManifest.Asset::size).sum();
             return new SimulationArtifactResult(directory, assets.size(), expectedBytes, storageKey,
-                    packageSha256, packageSize, Map.copyOf(hashes), Map.copyOf(packageEntryNames));
+                    packageSha256, packageSize, Map.copyOf(hashes), Map.copyOf(packageEntryNames),
+                    manifest.backupCompleteness(), manifest.relationGapCount());
         } catch (Exception error) {
             throw new IllegalStateException("生成订单模拟压缩包失败: " + directory, error);
         } finally {
@@ -228,24 +230,6 @@ public class MetadataSimulationArtifactWriter {
         catch (IOException error) {
             throw new IllegalStateException("检测到中断的模拟制品替换，但旧制品恢复失败: " + previous, error);
         }
-    }
-
-    /** 预签名地址是临时访问凭据；本地模拟清单只保留“存在过地址”的标识。 */
-    private static BackupManifest redactedManifest(BackupManifest manifest) {
-        java.util.List<BackupManifest.Asset> assets = manifest.assets().stream().map(asset ->
-                new BackupManifest.Asset(asset.assetId(), asset.fileName(), asset.type(), asset.size(),
-                        redactSource(asset.sourceKey()), asset.sha256(), asset.platform(), asset.bucket(),
-                        asset.objectKey(), asset.versionIdentity(), asset.sourceFileId(), asset.relations())).toList();
-        return new BackupManifest(manifest.orderId(), manifest.orderCreatedAt(), assets,
-                manifest.manifestRevision(), manifest.manifestSha256(), manifest.relationSetHash(),
-                manifest.orderRaw(), manifest.orderDisplay());
-    }
-
-    private static String redactSource(String sourceKey) {
-        if (sourceKey == null) return null;
-        String lower = sourceKey.toLowerCase(Locale.ROOT);
-        return lower.startsWith("http://") || lower.startsWith("https://")
-                ? "[PRESIGNED_URL_REDACTED]" : sourceKey;
     }
 
     private static void move(Path source, Path target) throws IOException {

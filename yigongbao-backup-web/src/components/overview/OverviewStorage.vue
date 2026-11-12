@@ -1,9 +1,58 @@
 <script setup>
-import { formatBytes, formatCount, formatPercent, formatTime } from '../../overviewModel.js';
-defineProps({ storage: Object });
+import { computed } from 'vue';
+import { formatBytes, formatCount, formatPercent, formatTime, remainingCapacity } from '../../overviewModel.js';
+
+const props = defineProps({ storage: Object });
 defineEmits(['navigate']);
+
+const remaining = computed(() => remainingCapacity(props.storage?.onlineCapacity?.totalBytes, props.storage?.onlineCapacity?.usedBytes));
 </script>
-<template><el-card shadow="never" class="overview-panel overview-storage"><template #header><div class="overview-panel__title"><div><span>存储态势</span><small>当前可用容量与离线介质分开统计</small></div><el-button link type="primary" @click="$emit('navigate',{actionRoute:'storage-volumes'})">管理存储卷</el-button></div></template>
-  <div class="storage-primary"><div><span>在线存储总容量</span><strong>{{ formatPercent(storage?.onlineCapacity?.usedPercent) }}</strong><small>{{ formatBytes(storage?.onlineCapacity?.usedBytes) }} / {{ formatBytes(storage?.onlineCapacity?.totalBytes) }}</small></div><el-progress v-if="storage?.onlineCapacity?.usedPercent != null" type="dashboard" :percentage="Number(storage.onlineCapacity.usedPercent)" :width="108" :stroke-width="9" /><span v-else class="capacity-unknown">容量未知</span></div>
-  <div class="storage-layers"><button type="button" @click="$emit('navigate',{actionRoute:'storage-volumes',actionQuery:{volumeId:storage?.activeVolume?.id}})"><span>活动热备卷</span><strong>{{ storage?.activeVolume?.name || '未配置' }}</strong><small>{{ storage?.activeVolume?.capacityLabel || '容量不可用' }} · {{ formatTime(storage?.activeVolume?.capacityObservedAt) }}</small></button><div><span>就绪备用卷</span><strong>{{ formatCount(storage?.standby?.readyCount) }}</strong><small>{{ storage?.standby?.preferred?.name || '暂无首选备用卷' }}</small></div><button type="button" @click="$emit('navigate',{actionRoute:'cold-storage'})"><span>冷备介质</span><strong>{{ formatCount(storage?.coldMedia?.successfulArchiveCount) }}</strong><small>在线 {{ formatCount(storage?.coldMedia?.onlineCount) }} · 预期离线 {{ formatCount(storage?.coldMedia?.expectedOfflineCount) }} · 待修复 {{ formatCount(storage?.coldMedia?.repairRequiredCount) }}</small></button></div>
-</el-card></template>
+
+<template>
+  <el-card shadow="never">
+    <template #header>
+      <el-row justify="space-between" align="middle">
+        <el-text tag="strong">存储态势</el-text>
+        <el-button link type="primary" @click="$emit('navigate', { actionRoute: 'storage-volumes' })">管理存储卷</el-button>
+      </el-row>
+    </template>
+
+    <el-space direction="vertical" fill :size="16">
+      <el-row :gutter="16" align="middle">
+        <el-col :span="12">
+          <el-statistic title="在线存储使用率" :value="storage?.onlineCapacity?.usedPercent ?? 0" :formatter="() => formatPercent(storage?.onlineCapacity?.usedPercent)" />
+        </el-col>
+        <el-col :span="12">
+          <el-statistic title="剩余容量" :value="remaining ?? 0" :formatter="() => remaining == null ? '—' : formatBytes(remaining)" />
+        </el-col>
+      </el-row>
+
+      <el-progress
+        v-if="storage?.onlineCapacity?.usedPercent != null"
+        :percentage="Number(storage.onlineCapacity.usedPercent)"
+        :stroke-width="12"
+      />
+
+      <el-descriptions :column="2" border size="small">
+        <el-descriptions-item label="已用容量">{{ formatBytes(storage?.onlineCapacity?.usedBytes) }}</el-descriptions-item>
+        <el-descriptions-item label="总容量">{{ formatBytes(storage?.onlineCapacity?.totalBytes) }}</el-descriptions-item>
+        <el-descriptions-item label="活动热备卷">
+          <el-space wrap>
+            <el-text>{{ storage?.activeVolume?.name || '未配置' }}</el-text>
+            <el-button link type="primary" @click="$emit('navigate', { actionRoute: 'storage-volumes', actionQuery: { volumeId: storage?.activeVolume?.id } })">查看</el-button>
+          </el-space>
+        </el-descriptions-item>
+        <el-descriptions-item label="容量快照">{{ storage?.activeVolume?.capacityLabel || '容量不可用' }} · {{ formatTime(storage?.activeVolume?.capacityObservedAt) }}</el-descriptions-item>
+        <el-descriptions-item label="就绪备用卷">{{ formatCount(storage?.standby?.readyCount) }}</el-descriptions-item>
+        <el-descriptions-item label="首选备用卷">{{ storage?.standby?.preferred?.name || '暂无' }}</el-descriptions-item>
+        <el-descriptions-item label="冷备介质">
+          <el-space wrap>
+            <el-text>{{ formatCount(storage?.coldMedia?.successfulArchiveCount) }}</el-text>
+            <el-button link type="primary" @click="$emit('navigate', { actionRoute: 'cold-storage' })">查看</el-button>
+          </el-space>
+        </el-descriptions-item>
+        <el-descriptions-item label="冷备状态">在线 {{ formatCount(storage?.coldMedia?.onlineCount) }} · 预期离线 {{ formatCount(storage?.coldMedia?.expectedOfflineCount) }} · 待修复 {{ formatCount(storage?.coldMedia?.repairRequiredCount) }}</el-descriptions-item>
+      </el-descriptions>
+    </el-space>
+  </el-card>
+</template>

@@ -22,7 +22,75 @@ class ActiveVolumeSelectionServiceTest {
 
         assertThat(result.available()).isFalse();
         assertThat(result.failureCode()).isEqualTo("STORAGE_VOLUME_UNAVAILABLE");
-        assertThat(result.failureMessage()).contains("活动热备存储卷不可用");
+        assertThat(result.failureMessage()).isEqualTo("未配置活动热备存储卷");
+    }
+
+    @Test void immediatelyRecoversMissingRootBeforeSelectingTheActiveVolume() {
+        StorageVolumeMapper mapper = mock(StorageVolumeMapper.class);
+        StorageVolumeHealthService health = mock(StorageVolumeHealthService.class);
+        StorageVolumeLifecycleService lifecycle = mock(StorageVolumeLifecycleService.class);
+        RuntimeConfigService configs = mock(RuntimeConfigService.class);
+        StorageVolumeEntity active = volume(1L, 0);
+        active.setWriteStatus("ACTIVE");
+        active.setMountStatus("UNAVAILABLE");
+        when(mapper.findActiveLedgerForUpdate()).thenReturn(active);
+        when(lifecycle.recoverMissingManagedRoot(active, 0L)).thenAnswer(invocation -> {
+            active.setMountStatus("ONLINE");
+            return new StorageVolumeLifecycleService.RootRecoveryResult(true, "受控存储目录已自动重建");
+        });
+        when(health.probe(active)).thenReturn(new StorageVolumeHealthService.HealthSnapshot(
+                true, true, 100L, 80L, null, null, 0L));
+        when(configs.getInt("storage.volume-switch.threshold-percent", 90, 1)).thenReturn(90);
+
+        ActiveVolumeSelectionService.SelectionResult result = service(mapper, health, lifecycle, configs,
+                mock(StorageVolumeAlertService.class)).selectActiveForNewBackupResult(20L);
+
+        assertThat(result.available()).isTrue();
+        assertThat(result.volume().getId()).isEqualTo(1L);
+    }
+
+    @Test void directActiveVolumeLookupUsesTheSameMissingRootFallback() {
+        StorageVolumeMapper mapper = mock(StorageVolumeMapper.class);
+        StorageVolumeHealthService health = mock(StorageVolumeHealthService.class);
+        StorageVolumeLifecycleService lifecycle = mock(StorageVolumeLifecycleService.class);
+        RuntimeConfigService configs = mock(RuntimeConfigService.class);
+        StorageVolumeEntity active = volume(1L, 0);
+        active.setWriteStatus("ACTIVE");
+        active.setMountStatus("UNAVAILABLE");
+        when(mapper.findActiveLedgerForUpdate()).thenReturn(active);
+        when(lifecycle.recoverMissingManagedRoot(active, 0L)).thenAnswer(invocation -> {
+            active.setMountStatus("ONLINE");
+            return new StorageVolumeLifecycleService.RootRecoveryResult(true, null);
+        });
+        when(health.probe(active)).thenReturn(new StorageVolumeHealthService.HealthSnapshot(
+                true, true, 100L, 80L, null, null, 0L));
+        when(configs.getInt("storage.volume-switch.threshold-percent", 90, 1)).thenReturn(90);
+
+        StorageVolumeEntity selected = service(mapper, health, lifecycle, configs,
+                mock(StorageVolumeAlertService.class)).requireActiveHotVolume();
+
+        assertThat(selected.getId()).isEqualTo(1L);
+    }
+
+    @Test void reportsTheConcreteRecoveryBlockerInsteadOfACombinedGenericMessage() {
+        StorageVolumeMapper mapper = mock(StorageVolumeMapper.class);
+        StorageVolumeLifecycleService lifecycle = mock(StorageVolumeLifecycleService.class);
+        RuntimeConfigService configs = mock(RuntimeConfigService.class);
+        StorageVolumeEntity active = volume(1L, 0);
+        active.setWriteStatus("ACTIVE");
+        active.setMountStatus("UNAVAILABLE");
+        when(mapper.findActiveLedgerForUpdate()).thenReturn(active);
+        when(lifecycle.recoverMissingManagedRoot(active, 0L)).thenReturn(
+                new StorageVolumeLifecycleService.RootRecoveryResult(false, "受控存储目录不存在，且卷内存在文件副本记录，禁止自动重建"));
+        when(configs.getBoolean("storage.volume-switch.enabled", false)).thenReturn(false);
+
+        ActiveVolumeSelectionService.SelectionResult result = service(mapper,
+                mock(StorageVolumeHealthService.class), lifecycle, configs,
+                mock(StorageVolumeAlertService.class)).selectActiveForNewBackupResult(20L);
+
+        assertThat(result.available()).isFalse();
+        assertThat(result.failureMessage()).contains("受控存储目录不存在", "文件副本记录");
+        assertThat(result.failureMessage()).doesNotContain("或剩余空间不足");
     }
 
     @Test void persistsAlertWhenNoStandbyCanAcceptNewBackup() {
@@ -92,7 +160,7 @@ class ActiveVolumeSelectionServiceTest {
         RuntimeConfigService configs = mock(RuntimeConfigService.class);
         StorageVolumeEntity active = volume(1L, 0); active.setWriteStatus("ACTIVE");
         StorageVolumeEntity standby = volume(2L, 1);
-        when(mapper.findActiveForUpdate()).thenReturn(active);
+        when(mapper.findActiveLedgerForUpdate()).thenReturn(active);
         when(mapper.selectList(any())).thenReturn(List.of(standby));
         when(health.probe(active)).thenReturn(new StorageVolumeHealthService.HealthSnapshot(true, true, 100L, 1L, null, null, 0L));
         when(health.probe(standby)).thenReturn(new StorageVolumeHealthService.HealthSnapshot(true, true, 100L, 80L, null, null, 0L));
@@ -113,7 +181,7 @@ class ActiveVolumeSelectionServiceTest {
         RuntimeConfigService configs = mock(RuntimeConfigService.class);
         StorageVolumeEntity active = volume(1L, 0); active.setWriteStatus("ACTIVE");
         StorageVolumeEntity standby = volume(2L, 1);
-        when(mapper.findActiveForUpdate()).thenReturn(active);
+        when(mapper.findActiveLedgerForUpdate()).thenReturn(active);
         when(mapper.selectList(any())).thenReturn(List.of(standby));
         when(health.probe(active)).thenReturn(new StorageVolumeHealthService.HealthSnapshot(true, true, 100L, 9L, null, null, 0L));
         when(health.probe(standby)).thenReturn(new StorageVolumeHealthService.HealthSnapshot(true, true, 100L, 80L, null, null, 0L));

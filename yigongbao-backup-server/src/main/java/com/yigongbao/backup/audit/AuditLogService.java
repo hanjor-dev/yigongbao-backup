@@ -10,18 +10,21 @@ import java.security.MessageDigest;
 import java.time.Clock;
 import java.time.LocalDateTime;
 import java.util.HexFormat;
+import jakarta.servlet.http.HttpServletRequest;
+import org.springframework.transaction.annotation.Propagation;
 
 /** 持久化哈希链审计服务；敏感原文不进入审计载荷，只保存摘要。 */
 @Service
 @RequiredArgsConstructor
 public class AuditLogService {
     public static final String DEFAULT_CHAIN = "LOCAL-BACKUP";
+    public static final String AUDIT_RECORDED = AuditLogService.class.getName() + ".AUDIT_RECORDED";
 
     private final AuditLogMapper logMapper;
     private final AuditChainHeadMapper headMapper;
     private final Clock clock = Clock.systemUTC();
 
-    @Transactional
+    @Transactional(propagation = Propagation.REQUIRES_NEW)
     public AuditLogEntity append(Event event) {
         if (event == null || blank(event.action()) || blank(event.objectType()) || blank(event.objectId())
                 || blank(event.resultCode())) {
@@ -61,6 +64,23 @@ public class AuditLogService {
         return log;
     }
 
+    public AuditLogEntity appendActor(HttpServletRequest request, Long actorUserId, String actorRoleCode,
+                                      String action, String objectType, String objectId, Long jobId,
+                                      String resultCode, String failureReason) {
+        AuditLogEntity result = append(actorEvent(request, actorUserId, actorRoleCode, action, objectType, objectId,
+                jobId, resultCode, failureReason));
+        if (request != null) request.setAttribute(AUDIT_RECORDED, Boolean.TRUE);
+        return result;
+    }
+
+    public static Event actorEvent(HttpServletRequest request, Long actorUserId, String actorRoleCode,
+                                   String action, String objectType, String objectId, Long jobId,
+                                   String resultCode, String failureReason) {
+        String address = request == null ? null : limit(request.getRemoteAddr(), 128);
+        return new Event(DEFAULT_CHAIN, actorUserId, limit(actorRoleCode, 32), address,
+                action, objectType, objectId, jobId, null, resultCode, limit(failureReason, 1024), null);
+    }
+
     public record Event(String chainId, Long actorUserId, String actorRoleCode, String clientAddress,
                         String action, String objectType, String objectId, Long jobId, String inputDigest,
                         String resultCode, String failureReason, LocalDateTime occurredAt) {
@@ -70,6 +90,7 @@ public class AuditLogService {
     }
 
     private static boolean blank(String value) { return value == null || value.isBlank(); }
+    private static String limit(String value, int max) { return value == null ? null : value.substring(0, Math.min(value.length(), max)); }
     private static String value(Object value) { return value == null ? "" : String.valueOf(value); }
     private static String sha256(String value) {
         try { return HexFormat.of().formatHex(MessageDigest.getInstance("SHA-256").digest(value.getBytes(StandardCharsets.UTF_8))); }

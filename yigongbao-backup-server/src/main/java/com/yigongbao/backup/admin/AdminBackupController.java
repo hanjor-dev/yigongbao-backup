@@ -52,13 +52,13 @@ public class AdminBackupController {
     }
 
     /**
-     * 管理员立即执行一次自动备份扫描：复用定时采集规则，仅跳过每日计划时间限制。
+     * 管理员立即执行一次手工备份扫描：复用定时采集规则，仅跳过每日计划时间限制。
      * 扫描同步完成后才返回，便于页面随即刷新查看本次创建的任务或“无待备份订单”结果。
      */
     @PostMapping("/schedule/run-now")
     public ApiResponse<Void> runScheduleNow() {
         StpUtil.checkRole("ADMIN");
-        scheduledBackups.runNowByAdministrator();
+        scheduledBackups.runNowByAdministrator(StpUtil.getLoginIdAsLong());
         return ApiResponse.ok(null, requestId());
     }
 
@@ -95,9 +95,10 @@ public class AdminBackupController {
                 .distinct().sorted().toList();
         if (failedOrderIds.isEmpty()) throw new IllegalStateException("该任务没有可重试的失败订单");
         long actor = StpUtil.getLoginIdAsLong();
-        String payload = mapper.writeValueAsString(retryPayload(mapper, jobs.configJson(id), failedOrderIds));
-        String key = JobIdempotency.key("ORDER_BACKUP_RETRY", actor, id + ":" + failedOrderIds);
-        return ApiResponse.ok(jobCreation.createForOrders("ORDER_BACKUP", key, actor, payload, failedOrderIds.size()), requestId());
+        String payload = mapper.writeValueAsString(retryPayload(mapper, jobs.configJson(id), failedOrderIds,
+                jobCreation.autoDegradeOnRelationBroken()));
+        String key = JobIdempotency.key("MANUAL_BACKUP_RETRY", actor, id + ":" + failedOrderIds);
+        return ApiResponse.ok(jobCreation.createForOrders("MANUAL_BACKUP", key, actor, payload, failedOrderIds.size()), requestId());
     }
 
     /** 对单个关系损坏订单创建独立降级任务；不会修改原任务或混入普通失败重试。 */
@@ -115,10 +116,12 @@ public class AdminBackupController {
 
     /** 重建失败订单任务参数，并保留原任务的模式和时间窗口，避免模拟重试意外变成真实下载。 */
     static ManualBackupJobHandler.Payload retryPayload(ObjectMapper mapper, String originalJson,
-                                                       List<Long> failedOrderIds) throws Exception {
+                                                       List<Long> failedOrderIds,
+                                                       boolean autoDegradeOnRelationBroken) throws Exception {
         ManualBackupJobHandler.Payload original = mapper.readValue(originalJson, ManualBackupJobHandler.Payload.class);
         return new ManualBackupJobHandler.Payload(failedOrderIds, failedOrderIds.size(), original.backupDate(),
-                original.daysBefore(), original.orderCreatedBefore(), original.executionMode(), original.simulationRoot());
+                original.daysBefore(), original.orderCreatedBefore(), original.executionMode(), original.simulationRoot(),
+                autoDegradeOnRelationBroken);
     }
 
     private static String requestId() {

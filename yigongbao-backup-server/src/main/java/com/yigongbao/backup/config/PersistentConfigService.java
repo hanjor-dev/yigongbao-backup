@@ -1,8 +1,10 @@
 package com.yigongbao.backup.config;
 
 import com.baomidou.mybatisplus.core.toolkit.Wrappers;
-import lombok.RequiredArgsConstructor;
+import org.springframework.beans.factory.ObjectProvider;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Service;
+import org.springframework.transaction.annotation.Transactional;
 
 import java.time.LocalDateTime;
 import java.util.Comparator;
@@ -14,10 +16,19 @@ import java.util.LinkedHashMap;
 
 /** 基于 bk_config 的配置服务；更新采用版本行追加和配置版本CAS。 */
 @Service
-@RequiredArgsConstructor
 public class PersistentConfigService {
     private static final String GLOBAL_SCOPE = "GLOBAL";
     private final BkConfigMapper mapper;
+    private final ObjectProvider<ConfigurationChangeGuard> guardProvider;
+
+    public PersistentConfigService(BkConfigMapper mapper) { this(mapper, null); }
+
+    @Autowired
+    public PersistentConfigService(BkConfigMapper mapper,
+                                   ObjectProvider<ConfigurationChangeGuard> guardProvider) {
+        this.mapper = mapper;
+        this.guardProvider = guardProvider;
+    }
 
     public ConfigService.Entry get(String key) {
         if (key == null || key.isBlank()) throw new IllegalArgumentException("配置键为空");
@@ -50,9 +61,14 @@ public class PersistentConfigService {
                 .toList();
     }
 
-    public synchronized ConfigService.Entry put(String key, String value, int expectedVersion, long actor) {
+    @Transactional
+    public ConfigService.Entry put(String key, String value, int expectedVersion, long actor) {
         if (key == null || key.isBlank() || key.length() > 128) throw new IllegalArgumentException("配置键非法");
         ConfigValueValidator.validate(key, value);
+        String mutationLock = mapper.lockGlobalMutation();
+        ConfigurationChangeGuard guard = guardProvider == null ? null : guardProvider.getIfAvailable();
+        if (guardProvider != null && mutationLock == null) throw new IllegalStateException("配置全局写锁未初始化");
+        if (guard != null) guard.validate(key, value);
         BkConfigEntity old = latest(key);
         int current = old == null ? 0 : old.getConfigVersion();
         if (current != expectedVersion) throw new IllegalStateException("配置版本冲突");

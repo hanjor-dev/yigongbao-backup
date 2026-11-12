@@ -43,4 +43,6 @@ public class JobFileEntity extends BaseEntity {
     private String sha256;
     private String failureCode;
     private String failureMessage;
+    /** 最终成功但仍保留早期失败证据时，明确表示该文件步骤由重试恢复。 */
+    @TableField(exist = false) private Boolean retryRecovered;
 }

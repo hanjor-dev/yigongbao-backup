@@ -10,6 +10,9 @@ public final class AdminOverviewAlertService {
     private final BusinessClock clock;
     public AdminOverviewAlertService(BusinessClock clock){this.clock=clock;}
     public Evaluation evaluate(AlertContext c){
+        return evaluate(c,Set.of());
+    }
+    public Evaluation evaluate(AlertContext c,Set<String> dismissedAlertKeys){
         if(c==null||!c.factsAvailable())return new Evaluation(new AdminOverviewView.Health("UNKNOWN",0,0,0),List.of());
         Map<String,AdminOverviewView.Alert> alerts=new LinkedHashMap<>();
         OverviewStoragePolicy.Result s=c.storage();
@@ -26,8 +29,15 @@ public final class AdminOverviewAlertService {
         if(c.backupSchedule()!=null){String st=c.backupSchedule().state();if("FAILED".equals(st))add(alerts,"WARNING","AUTOMATION","BACKUP_SCHEDULE_FAILED","自动备份最近执行失败","请进入订单备份页查看","AUTOMATION","backup","backup");else if("CHECKPOINT_MISSING".equals(st))add(alerts,"WARNING","AUTOMATION","BACKUP_SCHEDULE_CHECKPOINT_MISSING","自动备份尚无检查点","请确认计划任务已启用","AUTOMATION","backup","backup");else if("MISSED".equals(st))add(alerts,"WARNING","AUTOMATION","BACKUP_SCHEDULE_MISSED","自动备份已错过计划槽位","系统不会自动补跑，请按需立即扫描","AUTOMATION","backup","backup");}
         if(c.account()!=null&&c.account().enabled()){if("FAILED".equals(c.account().state()))add(alerts,"WARNING","AUTOMATION","ACCOUNT_SYNC_FAILED","账号同步最近失败","请检查账号同步状态","AUTOMATION","account","accounts");else if("STALE".equals(c.account().state()))add(alerts,"WARNING","AUTOMATION","ACCOUNT_SYNC_STALE","账号同步数据陈旧","最近成功时间已超过阈值","AUTOMATION","account","accounts");else if("MISSING".equals(c.account().state()))add(alerts,"WARNING","AUTOMATION","ACCOUNT_SYNC_CHECKPOINT_MISSING","账号同步尚无检查点","请确认同步功能配置","AUTOMATION","account","accounts");}
         if(c.archiveIssues()!=null)for(CurrentArchiveIssue issue:c.archiveIssues())add(alerts,"CRITICAL","ARCHIVE",issue.code(),issue.title(),issue.message(),issue.targetType(),issue.targetId(),issue.actionRoute());
-        long blocking=c.quality()==null?0:c.quality().stream().filter(q->"BLOCKING".equals(q.severity())).count();
-        long qualityWarnings=c.quality()==null?0:c.quality().stream().filter(q->"WARNING".equals(q.severity())).count();
+        Set<String> dismissedCodes=new HashSet<>();
+        if(dismissedAlertKeys!=null&&!dismissedAlertKeys.isEmpty()){
+            alerts.keySet().removeAll(dismissedAlertKeys);
+            dismissedAlertKeys.stream().filter(Objects::nonNull).map(key->{int separator=key.indexOf(':');return separator<0?key:key.substring(0,separator);}).forEach(dismissedCodes::add);
+        }
+        List<AdminOverviewView.DataQualityMessage> visibleQuality=c.quality()==null?List.of():c.quality().stream()
+                .filter(q->q!=null&&!dismissedCodes.contains(q.code())).toList();
+        long blocking=visibleQuality.stream().filter(q->"BLOCKING".equals(q.severity())).count();
+        long qualityWarnings=visibleQuality.stream().filter(q->"WARNING".equals(q.severity())).count();
         long critical=alerts.values().stream().filter(a->"CRITICAL".equals(a.severity())).count(),warning=alerts.size()-critical;
         String level=critical>0?"CRITICAL":blocking>0?"UNKNOWN":warning>0||qualityWarnings>0?"WARNING":s!=null&&s.managedVolumeCount()==0?"SETUP_REQUIRED":"NORMAL";
         return new Evaluation(new AdminOverviewView.Health(level,alerts.size(),critical,warning),alerts.values().stream().sorted(Comparator.comparing((AdminOverviewView.Alert a)->!"CRITICAL".equals(a.severity())).thenComparing(AdminOverviewView.Alert::code)).toList());

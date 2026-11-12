@@ -3,6 +3,7 @@ package com.yigongbao.backup.order;
 import cn.dev33.satoken.stp.StpUtil;
 import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
 import com.baomidou.mybatisplus.extension.plugins.pagination.Page;
+import com.yigongbao.backup.audit.AuditLogService;
 import com.yigongbao.backup.common.ApiResponse;
 import com.yigongbao.backup.storage.api.VolumeArtifactStore;
 import com.yigongbao.backup.storage.api.ArtifactStore;
@@ -21,6 +22,7 @@ import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
 import org.springframework.beans.factory.annotation.Autowired;
+import jakarta.servlet.http.HttpServletRequest;
 
 import java.io.FileNotFoundException;
 import java.io.IOException;
@@ -49,18 +51,25 @@ public class OrderController {
     private final OrderStorageLocationService locations;
     private final StorageVolumeReadLeaseService readLeases;
     private final OrderOverviewFilterMapper overviewFilters;
+    private final AuditLogService audit;
 
     /** 显式声明唯一注入构造器，避免多构造器导致 Spring 回退查找无参构造器。 */
     public OrderController(OrderSnapshotMapper snapshots, AssetMapper assets,
                            OrderPackageMapper packages, VolumeArtifactStore store, ArtifactReplicaResolver replicas,
                            OrderStorageLocationService locations, StorageVolumeReadLeaseService readLeases) {
-        this(snapshots,assets,packages,store,replicas,locations,readLeases,null);
+        this(snapshots,assets,packages,store,replicas,locations,readLeases,null,null);
+    }
+    public OrderController(OrderSnapshotMapper snapshots, AssetMapper assets,
+                           OrderPackageMapper packages, VolumeArtifactStore store, ArtifactReplicaResolver replicas,
+                           OrderStorageLocationService locations, StorageVolumeReadLeaseService readLeases,
+                           OrderOverviewFilterMapper overviewFilters) {
+        this(snapshots,assets,packages,store,replicas,locations,readLeases,overviewFilters,null);
     }
     @Autowired
     public OrderController(OrderSnapshotMapper snapshots, AssetMapper assets,
                            OrderPackageMapper packages, VolumeArtifactStore store, ArtifactReplicaResolver replicas,
                            OrderStorageLocationService locations, StorageVolumeReadLeaseService readLeases,
-                           OrderOverviewFilterMapper overviewFilters) {
+                           OrderOverviewFilterMapper overviewFilters, AuditLogService audit) {
         this.snapshots = snapshots;
         this.assets = assets;
         this.packages = packages;
@@ -69,6 +78,7 @@ public class OrderController {
         this.locations = locations;
         this.readLeases = readLeases;
         this.overviewFilters=overviewFilters;
+        this.audit=audit;
     }
 
     private static String rid() {
@@ -147,9 +157,15 @@ public class OrderController {
         }
         if(backupMode!=null&&!List.of("REAL","METADATA_SIMULATION").contains(backupMode))throw new IllegalArgumentException("备份模式非法");
         if(storageIssue!=null&&!"UNREADABLE".equals(storageIssue))throw new IllegalArgumentException("存储问题类型非法");
-        boolean overviewFilter=backupMode!=null||storageAccessible!=null||storageIssue!=null;
-        if(overviewFilter){if(overviewFilters==null)throw new IllegalStateException("订单概览筛选器未配置");long safeSize=Math.min(size,100);List<Long> ids=overviewFilters.selectIds(backupMode,storageAccessible,storageIssue,(current-1)*safeSize,safeSize);long total=overviewFilters.count(backupMode,storageAccessible,storageIssue);Map<Long,OrderSnapshotEntity> byId=new HashMap<>();if(!ids.isEmpty())snapshots.selectBatchIds(ids).forEach(v->byId.put(v.getId(),v));List<OrderSnapshotEntity> records=ids.stream().map(byId::get).filter(java.util.Objects::nonNull).toList();Page<OrderSnapshotEntity> page=new Page<>(current,safeSize,total);page.setRecords(records);enrichAssetScale(records);enrichStorageLocations(records);return ApiResponse.ok(page,rid());}
         LambdaQueryWrapper<OrderSnapshotEntity> query = new LambdaQueryWrapper<>();
+        query.eq(backupMode != null, OrderSnapshotEntity::getBackupMode, backupMode);
+        if (storageAccessible != null) {
+            String readable = OrderOverviewFilterSqlProvider.readableCopyExistsForSnapshot();
+            query.apply(storageAccessible ? readable : "NOT " + readable);
+        }
+        if (storageIssue != null) {
+            query.apply(OrderOverviewFilterSqlProvider.unreadableSnapshotPredicate());
+        }
         if (keyword != null && !keyword.isBlank()) {
             String normalizedKeyword = keyword.trim();
             query.and(value -> value.like(OrderSnapshotEntity::getOrderCode, normalizedKeyword)
@@ -252,7 +268,7 @@ public class OrderController {
 
     /** 下载订单级压缩包，文件不存在时返回 404。 */
     @GetMapping("/{id}/package/download")
-    public ResponseEntity<?> download(@PathVariable("id") long id) throws IOException {
+    public ResponseEntity<?> download(@PathVariable("id") long id, HttpServletRequest request) throws IOException {
         StpUtil.checkLogin();
         OrderSnapshotEntity snapshot = snapshots.selectById(id);
         if (snapshot == null) {
@@ -298,15 +314,25 @@ public class OrderController {
             StorageVolumeReadLeaseService.LeasedArtifact heldLease = lease;
             lease = null;
             InputStreamResource body = new InputStreamResource(heldLease==null?input:readLeases.wrap(input,heldLease));
-            return ResponseEntity.ok()
+            ResponseEntity<?> response = ResponseEntity.ok()
                     .contentType(MediaType.APPLICATION_OCTET_STREAM)
                     .contentLength(size)
                     .header(HttpHeaders.CONTENT_DISPOSITION,
                             ContentDisposition.attachment().filename(downloadFileName(code), StandardCharsets.UTF_8).build().toString())
                     .body(body);
+            if (audit != null) audit.appendActor(request, StpUtil.getLoginIdAsLong(), "USER",
+                    "ORDER_PACKAGE_DOWNLOAD", "ORDER_PACKAGE", String.valueOf(orderPackage.getId()),
+                    null, "OPENED", null);
+            return response;
         } catch (StorageVolumeUnavailableException exception) {
-            return ResponseEntity.status(409).body(ApiResponse.ok(java.util.Map.of("code", "STORAGE_VOLUME_OFFLINE", "message", exception.getMessage()), rid()));
+            if (audit != null) audit.appendActor(request, StpUtil.getLoginIdAsLong(), "USER",
+                    "ORDER_PACKAGE_DOWNLOAD", "ORDER_PACKAGE", String.valueOf(orderPackage.getId()),
+                    null, "FAILED", exception.getMessage());
+            return ResponseEntity.status(409).body(ApiResponse.error("STORAGE_VOLUME_OFFLINE", exception.getMessage(), rid()));
         } catch (NoSuchFileException | FileNotFoundException exception) {
+            if (audit != null) audit.appendActor(request, StpUtil.getLoginIdAsLong(), "USER",
+                    "ORDER_PACKAGE_DOWNLOAD", "ORDER_PACKAGE", String.valueOf(orderPackage.getId()),
+                    null, "FAILED", "文件不存在");
             return ResponseEntity.notFound().build();
         } finally {
             if (lease != null) lease.close();

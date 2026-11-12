@@ -2,6 +2,7 @@ package com.yigongbao.backup.storage.volume;
 
 import com.baomidou.mybatisplus.core.toolkit.Wrappers;
 import lombok.RequiredArgsConstructor;
+import lombok.extern.slf4j.Slf4j;
 import com.yigongbao.backup.config.RuntimeConfigService;
 import com.yigongbao.backup.storage.archive.VolumeArchiveEntity;
 import com.yigongbao.backup.storage.archive.VolumeArchiveMapper;
@@ -13,6 +14,7 @@ import java.util.Comparator;
 /** 为新建写入任务选择唯一活动热备卷。既有任务必须使用其已固化的卷 ID。 */
 @Service
 @RequiredArgsConstructor
+@Slf4j
 public class ActiveVolumeSelectionService {
     private final StorageVolumeMapper volumeMapper;
     private final StorageVolumeHealthService healthService;
@@ -23,15 +25,17 @@ public class ActiveVolumeSelectionService {
     private final StorageVolumeAccessPolicy accessPolicy;
 
     /** 返回当前可写热备卷；没有合格卷时拒绝创建不可执行任务。 */
+    @Transactional(rollbackFor = Exception.class)
     public StorageVolumeEntity requireActiveHotVolume() {
-        StorageVolumeEntity volume = volumeMapper.selectOne(Wrappers.<StorageVolumeEntity>lambdaQuery()
-                .eq(StorageVolumeEntity::getTier, StorageVolumeStatus.Tier.HOT.name())
-                .eq(StorageVolumeEntity::getMountStatus, StorageVolumeStatus.Mount.ONLINE.name())
-                .eq(StorageVolumeEntity::getWriteStatus, StorageVolumeStatus.Write.ACTIVE.name())
-                .eq(StorageVolumeEntity::getIsDeleted, 0).last("LIMIT 1"));
-        if (volume == null || !hasCapacity(volume, 1L)) {
-            throw new StorageVolumeOperationException("没有可用的活动热备存储卷，无法创建写入任务");
+        StorageVolumeEntity volume = volumeMapper.findActiveLedgerForUpdate();
+        if (volume == null) throw new StorageVolumeOperationException("未配置活动热备存储卷，无法创建写入任务");
+        StorageVolumeLifecycleService.RootRecoveryResult recovery =
+                lifecycleService.recoverMissingManagedRoot(volume, 0L);
+        if (recovery != null && recovery.blocked()) {
+            throw new StorageVolumeOperationException(recovery.reason());
         }
+        Eligibility eligibility = eligibility(volume, 1L);
+        if (!eligibility.allowed()) throw new StorageVolumeOperationException(eligibility.reason());
         return volume;
     }
 
@@ -42,16 +46,37 @@ public class ActiveVolumeSelectionService {
     @Transactional(rollbackFor = Exception.class)
     public SelectionResult selectActiveForNewBackupResult(long requiredBytes) {
         if (requiredBytes < 0) throw new IllegalArgumentException("预计写入容量不能为负数");
-        StorageVolumeEntity active = volumeMapper.findActiveForUpdate();
-        if (active != null && hasCapacity(active, Math.max(requiredBytes, 1L))) {
-            return SelectionResult.available(active);
+        long expectedBytes = Math.max(requiredBytes, 1L);
+        StorageVolumeEntity active = volumeMapper.findActiveLedgerForUpdate();
+        String activeFailure = null;
+        if (active != null) {
+            StorageVolumeLifecycleService.RootRecoveryResult recovery =
+                    lifecycleService.recoverMissingManagedRoot(active, 0L);
+            if (recovery != null && recovery.blocked()) {
+                activeFailure = recovery.reason();
+            } else {
+                Eligibility eligibility = eligibility(active, expectedBytes);
+                if (eligibility.allowed()) {
+                    if (recovery != null && recovery.recovered()) {
+                        log.info("备份选卷前自动恢复受控目录成功｜存储卷ID={}｜卷代码={}｜受控目录={}",
+                                active.getId(), active.getVolumeCode(), active.getRootPath());
+                    }
+                    return SelectionResult.available(active);
+                }
+                activeFailure = eligibility.reason();
+            }
+            log.warn("活动热备卷不可用于新备份｜存储卷ID={}｜卷代码={}｜挂载状态={}｜写入状态={}｜操作状态={}｜受控目录={}｜预计写入={}字节｜总容量={}字节｜可用容量={}字节｜原因={}",
+                    active.getId(), active.getVolumeCode(), active.getMountStatus(), active.getWriteStatus(),
+                    active.getOperationStatus(), active.getRootPath(), expectedBytes, active.getTotalBytes(),
+                    active.getUsableBytes(), activeFailure);
         }
         if (!configs.getBoolean("storage.volume-switch.enabled", false)) {
-            return SelectionResult.unavailable("STORAGE_VOLUME_UNAVAILABLE", "活动热备存储卷不可用或剩余空间不足");
+            String reason = active == null ? "未配置活动热备存储卷" : activeFailure;
+            return SelectionResult.unavailable("STORAGE_VOLUME_UNAVAILABLE", reason);
         }
         StorageVolumeEntity standby;
         try {
-            standby = selectStandbyForNewBackup(Math.max(requiredBytes, 1L));
+            standby = selectStandbyForNewBackup(expectedBytes);
         } catch (StorageVolumeOperationException unavailable) {
             alerts.noWritableVolume(unavailable.getMessage());
             return SelectionResult.unavailable("STORAGE_VOLUME_UNAVAILABLE", unavailable.getMessage());
@@ -88,19 +113,36 @@ public class ActiveVolumeSelectionService {
     }
 
     private boolean hasCapacity(StorageVolumeEntity volume, long requiredBytes) {
+        return eligibility(volume, requiredBytes).allowed();
+    }
+
+    private Eligibility eligibility(StorageVolumeEntity volume, long requiredBytes) {
         StorageVolumeHealthService.HealthSnapshot health = healthService.probe(volume);
         int threshold = configs.getInt("storage.volume-switch.threshold-percent", 90, 1);
         if (threshold < 1 || threshold > 100) threshold = 90;
-        if (!health.accessible() || !health.writable() || health.usableBytes() < requiredBytes) return false;
+        if (!health.accessible()) {
+            return Eligibility.denied(health.errorMessage() == null ? "活动热备存储卷不可访问" : health.errorMessage());
+        }
+        if (!health.writable()) return Eligibility.denied("活动热备存储卷不可写");
+        if (health.usableBytes() < requiredBytes) {
+            return Eligibility.denied("活动热备存储卷剩余空间不足：需要 " + requiredBytes
+                    + " 字节，可用 " + health.usableBytes() + " 字节");
+        }
         volume.setTotalBytes(health.totalBytes());
         volume.setUsableBytes(health.usableBytes());
-        boolean stateAllowed = StorageVolumeStatus.Write.STANDBY.name().equals(volume.getWriteStatus())
-                ? accessPolicy.standbyReady(volume, true, threshold)
-                : accessPolicy.writable(volume, guard(volume)).allowed()
-                && StorageVolumeCapacitySnapshotPolicy.usedPercent(health.totalBytes(), health.usableBytes()) != null
-                && StorageVolumeCapacitySnapshotPolicy.usedPercent(health.totalBytes(), health.usableBytes())
-                .compareTo(java.math.BigDecimal.valueOf(threshold)) < 0;
-        return stateAllowed;
+        if (StorageVolumeStatus.Write.STANDBY.name().equals(volume.getWriteStatus())) {
+            return accessPolicy.standbyReady(volume, true, threshold)
+                    ? Eligibility.permit() : Eligibility.denied("备用热备存储卷状态或容量不满足接替条件");
+        }
+        StorageVolumeAccessPolicy.AccessDecision access = accessPolicy.writable(volume, guard(volume));
+        if (!access.allowed()) return Eligibility.denied(access.message());
+        java.math.BigDecimal used = StorageVolumeCapacitySnapshotPolicy.usedPercent(
+                health.totalBytes(), health.usableBytes());
+        if (used == null) return Eligibility.denied("活动热备存储卷容量快照无效");
+        if (used.compareTo(java.math.BigDecimal.valueOf(threshold)) >= 0) {
+            return Eligibility.denied("活动热备存储卷使用率已达到切换阈值 " + threshold + "%");
+        }
+        return Eligibility.permit();
     }
 
     private StorageVolumeAccessPolicy.ArchiveGuardContext guard(StorageVolumeEntity volume) {
@@ -125,5 +167,10 @@ public class ActiveVolumeSelectionService {
         public boolean available() {
             return volume != null;
         }
+    }
+
+    private record Eligibility(boolean allowed, String reason) {
+        static Eligibility permit() { return new Eligibility(true, null); }
+        static Eligibility denied(String reason) { return new Eligibility(false, reason); }
     }
 }

@@ -3,6 +3,7 @@ package com.yigongbao.backup.audit;
 import org.junit.jupiter.api.Test;
 
 import java.time.LocalDateTime;
+import org.springframework.mock.web.MockHttpServletRequest;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.ArgumentMatchers.any;
@@ -30,5 +31,20 @@ class AuditLogServiceTest {
         assertThat(head.getLastEntryHash()).isEqualTo(result.getEntryHash());
         verify(logs).insert(result);
         verify(heads).updateById(head);
+    }
+
+    @Test
+    void actorEventCapturesRoleAndDirectPeerAddressWithoutTrustingForwardedHeaders() {
+        MockHttpServletRequest request = new MockHttpServletRequest();
+        request.setRemoteAddr("10.20.30.40");
+        request.addHeader("X-Forwarded-For", "198.51.100.9");
+
+        AuditLogService.Event event = AuditLogService.actorEvent(request, 7L, "ADMIN",
+                "JOB_CANCEL", "JOB", "99", 99L, "OK", null);
+
+        assertThat(event.actorUserId()).isEqualTo(7L);
+        assertThat(event.actorRoleCode()).isEqualTo("ADMIN");
+        assertThat(event.clientAddress()).isEqualTo("10.20.30.40");
+        assertThat(event.jobId()).isEqualTo(99L);
     }
 }

@@ -117,19 +117,20 @@ public class ManagedVolumeArtifactCatalog {
     }
 
     private VolumeArchiveItemEntity toItem(long archiveId, long volumeId, String key, ArtifactCopyEntity copy) {
+        String artifactType = normalizeArtifactType(copy.getArtifactType());
         VolumeArchiveItemEntity item = new VolumeArchiveItemEntity();
         item.setArchiveId(archiveId); item.setStorageVolumeId(volumeId); item.setStorageKey(key);
-        item.setArtifactType(copy.getArtifactType()); item.setArtifactId(copy.getArtifactId());
+        item.setArtifactType(artifactType); item.setArtifactId(copy.getArtifactId());
         item.setExpectedSize(copy.getSize()); item.setExpectedSha256(copy.getSha256());
         item.setVerificationStatus("PENDING");
         Long snapshotId;
-        if ("ORDER_PACKAGE".equals(copy.getArtifactType())) {
+        if ("ORDER_PACKAGE".equals(artifactType)) {
             OrderPackageEntity value = packageMapper.selectById(copy.getArtifactId());
             if (value == null) throw new IllegalStateException("订单包台账不存在：" + copy.getArtifactId());
             snapshotId = value.getSnapshotId();
             item.setExpectedSize(value.getPackageSize()); item.setExpectedSha256(value.getPackageSha256());
             item.setExpectedManifestSha256(value.getManifestSha256());
-        } else if ("SUPPLEMENT_FILE".equals(copy.getArtifactType())) {
+        } else if ("SUPPLEMENT_FILE".equals(artifactType)) {
             BkSupplementFileEntity value = supplementMapper.selectById(copy.getArtifactId());
             if (value == null) throw new IllegalStateException("补传文件台账不存在：" + copy.getArtifactId());
             snapshotId = value.getSnapshotId(); item.setExpectedSize(value.getSize()); item.setExpectedSha256(value.getSha256());
@@ -141,6 +142,10 @@ public class ManagedVolumeArtifactCatalog {
         if (item.getExpectedSize() == null || item.getExpectedSha256() == null || item.getExpectedSha256().isBlank())
             throw new IllegalStateException("受管文件缺少大小或 SHA-256：" + key);
         return item;
+    }
+
+    static String normalizeArtifactType(String artifactType) {
+        return "SUPPLEMENT".equals(artifactType) ? "SUPPLEMENT_FILE" : artifactType;
     }
 
     static String normalizeStorageKey(String value) {

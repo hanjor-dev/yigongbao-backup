@@ -19,6 +19,94 @@ import static org.mockito.Mockito.*;
 
 class PersistentJobServiceTest {
     @Test
+    void orderDetailsBatchProjectSnapshotCompletenessAndAutomaticDegradedFlag() {
+        JobMapper jobs = mock(JobMapper.class);
+        JobOrderMapper orders = mock(JobOrderMapper.class);
+        OrderSnapshotMapper snapshots = mock(OrderSnapshotMapper.class);
+        JobEntity job = new JobEntity();
+        job.setId(99L); job.setJobType("MANUAL_BACKUP");
+        when(jobs.selectById(99L)).thenReturn(job);
+        JobOrderEntity first = new JobOrderEntity();
+        first.setId(1L); first.setJobId(99L); first.setSourceOrderId(72L); first.setSnapshotId(1001L); first.setStatus("SUCCEEDED");
+        JobOrderEntity second = new JobOrderEntity();
+        second.setId(2L); second.setJobId(99L); second.setSourceOrderId(73L); second.setSnapshotId(1002L); second.setStatus("SUCCEEDED");
+        when(orders.selectList(any())).thenReturn(List.of(first, second));
+        com.yigongbao.backup.order.OrderSnapshotEntity incomplete = new com.yigongbao.backup.order.OrderSnapshotEntity();
+        incomplete.setId(1001L); incomplete.setBackupCompleteness("INCOMPLETE"); incomplete.setRelationGapCount(2);
+        com.yigongbao.backup.order.OrderSnapshotEntity complete = new com.yigongbao.backup.order.OrderSnapshotEntity();
+        complete.setId(1002L); complete.setBackupCompleteness("COMPLETE"); complete.setRelationGapCount(0);
+        when(snapshots.selectBatchIds(any())).thenReturn(List.of(incomplete, complete));
+        PersistentJobService service = new PersistentJobService(
+                jobs, orders, mock(JobFileMapper.class), null, null, snapshots);
+
+        List<JobOrderEntity> result = service.listOrders(99L);
+
+        assertThat(result.get(0).getBackupCompleteness()).isEqualTo("INCOMPLETE");
+        assertThat(result.get(0).getRelationGapCount()).isEqualTo(2);
+        assertThat(result.get(0).getAutoDegraded()).isTrue();
+        assertThat(result.get(1).getBackupCompleteness()).isEqualTo("COMPLETE");
+        assertThat(result.get(1).getRelationGapCount()).isZero();
+        assertThat(result.get(1).getAutoDegraded()).isFalse();
+        verify(snapshots, times(1)).selectBatchIds(any());
+    }
+
+    @Test
+    void successfulOrderWithRetainedFailureEvidenceIsProjectedAsRetryRecovered() {
+        JobMapper jobs = mock(JobMapper.class);
+        JobOrderMapper orders = mock(JobOrderMapper.class);
+        JobOrderEntity recovered = new JobOrderEntity();
+        recovered.setId(1L); recovered.setJobId(99L); recovered.setSourceOrderId(72L);
+        recovered.setStatus("SUCCEEDED"); recovered.setFailureCode("IllegalStateException");
+        recovered.setFailureMessage("订单备份失败，整单回滚: 72");
+        when(orders.selectList(any())).thenReturn(List.of(recovered));
+        PersistentJobService service = new PersistentJobService(jobs, orders, mock(JobFileMapper.class));
+
+        JobOrderEntity result = service.listOrders(99L).getFirst();
+
+        assertThat(new com.fasterxml.jackson.databind.ObjectMapper().valueToTree(result)
+                .path("retryRecovered").asBoolean()).isTrue();
+    }
+
+    @Test
+    void successfulFileWithRetainedFailureEvidenceIsProjectedAsRetryRecovered() {
+        JobFileMapper files = mock(JobFileMapper.class);
+        JobFileEntity recovered = new JobFileEntity();
+        recovered.setId(2L); recovered.setJobId(99L); recovered.setSourceOrderId(72L);
+        recovered.setStatus("SUCCEEDED"); recovered.setFailureCode("IOException");
+        recovered.setFailureMessage("closed");
+        when(files.selectList(any())).thenReturn(List.of(recovered));
+        PersistentJobService service = new PersistentJobService(mock(JobMapper.class), mock(JobOrderMapper.class), files);
+
+        JobFileEntity result = service.listFiles(99L).getFirst();
+
+        assertThat(new com.fasterxml.jackson.databind.ObjectMapper().valueToTree(result)
+                .path("retryRecovered").asBoolean()).isTrue();
+    }
+
+    @Test
+    void rolledBackFileInRecoveredOrderIsProjectedAsRetryRecovered() {
+        JobOrderMapper orders = mock(JobOrderMapper.class);
+        JobFileMapper files = mock(JobFileMapper.class);
+        JobOrderEntity recoveredOrder = new JobOrderEntity();
+        recoveredOrder.setId(1L); recoveredOrder.setJobId(99L); recoveredOrder.setSourceOrderId(72L);
+        recoveredOrder.setStatus("SUCCEEDED"); recoveredOrder.setFailureCode("IOException");
+        recoveredOrder.setFailureMessage("closed");
+        JobFileEntity rolledBack = new JobFileEntity();
+        rolledBack.setId(2L); rolledBack.setJobId(99L); rolledBack.setSourceOrderId(72L);
+        rolledBack.setStep("BACKUP_ROLLBACK"); rolledBack.setStatus("FAILED");
+        rolledBack.setFailureCode("IllegalStateException");
+        rolledBack.setFailureMessage("订单内其他文件失败，本文件随整单回滚");
+        when(files.selectList(any())).thenReturn(List.of(rolledBack));
+        when(orders.selectList(any())).thenReturn(List.of(recoveredOrder));
+        PersistentJobService service = new PersistentJobService(mock(JobMapper.class), orders, files);
+
+        JobFileEntity result = service.listFiles(99L).getFirst();
+
+        assertThat(new com.fasterxml.jackson.databind.ObjectMapper().valueToTree(result)
+                .path("retryRecovered").asBoolean()).isTrue();
+    }
+
+    @Test
     void backupJobOverviewFilterRunsBeforeDatabasePagination() {
         com.baomidou.mybatisplus.core.metadata.TableInfoHelper.initTableInfo(
                 new org.apache.ibatis.builder.MapperBuilderAssistant(

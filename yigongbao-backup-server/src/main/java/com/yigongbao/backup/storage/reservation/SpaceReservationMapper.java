@@ -13,6 +13,12 @@ public interface SpaceReservationMapper extends BaseMapper<SpaceReservationEntit
     @Select("SELECT COALESCE(SUM(reserved_bytes),0) FROM bk_space_reservation WHERE storage_pool_id=#{poolId} AND status='ACTIVE' AND lease_until>CURRENT_TIMESTAMP(3) AND is_deleted=0")
     Long sumActive(Long poolId);
 
+    /** 容量池行锁持有期间把过期租约转为终态，释放同任务活动记录唯一键。 */
+    @Update("UPDATE bk_space_reservation SET status='EXPIRED', update_time=CURRENT_TIMESTAMP(3) "
+            + "WHERE storage_pool_id=#{poolId} AND status='ACTIVE' "
+            + "AND lease_until<=CURRENT_TIMESTAMP(3) AND is_deleted=0")
+    int expireStaleActive(@Param("poolId") long poolId);
+
     @Select("SELECT COUNT(*) FROM bk_space_reservation WHERE storage_pool_id=#{poolId} AND status='ACTIVE' AND lease_until>#{now} AND is_deleted=0")
     long countActiveAt(@Param("poolId") long poolId, @Param("now") LocalDateTime now);
 

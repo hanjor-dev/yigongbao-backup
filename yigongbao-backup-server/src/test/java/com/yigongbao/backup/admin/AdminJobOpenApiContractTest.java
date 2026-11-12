@@ -40,7 +40,19 @@ class AdminJobOpenApiContractTest {
                 .containsOnly("#/components/schemas/OrderDateBoundary");
         Map<String,Object> schemas=map(map(spec.get("components")).get("schemas"));
         assertThat(map(schemas.get("AdminOverview")).get("additionalProperties")).isEqualTo(false);
-        assertThat(schemas).containsKeys("OverviewHealth","OverviewSummary","OverviewStorage","OverviewAutomationItem","OverviewActivity");
+        assertThat(schemas).containsKeys("OverviewHealth","OverviewSummary","OverviewOrderStatistics",
+                "OverviewStorage","OverviewAutomationItem","OverviewActivity");
+        assertThat(list(map(schemas.get("OverviewSummary")).get("required")))
+                .contains("orderStatistics");
+        assertThat(map(map(schemas.get("OverviewSummary")).get("properties")))
+                .containsKey("orderStatistics");
+        assertThat(map(map(schemas.get("OverviewReadableFiles")).get("properties")))
+                .containsKey("metadataRecordCount");
+        Map<String,Object> dismiss=map(map(map(spec.get("paths"))
+                .get("/api/v1/admin/overview/alerts/{alertKey}/dismiss")).get("post"));
+        assertThat(dismiss.get("operationId")).isEqualTo("dismissAdminOverviewAlert");
+        assertThat(list(dismiss.get("parameters")).stream().map(AdminJobOpenApiContractTest::map)
+                .map(parameter->parameter.get("name"))).containsExactly("alertKey");
     }
 
     @Test

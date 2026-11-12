@@ -4,19 +4,55 @@ import ch.qos.logback.classic.Logger;
 import ch.qos.logback.classic.spi.ILoggingEvent;
 import ch.qos.logback.core.read.ListAppender;
 import org.junit.jupiter.api.Test;
+import org.mockito.Answers;
 import org.slf4j.LoggerFactory;
 
 import java.time.Duration;
 import java.util.Map;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicBoolean;
 
+import static org.assertj.core.api.Assertions.assertThatCode;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.Mockito.*;
 import com.yigongbao.backup.remote.RemoteCallException;
 
 class JobDispatcherTest {
+    @Test
+    void writesSuccessEventAfterTerminalTransitionWithoutRequiringAnActiveLease() {
+        JobEntity claimed = job(21L, "SUPPLEMENT_UPLOAD", 3L, false);
+        AtomicBoolean active = new AtomicBoolean(true);
+        PersistentJobCoordinator coordinator = terminalAwareCoordinator(claimed, active);
+        JobExecutionLogService executionLogs = mock(JobExecutionLogService.class);
+        com.yigongbao.backup.config.RuntimeConfigService configs = runtimeConfigs();
+        JobDispatcher dispatcher = new JobDispatcher(coordinator,
+                new JobExecutorRegistry(Map.of("SUPPLEMENT_UPLOAD", (context, job) -> { })),
+                null, executionLogs, "worker-a", configs);
+
+        assertThatCode(dispatcher::dispatchOne).doesNotThrowAnyException();
+        verify(executionLogs).info(eq(21L), isNull(), eq("TASK_SUCCEEDED"), eq("任务完成"),
+                contains("任务执行成功"), anyMap());
+    }
+
+    @Test
+    void writesRetryEventAfterFailureTransitionWithoutRequiringAnActiveLease() {
+        JobEntity claimed = job(22L, "SUPPLEMENT_UPLOAD", 4L, false);
+        AtomicBoolean active = new AtomicBoolean(true);
+        PersistentJobCoordinator coordinator = terminalAwareCoordinator(claimed, active);
+        JobExecutionLogService executionLogs = mock(JobExecutionLogService.class);
+        com.yigongbao.backup.config.RuntimeConfigService configs = runtimeConfigs();
+        JobDispatcher dispatcher = new JobDispatcher(coordinator,
+                new JobExecutorRegistry(Map.of("SUPPLEMENT_UPLOAD",
+                        (context, job) -> { throw new IllegalStateException("upload failed"); })),
+                null, executionLogs, "worker-a", configs);
+
+        assertThatCode(dispatcher::dispatchOne).doesNotThrowAnyException();
+        verify(executionLogs).warn(eq(22L), isNull(), eq("TASK_RETRY_SCHEDULED"), eq("任务重试"),
+                contains("upload failed"), anyMap());
+    }
+
     @Test
     void logsClaimStartAndTerminalSuccessWithDuration() {
         PersistentJobCoordinator coordinator = mock(PersistentJobCoordinator.class);
@@ -178,5 +214,41 @@ class JobDispatcherTest {
     private static JobEntity job(long id, String type, long token, boolean cancelled) {
         JobEntity job = new JobEntity(); job.setId(id); job.setJobType(type); job.setFencingToken(token);
         job.setCancelRequested(cancelled); job.setRetryCount(0); return job;
+    }
+
+    private static com.yigongbao.backup.config.RuntimeConfigService runtimeConfigs() {
+        com.yigongbao.backup.config.RuntimeConfigService configs =
+                mock(com.yigongbao.backup.config.RuntimeConfigService.class);
+        when(configs.getLong("job.lease-seconds", 60L, 10L)).thenReturn(60L);
+        when(configs.getInt("job.max-retry-count", 3, 0)).thenReturn(3);
+        return configs;
+    }
+
+    private static PersistentJobCoordinator terminalAwareCoordinator(JobEntity claimed, AtomicBoolean active) {
+        return mock(PersistentJobCoordinator.class, invocation -> {
+            String method = invocation.getMethod().getName();
+            if ("claimNext".equals(method)) return claimed;
+            if ("withinActiveLease".equals(method)) {
+                if (!active.get()) throw new IllegalStateException("租约或 fencing token 无效或已过期");
+                invocation.<Runnable>getArgument(3).run();
+                return null;
+            }
+            if ("withinCompletedAttempt".equals(method)) {
+                if (active.get()) throw new IllegalStateException("任务尚未进入终态");
+                invocation.<Runnable>getArgument(2).run();
+                return null;
+            }
+            if ("succeed".equals(method) || "partial".equals(method)) {
+                if (!active.compareAndSet(true, false))
+                    throw new IllegalStateException("租约或 fencing token 无效或已过期");
+                return null;
+            }
+            if ("failOrRetry".equals(method)) {
+                if (!active.compareAndSet(true, false))
+                    throw new IllegalStateException("租约或 fencing token 无效或已过期");
+                return null;
+            }
+            return Answers.RETURNS_DEFAULTS.answer(invocation);
+        });
     }
 }

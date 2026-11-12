@@ -65,6 +65,51 @@ public class BackupStageService {
         return stages.selectOne(Wrappers.<BackupStageEntity>lambdaQuery()
                 .eq(BackupStageEntity::getJobId, jobId)
                 .eq(BackupStageEntity::getSourceOrderId, orderId)
+                .orderByDesc(BackupStageEntity::getId)
+                .last("limit 1"));
+    }
+
+    /** 按清单完整性恢复当前模式自己的暂存制品，避免严格与降级制品串用。 */
+    public BackupStageEntity findResumableByJobOrder(Long jobId, Long orderId, String backupCompleteness) {
+        return stages.selectOne(Wrappers.<BackupStageEntity>lambdaQuery()
+                .eq(BackupStageEntity::getJobId, jobId)
+                .eq(BackupStageEntity::getSourceOrderId, orderId)
+                .eq(BackupStageEntity::getBackupCompleteness, backupCompleteness)
+                .in(BackupStageEntity::getStageStatus, STAGED, RECEIPT_ACCEPTED)
+                .orderByDesc(BackupStageEntity::getId)
+                .last("limit 1"));
+    }
+
+    /** 查找本地已经发布的权威终态，用于远端并发凭证冲突后的安全对账。 */
+    public BackupStageEntity findAvailableByOrder(Long orderId, String backupCompleteness) {
+        return stages.selectOne(Wrappers.<BackupStageEntity>lambdaQuery()
+                .eq(BackupStageEntity::getSourceOrderId, orderId)
+                .eq(BackupStageEntity::getBackupCompleteness, backupCompleteness)
+                .eq(BackupStageEntity::getStageStatus, AVAILABLE)
+                .isNotNull(BackupStageEntity::getPublishedSnapshotId)
+                .orderByDesc(BackupStageEntity::getId)
+                .last("limit 1"));
+    }
+
+    /** 查找订单最新的任意完整性权威终态，用于跨模式并发对账。 */
+    public BackupStageEntity findAvailableByOrder(Long orderId) {
+        return stages.selectOne(Wrappers.<BackupStageEntity>lambdaQuery()
+                .eq(BackupStageEntity::getSourceOrderId, orderId)
+                .eq(BackupStageEntity::getStageStatus, AVAILABLE)
+                .isNotNull(BackupStageEntity::getPublishedSnapshotId)
+                .orderByDesc(BackupStageEntity::getId)
+                .last("limit 1"));
+    }
+
+    /** 进程在发布后、回写任务订单前退出时，直接恢复同任务同模式的终态。 */
+    public BackupStageEntity findAvailableByJobOrder(Long jobId, Long orderId, String backupCompleteness) {
+        return stages.selectOne(Wrappers.<BackupStageEntity>lambdaQuery()
+                .eq(BackupStageEntity::getJobId, jobId)
+                .eq(BackupStageEntity::getSourceOrderId, orderId)
+                .eq(BackupStageEntity::getBackupCompleteness, backupCompleteness)
+                .eq(BackupStageEntity::getStageStatus, AVAILABLE)
+                .isNotNull(BackupStageEntity::getPublishedSnapshotId)
+                .orderByDesc(BackupStageEntity::getId)
                 .last("limit 1"));
     }
 
@@ -83,10 +128,7 @@ public class BackupStageService {
     public OrderSnapshotEntity publish(Long stageId) {
         BackupStageEntity row = required(stageId);
         if (AVAILABLE.equals(row.getStageStatus())) {
-            OrderSnapshotEntity already = new OrderSnapshotEntity();
-            already.setId(row.getPublishedSnapshotId());
-            already.setSourceOrderId(row.getSourceOrderId());
-            return already;
+            return requirePublishedSnapshot(row);
         }
         requireStatus(row, RECEIPT_ACCEPTED);
         Material material = material(row);
@@ -101,6 +143,22 @@ public class BackupStageService {
         return snapshot;
     }
 
+    /** 验证 AVAILABLE 暂存记录确实对应同一订单、同一完整性模式的权威可用快照。 */
+    public OrderSnapshotEntity requirePublishedSnapshot(BackupStageEntity row) {
+        if (row == null || !AVAILABLE.equals(row.getStageStatus()) || row.getPublishedSnapshotId() == null) {
+            throw new IllegalStateException("已发布暂存记录缺少权威快照");
+        }
+        OrderSnapshotEntity snapshot = evidence.findSnapshot(row.getPublishedSnapshotId());
+        if (snapshot == null
+                || !Objects.equals(snapshot.getId(), row.getPublishedSnapshotId())
+                || !Objects.equals(snapshot.getSourceOrderId(), row.getSourceOrderId())
+                || !Objects.equals(snapshot.getBackupCompleteness(), row.getBackupCompleteness())
+                || !java.util.Set.of("AVAILABLE", "SUCCESS", "BACKED_UP").contains(snapshot.getSnapshotStatus())) {
+            throw new IllegalStateException("已发布暂存记录对应的权威快照不存在或状态不一致: " + row.getId());
+        }
+        return snapshot;
+    }
+
     @Transactional
     public void supersede(Long stageId) {
         BackupStageEntity row = required(stageId);
@@ -110,6 +168,10 @@ public class BackupStageService {
         }
         row.setStageStatus(SUPERSEDED);
         row.setSupersededAt(LocalDateTime.now());
+        row.setCleanupStatus("PENDING");
+        row.setCleanupRetryCount(0);
+        row.setCleanupNextAt(LocalDateTime.now());
+        row.setCleanupError(null);
         stages.updateById(row);
     }
 

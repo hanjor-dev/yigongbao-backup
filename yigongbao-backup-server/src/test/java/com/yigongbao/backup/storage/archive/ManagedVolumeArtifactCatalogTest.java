@@ -11,4 +11,12 @@ class ManagedVolumeArtifactCatalogTest {
         assertThatThrownBy(() -> ManagedVolumeArtifactCatalog.normalizeStorageKey("D:/secret"))
                 .isInstanceOf(IllegalStateException.class).hasMessageContaining("非法");
     }
+
+
+    @Test void normalizesHistoricalSupplementArtifactType() {
+        assertThat(ManagedVolumeArtifactCatalog.normalizeArtifactType("SUPPLEMENT"))
+                .isEqualTo("SUPPLEMENT_FILE");
+        assertThat(ManagedVolumeArtifactCatalog.normalizeArtifactType("SUPPLEMENT_FILE"))
+                .isEqualTo("SUPPLEMENT_FILE");
+    }
 }

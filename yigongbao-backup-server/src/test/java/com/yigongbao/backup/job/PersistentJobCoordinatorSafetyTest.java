@@ -8,8 +8,10 @@ import org.apache.ibatis.builder.MapperBuilderAssistant;
 
 import java.time.LocalDateTime;
 import java.util.List;
+import java.util.concurrent.atomic.AtomicBoolean;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatCode;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.Mockito.*;
@@ -53,6 +55,96 @@ class PersistentJobCoordinatorSafetyTest {
 
         assertThatThrownBy(() -> coordinator.heartbeat(5L, "worker", 6L, 60))
                 .isInstanceOf(JobCancelledException.class);
+    }
+    @Test
+    void genericRetryRejectsBackupJobsThatNeedANewFrozenPolicySnapshot() {
+        JobMapper mapper = mock(JobMapper.class);
+        JobEntity failed = new JobEntity();
+        failed.setId(90L); failed.setJobType("ORDER_BACKUP"); failed.setStatus("FAILED");
+        when(mapper.selectById(90L)).thenReturn(failed);
+
+        assertThatThrownBy(() -> new PersistentJobCoordinator(mapper).retry(90L, 7L))
+                .isInstanceOf(IllegalStateException.class)
+                .hasMessageContaining("重试失败订单");
+        verify(mapper, never()).insert(any(JobEntity.class));
+    }
+
+    @Test
+    void finishingCancellationIsIdempotentForTheSameCompletedAttempt() {
+        JobMapper mapper = mock(JobMapper.class);
+        JobEntity cancelled = running(8L, "worker", 11L);
+        cancelled.setStatus("CANCELLED");
+        cancelled.setLeaseOwner(null);
+        cancelled.setLeaseUntil(null);
+        when(mapper.selectById(8L)).thenReturn(cancelled);
+
+        assertThatCode(() -> new PersistentJobCoordinator(mapper)
+                .finishCancellationIfRunning(8L, "worker", 11L))
+                .doesNotThrowAnyException();
+        verify(mapper, never()).update(any(), any());
+    }
+
+    @Test
+    void expiredLeaseCannotCommitTaskResultOrTerminalState() {
+        JobMapper mapper = mock(JobMapper.class);
+        JobEntity expired = running(40L, "worker", 13L);
+        expired.setLeaseUntil(LocalDateTime.now().minusSeconds(1));
+        when(mapper.selectById(40L)).thenReturn(expired);
+        when(mapper.update(any(), any())).thenReturn(1);
+        PersistentJobCoordinator coordinator = new PersistentJobCoordinator(mapper);
+
+        assertThatThrownBy(() -> coordinator.storeResult(40L, "worker", 13L, "{}"))
+                .isInstanceOf(IllegalStateException.class)
+                .hasMessageContaining("租约");
+        assertThatThrownBy(() -> coordinator.succeed(40L, "worker", 13L))
+                .isInstanceOf(IllegalStateException.class)
+                .hasMessageContaining("租约");
+    }
+
+    @Test
+    void evidenceWriteRunsOnlyWhileJobRowIsLockedByAnActiveLease() {
+        JobMapper mapper = mock(JobMapper.class);
+        JobEntity running = running(41L, "worker", 14L);
+        when(mapper.findByIdForUpdate(41L)).thenReturn(running);
+        Runnable write = mock(Runnable.class);
+
+        new PersistentJobCoordinator(mapper).withinActiveLease(41L, "worker", 14L, write);
+
+        verify(mapper).findByIdForUpdate(41L);
+        verify(write).run();
+    }
+
+    @Test
+    void completedAttemptCanAppendTerminalEvidenceWithTheSameFencingToken() {
+        JobMapper mapper = mock(JobMapper.class);
+        JobEntity completed = running(43L, "worker", 16L);
+        completed.setStatus("SUCCEEDED");
+        completed.setLeaseOwner(null);
+        completed.setLeaseUntil(null);
+        when(mapper.findByIdForUpdate(43L)).thenReturn(completed);
+        AtomicBoolean written = new AtomicBoolean(false);
+        PersistentJobCoordinator coordinator = new PersistentJobCoordinator(mapper);
+
+        assertThatCode(() -> PersistentJobCoordinator.class
+                .getMethod("withinCompletedAttempt", long.class, long.class, Runnable.class)
+                .invoke(coordinator, 43L, 16L, (Runnable) () -> written.set(true)))
+                .doesNotThrowAnyException();
+        assertThat(written).isTrue();
+    }
+
+    @Test
+    void expiredLockedLeaseCannotWriteEvidence() {
+        JobMapper mapper = mock(JobMapper.class);
+        JobEntity expired = running(42L, "worker", 15L);
+        expired.setLeaseUntil(LocalDateTime.now().minusSeconds(1));
+        when(mapper.findByIdForUpdate(42L)).thenReturn(expired);
+        Runnable write = mock(Runnable.class);
+
+        assertThatThrownBy(() -> new PersistentJobCoordinator(mapper)
+                .withinActiveLease(42L, "worker", 15L, write))
+                .isInstanceOf(IllegalStateException.class)
+                .hasMessageContaining("租约");
+        verify(write, never()).run();
     }
 
     @Test
@@ -193,6 +285,6 @@ class PersistentJobCoordinatorSafetyTest {
 
     private static JobEntity running(long id, String owner, long token) {
         JobEntity job = new JobEntity(); job.setId(id); job.setStatus("RUNNING"); job.setLeaseOwner(owner);
-        job.setFencingToken(token); job.setCancelRequested(false); return job;
+        job.setFencingToken(token); job.setCancelRequested(false); job.setLeaseUntil(LocalDateTime.now().plusMinutes(5)); return job;
     }
 }

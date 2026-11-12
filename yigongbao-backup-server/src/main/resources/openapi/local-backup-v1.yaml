@@ -30,6 +30,50 @@ paths:
                   message: {type: string}
                   requestId: {type: string}
                   data: {$ref: '#/components/schemas/AdminOverview'}
+  /api/v1/admin/overview/alerts/{alertKey}/dismiss:
+    post:
+      operationId: dismissAdminOverviewAlert
+      description: 关闭当前活动告警；异常恢复后关闭记录自动清理，未来复发会重新告警
+      parameters:
+        - in: path
+          name: alertKey
+          required: true
+          schema: {type: string, minLength: 1, maxLength: 191}
+      responses:
+        '200':
+          description: 告警已关闭
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [code, message, requestId]
+                properties:
+                  code: {type: string}
+                  message: {type: string}
+                  requestId: {type: string}
+                  data: {type: 'null'}
+        '400': {$ref: '#/components/responses/BadRequest'}
+  /api/v1/admin/overview/trend:
+    get:
+      operationId: getAdminOverviewTrend
+      parameters:
+        - in: query
+          name: period
+          required: false
+          schema: {type: string, enum: [WEEK, MONTH, YEAR], default: WEEK}
+      responses:
+        '200':
+          description: 按自然周、自然月或自然年聚合的备份趋势；周和月按日返回，年按月返回
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [code, message, requestId, data]
+                properties:
+                  code: {type: string}
+                  message: {type: string}
+                  requestId: {type: string}
+                  data: {type: array, items: {$ref: '#/components/schemas/OverviewTrendPoint'}}
   /api/v1/auth/login:
     post:
       security: []
@@ -533,6 +577,41 @@ paths:
         '200': {$ref: '#/components/responses/CommandSucceeded'}
         '409': {$ref: '#/components/responses/Conflict'}
         '503': {$ref: '#/components/responses/DependencyUnavailable'}
+  /api/v1/download-tickets/order-packages/{snapshotId}:
+    post:
+      operationId: issueOrderPackageDownloadTicket
+      parameters:
+        - {name: snapshotId, in: path, required: true, schema: {$ref: '#/components/schemas/DecimalId'}}
+      responses:
+        '200': {$ref: '#/components/responses/ItemSucceeded'}
+        '401': {$ref: '#/components/responses/Unauthorized'}
+        '404': {$ref: '#/components/responses/NotFound'}
+  /api/v1/download-tickets/supplements/{snapshotId}/{fileId}:
+    post:
+      operationId: issueSupplementDownloadTicket
+      parameters:
+        - {name: snapshotId, in: path, required: true, schema: {$ref: '#/components/schemas/DecimalId'}}
+        - {name: fileId, in: path, required: true, schema: {type: string}}
+      responses:
+        '200': {$ref: '#/components/responses/ItemSucceeded'}
+        '401': {$ref: '#/components/responses/Unauthorized'}
+        '404': {$ref: '#/components/responses/NotFound'}
+  /api/v1/downloads/{token}:
+    get:
+      security: []
+      operationId: consumeDownloadTicket
+      parameters:
+        - {name: token, in: path, required: true, schema: {type: string, minLength: 43, maxLength: 43}}
+      responses:
+        '200':
+          description: 文件流
+          headers:
+            Content-Disposition: {schema: {type: string}}
+            Cache-Control: {schema: {type: string}}
+          content:
+            application/octet-stream: {schema: {type: string, format: binary}}
+        '404': {$ref: '#/components/responses/NotFound'}
+        '409': {$ref: '#/components/responses/Conflict'}
 components:
   securitySchemes:
     BearerAuth: {type: http, scheme: bearer, bearerFormat: JWT}
@@ -701,10 +780,11 @@ components:
     OverviewSectionState: {type: string, enum: [AVAILABLE, UNAVAILABLE]}
     OverviewSummary:
       type: object
-      required: [readableOrders, readableFiles, todayBackup]
+      required: [readableOrders, orderStatistics, readableFiles, todayBackup]
       additionalProperties: false
       properties:
         readableOrders: {$ref: '#/components/schemas/OverviewReadableOrders'}
+        orderStatistics: {$ref: '#/components/schemas/OverviewOrderStatistics'}
         readableFiles: {$ref: '#/components/schemas/OverviewReadableFiles'}
         todayBackup: {$ref: '#/components/schemas/OverviewTodayBackup'}
     OverviewReadableOrders:
@@ -717,6 +797,14 @@ components:
         temporarilyOffline: {type: integer, format: int64}
         abnormalUnreadable: {type: integer, format: int64}
         degradedRedundancy: {type: integer, format: int64}
+    OverviewOrderStatistics:
+      type: object
+      required: [total, hot, cold]
+      additionalProperties: false
+      properties:
+        total: {type: integer, format: int64, minimum: 0}
+        hot: {type: integer, format: int64, minimum: 0}
+        cold: {type: integer, format: int64, minimum: 0}
     OverviewReadableFiles:
       type: object
       additionalProperties: false
@@ -726,6 +814,7 @@ components:
         unknownFileCountPackageCount: {type: integer, format: int64}
         unknownSizeCopyCount: {type: integer, format: int64}
         invalidCopyMetadataCount: {type: integer, format: int64}
+        metadataRecordCount: {type: integer, format: int64, minimum: 0}
     OverviewTodayBackup:
       type: object
       additionalProperties: false

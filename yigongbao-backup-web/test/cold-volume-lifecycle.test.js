@@ -1,20 +1,24 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { existsSync, readFileSync } from 'node:fs';
+import { navigationGroupsForRole } from '../src/stores/routeStore.js';
 
 const read = (path) => readFileSync(new URL(path, import.meta.url), 'utf8');
 
 test('cold storage has an independent navigation route and archive data source', () => {
-  const layout = read('../src/layouts/BackupLayout.vue');
   const app = read('../src/App.vue');
   const routes = read('../src/stores/routeStore.js');
   const consoleSource = read('../src/composables/useBackupConsole.js');
-  assert.match(layout, /key: 'cold-storage'.*label: '冷备管理'/s);
+  assert.deepEqual(
+    navigationGroupsForRole('ADMIN').flatMap((group) => group.items)
+      .find((item) => item.key === 'cold-storage')?.label,
+    '冷备管理'
+  );
   assert.match(app, /ColdStorageView/);
   assert.match(app, /'cold-storage': ColdStorageView/);
   assert.match(routes, /'cold-storage'/);
   assert.doesNotMatch(routes, /'cold'\s*,/);
-  assert.match(consoleSource, /api\('\/admin\/storage-volumes\/archives'\)/);
+  assert.match(consoleSource, /\/admin\/storage-volumes\/archives\?current=/);
   assert.match(consoleSource, /route\.navigate\('cold-storage'\)/);
   const startArchive = consoleSource.match(/async function startStorageArchive[\s\S]*?\n  }/s)?.[0] || '';
   assert.doesNotMatch(startArchive, /route\.navigate\('backup'\)|openJob\(/);
@@ -51,6 +55,15 @@ test('archive file verification uses server pagination and opens only after an e
   assert.match(detail, /label="订单编号"/);
   assert.match(detail, /row\.orderCode/);
   assert.doesNotMatch(detail, /label="订单 ID"/);
+});
+
+test('archive attempt list is server paged instead of loading all history', () => {
+  const page = read('../src/views/ColdStorageView.vue');
+  const consoleSource = read('../src/composables/useBackupConsole.js');
+  assert.match(consoleSource, /normalizePage\(archiveResult\.data\)/);
+  assert.match(consoleSource, /coldArchiveTotal\.value = archivePage\.total/);
+  assert.match(page, /:total="coldArchiveTotal"/);
+  assert.match(page, /@current-change="changeColdArchivePage"/);
 });
 
 test('cold media remount selects a scanned candidate instead of accepting a free-form path', () => {

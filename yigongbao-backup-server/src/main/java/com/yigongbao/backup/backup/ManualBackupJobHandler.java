@@ -13,6 +13,7 @@ import com.yigongbao.backup.common.BusinessLogFormatter;
 import com.yigongbao.backup.config.RuntimeConfigService;
 import com.yigongbao.backup.job.PartialJobFailureException;
 import com.yigongbao.backup.job.JobPreconditionException;
+import com.yigongbao.backup.job.JobFailureException;
 import com.yigongbao.backup.remote.RemoteCallException;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.ObjectProvider;
@@ -37,6 +38,7 @@ public class ManualBackupJobHandler implements JobHandler {
     private final RuntimeConfigService configs;
     private final BackupExecutionModeProvider executionModes;
     private final BackupTargetPreflightService targetPreflight;
+    private final AutomaticDegradedBackupPolicy automaticDegradePolicy = new AutomaticDegradedBackupPolicy();
 
     /** 生产注入构造器显式标注，避免兼容构造器存在时 Spring 误判为无参创建。 */
     @Autowired
@@ -104,7 +106,41 @@ public class ManualBackupJobHandler implements JobHandler {
         java.util.concurrent.atomic.AtomicLong expectedBytes = new java.util.concurrent.atomic.AtomicLong();
         java.util.concurrent.atomic.AtomicLong packageBytes = new java.util.concurrent.atomic.AtomicLong();
         java.util.Map<Long, Throwable> retryQueue = new java.util.LinkedHashMap<>();
+        java.util.Map<Long, Throwable> automaticDegradeQueue = new java.util.LinkedHashMap<>();
         java.util.Map<Long, Throwable> terminalFailures = new java.util.LinkedHashMap<>();
+        java.util.Map<Long, Integer> retriesUsed = new java.util.HashMap<>();
+        java.util.Map<Long, String> degradePhases = new java.util.HashMap<>();
+        java.util.Set<Long> automaticDegradeAttempted = new java.util.HashSet<>();
+        java.util.Set<Long> alreadySucceeded = new java.util.HashSet<>();
+        java.util.Set<Long> completeSucceeded = new java.util.HashSet<>();
+        java.util.Set<Long> incompleteSucceeded = new java.util.HashSet<>();
+        java.util.List<com.yigongbao.backup.job.JobOrderEntity> persistedOrders = context.orderStates();
+        if (persistedOrders != null) {
+            for (com.yigongbao.backup.job.JobOrderEntity persisted : persistedOrders) {
+                if (persisted.getSourceOrderId() == null) continue;
+                retriesUsed.put(persisted.getSourceOrderId(),
+                        persisted.getRetryCount() == null ? 0 : persisted.getRetryCount());
+                if (persisted.getDegradePhase() != null) {
+                    degradePhases.put(persisted.getSourceOrderId(), persisted.getDegradePhase());
+                }
+                if ("SUCCEEDED".equals(persisted.getStatus()) || "SIMULATED".equals(persisted.getStatus())) {
+                    alreadySucceeded.add(persisted.getSourceOrderId());
+                    if ("INCOMPLETE".equals(persisted.getBackupCompleteness())) {
+                        incompleteSucceeded.add(persisted.getSourceOrderId());
+                        if (!"DEGRADED_BACKUP".equals(job.getJobType())) automaticDegradeAttempted.add(persisted.getSourceOrderId());
+                    } else {
+                        completeSucceeded.add(persisted.getSourceOrderId());
+                    }
+                } else if ("DEGRADE_PENDING".equals(persisted.getStatus()) || "DEGRADING".equals(persisted.getStatus())) {
+                    automaticDegradeQueue.put(persisted.getSourceOrderId(), persistedRelationFailure(persisted));
+                    automaticDegradeAttempted.add(persisted.getSourceOrderId());
+                } else if ("RETRY_PENDING".equals(persisted.getStatus()) || "RETRYING".equals(persisted.getStatus())) {
+                    retryQueue.put(persisted.getSourceOrderId(), persistedFailure(persisted));
+                } else if ("FAILED".equals(persisted.getStatus()) || "SIMULATION_FAILED".equals(persisted.getStatus())) {
+                    terminalFailures.put(persisted.getSourceOrderId(), persistedFailure(persisted));
+                }
+            }
+        }
         java.util.Map<Long, Integer> attempts = new java.util.HashMap<>();
         java.util.Set<Long> refreshedDegradedManifests = new java.util.HashSet<>();
         int maxRetries = configs.getInt("backup.retry.max-retries", 3, 0);
@@ -122,6 +158,11 @@ public class ManualBackupJobHandler implements JobHandler {
         int orderIndex = 0;
         for (Long orderId : payload.sourceOrderIds()) {
             orderIndex++;
+            if (alreadySucceeded.contains(orderId) || automaticDegradeQueue.containsKey(orderId)
+                    || retryQueue.containsKey(orderId) || terminalFailures.containsKey(orderId)) {
+                done++;
+                continue;
+            }
             long orderStartedAt = System.nanoTime();
             context.safePoint("BACKUP_ORDER_" + orderId, done);
             log.info("订单备份开始｜任务ID={}｜订单ID={}｜订单进度={}/{}｜已处理订单数={}",
@@ -135,8 +176,10 @@ public class ManualBackupJobHandler implements JobHandler {
                             "attempt", attempts.getOrDefault(orderId, 0) + 1));
             try {
                 SimulationArtifactResult simulated = executeAttempt(context, job, orderId, payload, executionMode,
+                        initialManifestMode(job), false,
                         manifestsClient, cos, attempts, refreshedDegradedManifests, maxRetries, done);
                 accumulate(simulated, expectedFiles, expectedBytes, packageBytes);
+                recordCompleteness(orderId, simulated, completeSucceeded, incompleteSucceeded);
                 context.taskInfo("BACKUP_ORDER_SUCCEEDED", "订单进度",
                         "订单备份完成｜订单ID=" + orderId + "｜尝试次数=" + attempts.get(orderId),
                         java.util.Map.of("sourceOrderId", orderId, "attempt", attempts.get(orderId),
@@ -147,7 +190,19 @@ public class ManualBackupJobHandler implements JobHandler {
                         job.getId(), orderId, attempts.get(orderId),
                         BusinessLogFormatter.duration(elapsedMillis(orderStartedAt)));
             } catch (Exception failure) {
-                if (retryable(failure) && maxRetries > 0) {
+                if (shouldQueueAutomaticDegraded(job, payload, failure)) {
+                    automaticDegradeQueue.put(orderId, failure);
+                    automaticDegradeAttempted.add(orderId);
+                    degradePhases.put(orderId, DegradePhase.DEGRADED_INITIAL.name());
+                    context.orderQueuedForAutomaticDegraded(orderId, failure);
+                    context.orderDegradePhase(orderId, DegradePhase.DEGRADED_INITIAL.name());
+                    context.orderWarn(orderId, "BACKUP_AUTO_DEGRADED_QUEUED", "自动降级",
+                            "严格备份发现订单文件关系不完整，已加入自动降级补偿队列",
+                            failureDetails(failure, attempts.get(orderId)));
+                    context.taskWarn("BACKUP_AUTO_DEGRADED_QUEUED", "订单进度",
+                            "订单已加入自动降级补偿队列｜订单ID=" + orderId,
+                            taskFailureDetails(orderId, failure, attempts.get(orderId), automaticDegradeQueue.size()));
+                } else if (retryable(failure) && maxRetries > 0) {
                     retryQueue.put(orderId, failure);
                     context.orderQueuedForRetry(orderId, failure);
                     context.orderWarn(orderId, "BACKUP_ORDER_RETRY_QUEUED", "失败重试",
@@ -183,6 +238,11 @@ public class ManualBackupJobHandler implements JobHandler {
                     progressDetails(done, payload.sourceOrderIds().size(), retryQueue.size(), terminalFailures.size()));
         }
 
+        retryQueue.entrySet().removeIf(entry -> {
+            if (retriesUsed.getOrDefault(entry.getKey(), 0) < retryPolicy.maxRetries()) return false;
+            terminalFailures.put(entry.getKey(), entry.getValue());
+            return true;
+        });
         if (!retryQueue.isEmpty() && retryPolicy.maxRetries() > 0) {
             context.failedOrderRetryPhaseStarted(retryQueue.size());
             context.taskWarn("BACKUP_RETRY_PHASE_STARTED", "失败重试",
@@ -206,11 +266,15 @@ public class ManualBackupJobHandler implements JobHandler {
                 for (Long orderId : currentRound.keySet()) {
                     retryIndex++;
                     context.safePoint("RETRY_BACKUP_ORDER_" + orderId, retryIndex);
+                    context.orderRetryConsumed(orderId);
+                    retriesUsed.merge(orderId, 1, Integer::sum);
                     try {
                         SimulationArtifactResult simulated = executeAttempt(context, job, orderId, payload, executionMode,
+                                ManifestMode.STRICT, false,
                                 manifestsClient, cos, attempts, refreshedDegradedManifests, maxRetries,
                                 payload.sourceOrderIds().size());
                         accumulate(simulated, expectedFiles, expectedBytes, packageBytes);
+                        recordCompleteness(orderId, simulated, completeSucceeded, incompleteSucceeded);
                         context.taskInfo("BACKUP_ORDER_RETRY_SUCCEEDED", "失败重试",
                                 "失败订单重试成功｜订单ID=" + orderId + "｜第" + retryRound + "轮｜累计尝试=" + attempts.get(orderId),
                                 java.util.Map.of("sourceOrderId", orderId, "retryRound", retryRound,
@@ -218,8 +282,16 @@ public class ManualBackupJobHandler implements JobHandler {
                         log.info("失败订单重试成功｜任务ID={}｜订单ID={}｜重试轮次={}/{}｜累计尝试次数={}",
                                 job.getId(), orderId, retryRound, retryPolicy.maxRetries(), attempts.get(orderId));
                     } catch (Exception failure) {
-                        boolean retryAgain = retryable(failure) && retryRound < retryPolicy.maxRetries();
-                        if (retryAgain) {
+                        boolean autoDegrade = shouldQueueAutomaticDegraded(job, payload, failure);
+                        boolean retryAgain = !autoDegrade && retryable(failure)
+                                && retriesUsed.getOrDefault(orderId, 0) < retryPolicy.maxRetries();
+                        if (autoDegrade) {
+                            automaticDegradeQueue.put(orderId, failure);
+                            automaticDegradeAttempted.add(orderId);
+                            degradePhases.put(orderId, DegradePhase.DEGRADED_INITIAL.name());
+                            context.orderQueuedForAutomaticDegraded(orderId, failure);
+                            context.orderDegradePhase(orderId, DegradePhase.DEGRADED_INITIAL.name());
+                        } else if (retryAgain) {
                             retryQueue.put(orderId, failure);
                             context.orderQueuedForRetry(orderId, failure);
                         } else {
@@ -234,6 +306,33 @@ public class ManualBackupJobHandler implements JobHandler {
                                 job.getId(), orderId, retryRound, retryPolicy.maxRetries(),
                                 failure.getClass().getSimpleName(), safe(failure));
                     }
+                }
+            }
+        }
+
+        if (!automaticDegradeQueue.isEmpty()) {
+            context.taskWarn("AUTO_DEGRADED_BACKUP_STARTED", "自动降级",
+                    "开始自动降级补偿｜订单数=" + automaticDegradeQueue.size(),
+                    java.util.Map.of("sourceOrderIds", new java.util.ArrayList<>(automaticDegradeQueue.keySet()),
+                            "enabled", payload.resolvedAutoDegradeOnRelationBroken()));
+            for (var entry : automaticDegradeQueue.entrySet()) {
+                Long orderId = entry.getKey();
+                context.safePoint("AUTO_DEGRADED_BACKUP_" + orderId, done);
+                context.orderDegrading(orderId);
+                try {
+                    SimulationArtifactResult simulated = executeAutomaticDegraded(context, job, orderId, payload,
+                            executionMode, manifestsClient, cos, attempts, refreshedDegradedManifests,
+                            retryPolicy, retriesUsed, degradePhases, done);
+                    accumulate(simulated, expectedFiles, expectedBytes, packageBytes);
+                    recordCompleteness(orderId, simulated, completeSucceeded, incompleteSucceeded);
+                    context.taskInfo("AUTO_DEGRADED_BACKUP_SUCCEEDED", "自动降级",
+                            "自动降级备份完成｜订单ID=" + orderId,
+                            java.util.Map.of("sourceOrderId", orderId, "attempt", attempts.getOrDefault(orderId, 1)));
+                } catch (Exception failure) {
+                    terminalFailures.put(orderId, failure);
+                    context.orderError(orderId, "AUTO_DEGRADED_BACKUP_FAILED", "自动降级",
+                            "自动降级备份失败｜异常原因=" + safe(failure),
+                            failureDetails(failure, attempts.getOrDefault(orderId, 1)));
                 }
             }
         }
@@ -257,9 +356,15 @@ public class ManualBackupJobHandler implements JobHandler {
         java.util.Map<String, Object> resultSummary = new java.util.LinkedHashMap<>();
         resultSummary.put("executionMode", executionMode.name());
         resultSummary.put("orderTotal", payload.sourceOrderIds().size());
-        resultSummary.put("orderSucceeded", payload.sourceOrderIds().size() - failures.size());
+        int succeeded = completeSucceeded.size() + incompleteSucceeded.size();
+        resultSummary.put("orderSucceeded", succeeded);
         resultSummary.put("orderFailed", failures.size());
-        resultSummary.put("manifestSucceeded", payload.sourceOrderIds().size() - failures.size());
+        resultSummary.put("completeSucceeded", completeSucceeded.size());
+        resultSummary.put("incompleteSucceeded", incompleteSucceeded.size());
+        resultSummary.put("autoDegradedAttempted", automaticDegradeAttempted.size());
+        resultSummary.put("autoDegradedSucceeded", automaticDegradeAttempted.stream()
+                .filter(incompleteSucceeded::contains).count());
+        resultSummary.put("manifestSucceeded", succeeded);
         resultSummary.put("manifestFailed", failures.size());
         resultSummary.put("expectedFileTotal", expectedFiles.get());
         resultSummary.put("expectedBytes", expectedBytes.get());
@@ -284,26 +389,31 @@ public class ManualBackupJobHandler implements JobHandler {
 
     private SimulationArtifactResult backupOnce(JobExecutionContext context, JobEntity job, Long orderId, String backupDate,
                             String simulationRoot, BackupExecutionMode executionMode,
-                            OnlineManifestClient manifestsClient, CosObjectClient cos) {
+                            ManifestMode manifestMode, OnlineManifestClient manifestsClient, CosObjectClient cos) {
         log.info("读取线上订单清单开始｜任务ID={}｜订单ID={}", job.getId(), orderId);
         if (executionMode == BackupExecutionMode.REAL && backupStages != null) {
-            BackupStageEntity resumable = backupStages.findByJobOrder(job.getId(), orderId);
+            String expectedCompleteness = manifestMode == ManifestMode.DEGRADED ? "INCOMPLETE" : "COMPLETE";
+            BackupStageEntity available = backupStages.findAvailableByJobOrder(job.getId(), orderId, expectedCompleteness);
+            if (available != null) {
+                PublishedStage published = reconcileConcurrentPublishedStage(context, job, orderId, available);
+                context.orderInfo(orderId, "BACKUP_AVAILABLE_STAGE_RECOVERED", "断点恢复",
+                        "已发布的订单备份已校验，直接补记任务成功",
+                        java.util.Map.of("stageId", available.getId(), "snapshotId", published.snapshot().getId()));
+                return artifactResult(published.manifest(), published.result());
+            }
+            BackupStageEntity resumable = backupStages.findResumableByJobOrder(job.getId(), orderId,
+                    expectedCompleteness);
             if (resumable != null) {
                 BackupStageService.Material material = backupStages.material(resumable);
-                com.yigongbao.backup.order.OrderSnapshotEntity snapshot = acceptAndPublishStage(
+                PublishedStage published = acceptAndPublishStage(
                         context, job, orderId, manifestsClient, resumable, material.manifest(), material.result());
                 context.orderInfo(orderId, "BACKUP_STAGE_RESUMED", "断点恢复",
                         "订单备份从暂存状态恢复完成", java.util.Map.of("stageId", resumable.getId(),
-                                "snapshotId", snapshot.getId(), "stageStatus", resumable.getStageStatus()));
-                BackupManifest resumedManifest = material.manifest();
-                OrderBackupPipeline.Result resumedResult = material.result();
-                return new SimulationArtifactResult(null, resumedManifest.assets().size(),
-                        resumedManifest.assets().stream().mapToLong(BackupManifest.Asset::size).sum(),
-                        resumedResult.storageKey(), resumedResult.packageSha256(), resumedResult.packageSize(),
-                        resumedResult.downloadedHashes(), resumedResult.packageEntryNames());
+                                "snapshotId", published.snapshot().getId(), "stageStatus", resumable.getStageStatus()));
+                return artifactResult(published.manifest(), published.result());
             }
         }
-        BackupManifest manifest = "DEGRADED_BACKUP".equals(job.getJobType())
+        BackupManifest manifest = manifestMode == ManifestMode.DEGRADED
                 ? manifestsClient.fetchDegraded(String.valueOf(orderId))
                 : manifestsClient.fetch(String.valueOf(orderId));
         long sourceBytes = manifest.assets().stream().mapToLong(BackupManifest.Asset::size).sum();
@@ -413,9 +523,10 @@ public class ManualBackupJobHandler implements JobHandler {
                     job.getId(), orderId, BusinessLogFormatter.bytes(result.packageSize()), result.storageKey(),
                     BusinessLogFormatter.shortHash(result.packageSha256()));
             if (backupStages == null) throw new IllegalStateException("备份暂存发布服务未配置");
-            String receiptKey = "backup:job:" + job.getId() + ":order:" + orderId
-                    + ":revision:" + manifest.manifestRevision();
-            BackupStageEntity stage = backupStages.stage(job.getId(), orderId, manifest, result,
+            BackupManifest durableManifest = manifest.withoutTransientSourceKeys();
+            String receiptKey = receiptIdempotencyKey(job.getId(), orderId,
+                    durableManifest.manifestRevision(), durableManifest.backupCompleteness());
+            BackupStageEntity stage = backupStages.stage(job.getId(), orderId, durableManifest, result,
                     isLegacyStore() ? null : targetStorageVolumeId, receiptKey);
             context.orderAtVolume(orderId, targetStorageVolumeId, result.storageKey());
             if (!isLegacyStore()) {
@@ -431,7 +542,10 @@ public class ManualBackupJobHandler implements JobHandler {
                     java.util.Map.of("storageKey", result.storageKey(), "packageBytes", result.packageSize(),
                             "packageSha256", result.packageSha256(), "stageId", stage.getId()));
             log.info("订单备份制品已暂存｜任务ID={}｜订单ID={}｜暂存ID={}", job.getId(), orderId, stage.getId());
-            acceptAndPublishStage(context, job, orderId, manifestsClient, stage, manifest, result);
+            PublishedStage published = acceptAndPublishStage(context, job, orderId, manifestsClient,
+                    stage, durableManifest, result);
+            manifest = published.manifest();
+            generatedPackage = published.result();
         } catch (RuntimeException failure) {
             businessFailure = failure;
             // 保留真正失败文件的底层原因，其他文件明确标记为随整单回滚。
@@ -449,11 +563,12 @@ public class ManualBackupJobHandler implements JobHandler {
         // 真实备份也必须回传文件和 ZIP 容量，否则任务级汇总会错误显示为 0。
         return new SimulationArtifactResult(null, manifest.assets().size(), sourceBytes,
                 generatedPackage.storageKey(), generatedPackage.packageSha256(), generatedPackage.packageSize(),
-                generatedPackage.downloadedHashes(), generatedPackage.packageEntryNames());
+                generatedPackage.downloadedHashes(), generatedPackage.packageEntryNames(),
+                manifest.backupCompleteness(), manifest.relationGapCount());
     }
 
     /** 回执接受与本地发布可重复执行；用于正常路径以及回执后进程崩溃的断点恢复。 */
-    private com.yigongbao.backup.order.OrderSnapshotEntity acceptAndPublishStage(
+    private PublishedStage acceptAndPublishStage(
             JobExecutionContext context, JobEntity job, Long orderId, OnlineManifestClient manifestsClient,
             BackupStageEntity stage, BackupManifest manifest, OrderBackupPipeline.Result result) {
         if (BackupStageService.SUPERSEDED.equals(stage.getStageStatus())) {
@@ -466,7 +581,15 @@ public class ManualBackupJobHandler implements JobHandler {
                 manifestsClient.submitReceipt(String.valueOf(orderId), manifest, result, stage.getIdempotencyKey(), 1,
                         stage.getReceiptCompletedAt());
             } catch (RemoteCallException remote) {
-                if ("STATE_CONFLICT".equals(remote.code())) backupStages.supersede(stage.getId());
+                if ("STATE_CONFLICT".equals(remote.code())) {
+                    backupStages.supersede(stage.getId());
+                    BackupStageEntity available = backupStages.findAvailableByOrder(orderId);
+                    if (available != null) {
+                        return reconcileConcurrentPublishedStage(context, job, orderId, available);
+                    }
+                } else if ("MANIFEST_CHANGED".equals(remote.code())) {
+                    backupStages.supersede(stage.getId());
+                }
                 throw remote;
             }
             backupStages.markReceiptAccepted(stage.getId());
@@ -487,8 +610,61 @@ public class ManualBackupJobHandler implements JobHandler {
                         "orderNo", businessValue(manifest, "orderNo", "orderCode", "publicOrderCode", "code")));
         log.info("订单热备快照已发布｜任务ID={}｜订单ID={}｜快照ID={}｜热备状态=AVAILABLE（可用）",
                 job.getId(), orderId, snapshot.getId());
-        return snapshot;
+        return new PublishedStage(snapshot, manifest, result);
     }
+
+    /**
+     * 线上提示终态冲突时，只有本地已经发布且物理制品仍可校验的权威快照，
+     * 才能作为另一个执行者已经成功完成的证据。不能仅凭 HTTP 409 把当前订单判成功。
+     */
+    private PublishedStage reconcileConcurrentPublishedStage(
+            JobExecutionContext context, JobEntity job, Long orderId, BackupStageEntity available) {
+        verifyStageArtifact(available);
+        BackupStageService.Material material = backupStages.material(available);
+        BackupManifest publishedManifest = material.manifest();
+        if (!java.util.Objects.equals(available.getBackupCompleteness(), publishedManifest.backupCompleteness())
+                || !java.util.Objects.equals(available.getManifestSha256(), publishedManifest.manifestSha256())
+                || !java.util.Objects.equals(available.getPackageSha256(), material.result().packageSha256())
+                || !java.util.Objects.equals(available.getStorageKey(), material.result().storageKey())) {
+            throw new IllegalStateException("已发布备份暂存记录的完整性模式不一致: " + available.getId());
+        }
+        com.yigongbao.backup.order.OrderSnapshotEntity snapshot = backupStages.requirePublishedSnapshot(available);
+        snapshot.setOrderCode(businessValue(publishedManifest, "orderNo", "orderCode", "publicOrderCode", "code"));
+        context.orderMetadata(orderId, snapshot.getId(), snapshot.getOrderCode(),
+                publishedManifest.orderCreatedAt(), businessValue(publishedManifest, "status", "statusCode"),
+                json(publishedManifest.order()));
+        context.orderSucceeded();
+        context.orderInfo(orderId, "BACKUP_CONCURRENT_SUCCESS_RECONCILED", "并发对账",
+                "检测到其他执行者已完成同模式备份，本地制品校验通过并按成功对账",
+                java.util.Map.of("snapshotId", snapshot.getId(), "stageId", available.getId(),
+                        "backupCompleteness", available.getBackupCompleteness()));
+        log.info("订单并发备份终态已安全对账｜任务ID={}｜订单ID={}｜快照ID={}｜完整性={}",
+                job.getId(), orderId, snapshot.getId(), available.getBackupCompleteness());
+        return new PublishedStage(snapshot, publishedManifest, material.result());
+    }
+
+    private static SimulationArtifactResult artifactResult(BackupManifest manifest, OrderBackupPipeline.Result result) {
+        return new SimulationArtifactResult(null, manifest.assets().size(),
+                manifest.assets().stream().mapToLong(BackupManifest.Asset::size).sum(),
+                result.storageKey(), result.packageSha256(), result.packageSize(),
+                result.downloadedHashes(), result.packageEntryNames(),
+                manifest.backupCompleteness(), manifest.relationGapCount());
+    }
+
+    static String receiptIdempotencyKey(long jobId, long orderId, String revision, String completeness) {
+        String raw = jobId + "\n" + orderId + "\n" + java.util.Objects.toString(revision, "")
+                + "\n" + java.util.Objects.toString(completeness, "COMPLETE");
+        try {
+            byte[] digest = java.security.MessageDigest.getInstance("SHA-256")
+                    .digest(raw.getBytes(java.nio.charset.StandardCharsets.UTF_8));
+            return "backup:" + java.util.HexFormat.of().formatHex(digest);
+        } catch (java.security.NoSuchAlgorithmException impossible) {
+            throw new IllegalStateException("JVM缺少SHA-256算法", impossible);
+        }
+    }
+
+    private record PublishedStage(com.yigongbao.backup.order.OrderSnapshotEntity snapshot,
+                                  BackupManifest manifest, OrderBackupPipeline.Result result) { }
 
     private void verifyStageArtifact(BackupStageEntity stage) {
         long volumeId = stage.getStorageVolumeId() == null ? 0L : stage.getStorageVolumeId();
@@ -514,6 +690,7 @@ public class ManualBackupJobHandler implements JobHandler {
     /** 执行单次订单备份；重试编排由任务级两阶段队列负责，避免当前订单阻塞后续订单。 */
     private SimulationArtifactResult executeAttempt(JobExecutionContext context, JobEntity job, Long orderId,
                                                      Payload payload, BackupExecutionMode executionMode,
+                                                     ManifestMode manifestMode, boolean automaticCompensation,
                                                      OnlineManifestClient manifestsClient, CosObjectClient cos,
                                                      java.util.Map<Long, Integer> attempts,
                                                      java.util.Set<Long> refreshedDegradedManifests, int maxRetries,
@@ -522,13 +699,14 @@ public class ManualBackupJobHandler implements JobHandler {
         log.info("订单备份尝试开始｜任务ID={}｜订单ID={}｜尝试次数={}/{}｜首轮已处理订单数={}/{}",
                 job.getId(), orderId, currentAttempt, maxRetries + 1,
                 completedOrders, payload.sourceOrderIds().size());
-        context.orderStarted(orderId, null);
+        if (automaticCompensation) context.orderDegrading(orderId);
+        else context.orderStarted(orderId, null);
         try {
             try {
                 return backupOnce(context, job, orderId, payload.backupDate(), payload.simulationRoot(),
-                        executionMode, manifestsClient, cos);
+                        executionMode, manifestMode, manifestsClient, cos);
             } catch (RemoteCallException failure) {
-                if (shouldRefreshDegradedManifest(job, orderId, failure, refreshedDegradedManifests)) {
+                if (shouldRefreshDegradedManifest(job, manifestMode, orderId, failure, refreshedDegradedManifests)) {
                     int refreshedAttempt = attempts.merge(orderId, 1, Integer::sum);
                     context.orderWarn(orderId, "BACKUP_MANIFEST_REFRESH", "清单刷新",
                             "降级备份确认时清单已变化，强制重新读取一次最新清单",
@@ -537,7 +715,7 @@ public class ManualBackupJobHandler implements JobHandler {
                     log.warn("降级备份清单已变化，强制重新读取一次｜任务ID={}｜订单ID={}｜累计尝试次数={}",
                             job.getId(), orderId, refreshedAttempt);
                     return backupOnce(context, job, orderId, payload.backupDate(), payload.simulationRoot(),
-                            executionMode, manifestsClient, cos);
+                            executionMode, manifestMode, manifestsClient, cos);
                 }
                 throw failure;
             }
@@ -549,11 +727,127 @@ public class ManualBackupJobHandler implements JobHandler {
         }
     }
 
-    private static boolean shouldRefreshDegradedManifest(JobEntity job, Long orderId, RemoteCallException failure,
+    private static boolean shouldRefreshDegradedManifest(JobEntity job, ManifestMode manifestMode, Long orderId,
+                                                          RemoteCallException failure,
                                                           java.util.Set<Long> refreshedDegradedManifests) {
-        return "DEGRADED_BACKUP".equals(job.getJobType())
+        return manifestMode == ManifestMode.DEGRADED
                 && "MANIFEST_CHANGED".equals(failure.code())
                 && refreshedDegradedManifests.add(orderId);
+    }
+
+    private SimulationArtifactResult executeAutomaticDegraded(JobExecutionContext context, JobEntity job, Long orderId,
+                                                               Payload payload, BackupExecutionMode executionMode,
+                                                               OnlineManifestClient manifestsClient, CosObjectClient cos,
+                                                               java.util.Map<Long, Integer> attempts,
+                                                               java.util.Set<Long> refreshedDegradedManifests,
+                                                               OrderBackupRetryPolicy retryPolicy,
+                                                               java.util.Map<Long, Integer> retriesUsed,
+                                                               java.util.Map<Long, String> degradePhases,
+                                                               long completedOrders) {
+        DegradePhase phase = DegradePhase.from(degradePhases.get(orderId));
+        if (phase == DegradePhase.DEGRADED_INITIAL) {
+            try {
+                return executeAutomaticAttemptWithRetries(context, job, orderId, payload, executionMode,
+                        ManifestMode.DEGRADED, manifestsClient, cos, attempts, refreshedDegradedManifests,
+                        retryPolicy, retriesUsed, completedOrders);
+            } catch (RemoteCallException degradedFailure) {
+                if (!automaticDegradePolicy.isRelationGapsResolved(degradedFailure)) throw degradedFailure;
+                phase = DegradePhase.STRICT_CONFIRMATION;
+                degradePhases.put(orderId, phase.name());
+                context.orderDegradePhase(orderId, phase.name());
+                context.orderInfo(orderId, "AUTO_DEGRADED_RELATION_REPAIRED", "自动降级",
+                        "补偿前订单文件关系已恢复，切换为严格备份确认",
+                        failureDetails(degradedFailure, attempts.getOrDefault(orderId, 1)));
+            }
+        }
+        if (phase == DegradePhase.STRICT_CONFIRMATION) {
+            try {
+                return executeAutomaticAttemptWithRetries(context, job, orderId, payload, executionMode,
+                        ManifestMode.STRICT, manifestsClient, cos, attempts, refreshedDegradedManifests,
+                        retryPolicy, retriesUsed, completedOrders);
+            } catch (RemoteCallException strictFailure) {
+                if (!AutomaticDegradedBackupPolicy.RELATION_BROKEN.equals(strictFailure.code())) throw strictFailure;
+                phase = DegradePhase.DEGRADED_FINAL;
+                degradePhases.put(orderId, phase.name());
+                context.orderDegradePhase(orderId, phase.name());
+            }
+        }
+        try {
+            return executeAutomaticAttemptWithRetries(context, job, orderId, payload, executionMode,
+                    ManifestMode.DEGRADED, manifestsClient, cos, attempts, refreshedDegradedManifests,
+                    retryPolicy, retriesUsed, completedOrders);
+        } catch (RemoteCallException finalFailure) {
+            if (!automaticDegradePolicy.isRelationGapsResolved(finalFailure)) throw finalFailure;
+            throw new JobFailureException(AutomaticDegradedBackupPolicy.RELATION_STATE_UNSTABLE,
+                    "订单文件关系在严格与降级解析之间反复变化", finalFailure);
+        }
+    }
+
+    private enum DegradePhase {
+        DEGRADED_INITIAL, STRICT_CONFIRMATION, DEGRADED_FINAL;
+
+        static DegradePhase from(String value) {
+            if (value == null || value.isBlank()) return DEGRADED_INITIAL;
+            try { return valueOf(value); }
+            catch (IllegalArgumentException ignored) { return DEGRADED_INITIAL; }
+        }
+    }
+
+    private SimulationArtifactResult executeAutomaticAttemptWithRetries(
+            JobExecutionContext context, JobEntity job, Long orderId, Payload payload,
+            BackupExecutionMode executionMode, ManifestMode manifestMode,
+            OnlineManifestClient manifestsClient, CosObjectClient cos,
+            java.util.Map<Long, Integer> attempts,
+            java.util.Set<Long> refreshedDegradedManifests,
+            OrderBackupRetryPolicy retryPolicy,
+            java.util.Map<Long, Integer> retriesUsed,
+            long completedOrders) {
+        while (true) {
+            try {
+                return executeAttempt(context, job, orderId, payload, executionMode, manifestMode,
+                        true, manifestsClient, cos, attempts, refreshedDegradedManifests,
+                        retryPolicy.maxRetries(), completedOrders);
+            } catch (RuntimeException failure) {
+                int used = retriesUsed.getOrDefault(orderId, 0);
+                if (!retryable(failure) || used >= retryPolicy.maxRetries()) throw failure;
+                int retryNumber = used + 1;
+                long delay = retryPolicy.delaySeconds(retryNumber);
+                context.orderWarn(orderId, "AUTO_DEGRADED_BACKUP_RETRY", "自动降级",
+                        "自动降级备份发生瞬时错误，将重试｜第" + retryNumber + "/"
+                                + retryPolicy.maxRetries() + "次｜异常原因=" + safe(failure),
+                        failureDetails(failure, attempts.getOrDefault(orderId, 1)));
+                context.safePoint("AUTO_DEGRADED_RETRY_" + orderId, completedOrders);
+                waitForRetry(context, orderId, delay);
+                context.orderRetryConsumed(orderId);
+                retriesUsed.merge(orderId, 1, Integer::sum);
+            }
+        }
+    }
+
+    private boolean shouldQueueAutomaticDegraded(JobEntity job, Payload payload, Throwable failure) {
+        return !"DEGRADED_BACKUP".equals(job.getJobType())
+                && automaticDegradePolicy.shouldAutoDegrade(
+                payload.resolvedAutoDegradeOnRelationBroken(), failure);
+    }
+
+    private static ManifestMode initialManifestMode(JobEntity job) {
+        return "DEGRADED_BACKUP".equals(job.getJobType()) ? ManifestMode.DEGRADED : ManifestMode.STRICT;
+    }
+
+    private enum ManifestMode { STRICT, DEGRADED }
+
+    private static Throwable persistedRelationFailure(com.yigongbao.backup.job.JobOrderEntity row) {
+        return new RemoteCallException(row.getFailureMessage() == null ? "订单文件关系不完整" : row.getFailureMessage(),
+                409, false, AutomaticDegradedBackupPolicy.RELATION_BROKEN, null,
+                row.getFailureMessage(), null);
+    }
+
+    private static Throwable persistedFailure(com.yigongbao.backup.job.JobOrderEntity row) {
+        String code = row.getFailureCode() == null || row.getFailureCode().isBlank()
+                ? "RETRY_PENDING" : row.getFailureCode();
+        String message = row.getFailureMessage() == null || row.getFailureMessage().isBlank()
+                ? "订单等待继续重试" : row.getFailureMessage();
+        return new JobFailureException(code, message);
     }
 
     private static void accumulate(SimulationArtifactResult result,
@@ -564,6 +858,18 @@ public class ManualBackupJobHandler implements JobHandler {
         files.addAndGet(result.expectedFileCount());
         bytes.addAndGet(result.expectedBytes());
         packageBytes.addAndGet(result.packageSize());
+    }
+
+    private static void recordCompleteness(Long orderId, SimulationArtifactResult result,
+                                           java.util.Set<Long> completeSucceeded,
+                                           java.util.Set<Long> incompleteSucceeded) {
+        if (result != null && "INCOMPLETE".equals(result.backupCompleteness())) {
+            completeSucceeded.remove(orderId);
+            incompleteSucceeded.add(orderId);
+        } else {
+            incompleteSucceeded.remove(orderId);
+            completeSucceeded.add(orderId);
+        }
     }
 
     private static boolean retryable(Throwable failure) {
@@ -713,16 +1019,29 @@ public class ManualBackupJobHandler implements JobHandler {
 
     public record Payload(List<Long> sourceOrderIds, int orderTotal, String backupDate,
                           Integer daysBefore, String orderCreatedBefore, String executionMode,
-                          String simulationRoot) {
+                          String simulationRoot, Boolean autoDegradeOnRelationBroken) {
         public Payload(List<Long> sourceOrderIds) {
             this(sourceOrderIds, sourceOrderIds == null ? 0 : sourceOrderIds.size(),
-                    LocalDate.now().format(DateTimeFormatter.BASIC_ISO_DATE), null, null, BackupExecutionMode.REAL.name(), null);
+                    LocalDate.now().format(DateTimeFormatter.BASIC_ISO_DATE), null, null,
+                    BackupExecutionMode.REAL.name(), null, false);
         }
         public Payload(List<Long> sourceOrderIds, int orderTotal) {
-            this(sourceOrderIds, orderTotal, LocalDate.now().format(DateTimeFormatter.BASIC_ISO_DATE), null, null, BackupExecutionMode.REAL.name(), null);
+            this(sourceOrderIds, orderTotal, LocalDate.now().format(DateTimeFormatter.BASIC_ISO_DATE),
+                    null, null, BackupExecutionMode.REAL.name(), null, false);
         }
         public Payload(List<Long> sourceOrderIds, int orderTotal, String backupDate) {
-            this(sourceOrderIds, orderTotal, backupDate, null, null, BackupExecutionMode.REAL.name(), null);
+            this(sourceOrderIds, orderTotal, backupDate, null, null, BackupExecutionMode.REAL.name(), null, false);
+        }
+        public Payload(List<Long> sourceOrderIds, int orderTotal, String backupDate,
+                       Integer daysBefore, String orderCreatedBefore, String executionMode,
+                       String simulationRoot) {
+            this(sourceOrderIds, orderTotal, backupDate, daysBefore, orderCreatedBefore,
+                    executionMode, simulationRoot, null);
+        }
+        public static Payload strictOrders(List<Long> sourceOrderIds, boolean autoDegradeOnRelationBroken) {
+            return new Payload(sourceOrderIds, sourceOrderIds == null ? 0 : sourceOrderIds.size(),
+                    LocalDate.now().format(DateTimeFormatter.BASIC_ISO_DATE), null, null,
+                    BackupExecutionMode.REAL.name(), null, autoDegradeOnRelationBroken);
         }
         public Payload {
             sourceOrderIds = sourceOrderIds == null ? List.of() : List.copyOf(sourceOrderIds);
@@ -736,6 +1055,11 @@ public class ManualBackupJobHandler implements JobHandler {
         public BackupExecutionMode resolvedExecutionMode() {
             try { return BackupExecutionMode.valueOf(executionMode); }
             catch (RuntimeException invalid) { throw new IllegalStateException("任务执行模式非法: " + executionMode, invalid); }
+        }
+
+        /** 旧任务 JSON 缺少字段时保持部署前的严格失败行为。 */
+        public boolean resolvedAutoDegradeOnRelationBroken() {
+            return Boolean.TRUE.equals(autoDegradeOnRelationBroken);
         }
     }
 }

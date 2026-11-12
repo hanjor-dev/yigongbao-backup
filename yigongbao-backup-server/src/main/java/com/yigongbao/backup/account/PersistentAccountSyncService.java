@@ -6,6 +6,7 @@ import java.time.LocalDateTime;
 /** 持久化账号同步：首次创建初始化密码/状态；后续同步只更新线上托管字段。 */
 @Service @RequiredArgsConstructor
 public class PersistentAccountSyncService {
+    private static final String DUMMY_PASSWORD_HASH = "$2a$10$N.zmdr9k7uOCQb376NoUnuTJ8iAt6Z5EHsM8lE9lBOsl7iKTVKIUi";
     private final BkUserMapper mapper;
     private final BkUserFieldControlService fieldControl;
     private final BCryptPasswordEncoder encoder = new BCryptPasswordEncoder();
@@ -62,5 +63,5 @@ public class PersistentAccountSyncService {
             throw new IllegalArgumentException("线上账号密码哈希格式非法");
         }
     }
-    public boolean verify(String username,String raw){BkUserEntity u=mapper.findByUsername(username); if(u==null||!"ENABLED".equals(u.getEnabledStatus())||u.getLockUntil()!=null&&u.getLockUntil().isAfter(LocalDateTime.now())) return false; boolean ok=encoder.matches(raw,u.getPasswordHash()); if(ok) mapper.clearLoginFailures(u.getId()); else mapper.recordLoginFailure(u.getId()); return ok;}
+    public boolean verify(String username,String raw){BkUserEntity u=mapper.findByUsername(username); if(u==null){encoder.matches(raw,DUMMY_PASSWORD_HASH);return false;} if(!"ENABLED".equals(u.getEnabledStatus())||u.getLockUntil()!=null&&u.getLockUntil().isAfter(LocalDateTime.now())){encoder.matches(raw,DUMMY_PASSWORD_HASH);return false;} boolean ok=encoder.matches(raw,u.getPasswordHash()); if(ok) mapper.clearLoginFailures(u.getId()); else mapper.recordLoginFailure(u.getId()); return ok;}
 }

@@ -122,10 +122,10 @@ WHERE p.is_deleted=0 AND p.storage_volume_id=@legacy_hot_volume_id
   AND NOT EXISTS (SELECT 1 FROM bk_artifact_copy c WHERE c.artifact_type='ORDER_PACKAGE' AND c.artifact_id=p.id AND c.storage_volume_id=@legacy_hot_volume_id AND c.is_deleted=0);
 
 INSERT INTO bk_artifact_copy(artifact_type,artifact_id,location_type,location_ref_id,storage_volume_id,storage_key,state,lifecycle,size,sha256,version,is_deleted)
-SELECT 'SUPPLEMENT',s.id,'HOT_NAS',@legacy_hot_volume_id,@legacy_hot_volume_id,s.storage_key,'PRESENT','ACTIVE',s.size,s.sha256,0,0
+SELECT 'SUPPLEMENT_FILE',s.id,'HOT_NAS',@legacy_hot_volume_id,@legacy_hot_volume_id,s.storage_key,'PRESENT','ACTIVE',s.size,s.sha256,0,0
 FROM bk_supplement_file s
 WHERE s.is_deleted=0 AND s.storage_volume_id=@legacy_hot_volume_id
-  AND NOT EXISTS (SELECT 1 FROM bk_artifact_copy c WHERE c.artifact_type='SUPPLEMENT' AND c.artifact_id=s.id AND c.storage_volume_id=@legacy_hot_volume_id AND c.is_deleted=0);
+  AND NOT EXISTS (SELECT 1 FROM bk_artifact_copy c WHERE c.artifact_type='SUPPLEMENT_FILE' AND c.artifact_id=s.id AND c.storage_volume_id=@legacy_hot_volume_id AND c.is_deleted=0);
 
 INSERT INTO bk_storage_volume_migration_issue(issue_type,artifact_type,artifact_id,legacy_storage_key,issue_message,version,is_deleted)
 SELECT 'COLD_LOCATION_UNRESOLVED',a.artifact_type,a.artifact_id,a.relative_path,'历史冷备批次仅有批次内相对路径，无法可靠映射实际物理卷；不可靠，不猜测，需管理员在存储卷管理页确认。',0,0

@@ -6,6 +6,9 @@ import org.springframework.stereotype.Component;
 
 import java.net.URI;
 import java.time.Duration;
+import java.util.Arrays;
+import java.util.Set;
+import java.util.stream.Collectors;
 
 /**
  * 从数据库读取线上连接策略，并通过引用名从环境中解析真实密钥。
@@ -34,11 +37,18 @@ public class OnlineConnectionSettingsProvider {
             throw new IllegalStateException("线上系统地址必须是有效的 HTTP URL");
         }
         String secret = secret("BACKUP_SHARED_HMAC_SECRET", "共享 HMAC 密钥");
+        Set<String> externalAllowedHosts = Arrays.stream(environment.getProperty(
+                        "BACKUP_EXTERNAL_ALLOWED_HOSTS", "").split(","))
+                .map(String::trim).filter(value -> !value.isBlank()).collect(Collectors.toUnmodifiableSet());
+        if (externalAllowedHosts.isEmpty()) {
+            throw new IllegalStateException("对象存储预签名地址允许主机未配置，请设置环境变量 "
+                    + "BACKUP_EXTERNAL_ALLOWED_HOSTS（多个主机使用英文逗号分隔）");
+        }
         return new Settings(baseUri,
                 Duration.ofSeconds(configs.getLong("online.connect-timeout-seconds", 10L, 1L)),
                 Duration.ofSeconds(configs.getLong("online.request-timeout-seconds", 60L, 1L)),
                 Duration.ofSeconds(configs.getLong("online.file-transfer-timeout-seconds", 7200L, 60L)),
-                secret);
+                secret, externalAllowedHosts);
     }
 
     private String secret(String reference, String displayName) {
@@ -56,5 +66,5 @@ public class OnlineConnectionSettingsProvider {
     /** 单次调用使用的线上连接快照。 */
     public record Settings(URI baseUri, Duration connectTimeout, Duration requestTimeout,
                            Duration fileTransferTimeout,
-                           String sharedSecret) { }
+                           String sharedSecret, Set<String> externalAllowedHosts) { }
 }

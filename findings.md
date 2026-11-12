@@ -38,3 +38,22 @@
 - 校验器必须拒绝 Windows junction 等所有 reparse point；仅检查 `Files.isSymbolicLink` 不足以阻止受管路径逃逸。实现使用 `NOFOLLOW_LINKS` 的基础属性逐级拒绝 `isSymbolicLink/isOther`，并以真实 junction 回归测试覆盖。
 - 全局封存历史属于审计数据，不能静默截断为 200 条；实现改为返回全部记录，同时将逐 attempt 计数改成一次批量查询后分组统计。
 - `PREPARE_FAILED` 与 `VERIFY_FAILED/COMMIT_FAILED/CANCELLED` 同属需要管理员处理的失败终态，概览计数、重新封存入口与详情放弃操作均已统一覆盖。
+
+## 管理概览告警关闭能力（2026-11-12）
+- `AdminOverviewAlertService` 按当前事实即时生成活动告警，没有告警工单或确认/关闭持久化状态。
+- 前端“处理”仅按 `actionRoute` 跳转，不会改变告警状态。
+- 后端概览结果缓存 30 秒，前端手动刷新使用 `refresh=true` 可绕过缓存。
+- 关闭记录应以稳定 `alertKey` 为键；持续异常时过滤，异常不再出现时删除记录，使未来复发能够重新提醒。
+- 手动关闭必须同时从活动列表、告警计数和健康状态中排除；若同一事实还生成同代码的数据质量提示，也要排除该重复健康贡献。
+- Hero 展示首条告警，其他告警表必须保留全部剩余项目并使用固定高度滚动，不能用 `slice(1, 3)` 静默丢失关闭入口。
+- 关闭请求完成后必须等待旧概览请求结束再强制刷新，避免关闭前的在途响应覆盖最新状态。
+
+## 备份重试成功仍显示失败原因（2026-11-12）
+- 订单 72 首次下载在 `OrderBackupPipeline.backupWithResult` 读取响应体时收到 `IOException: closed`；相同清单、相同文件第二次下载和提交成功，排除订单数据、清单和制品校验的确定性错误。
+- `online.file-transfer-timeout-seconds` 默认 7200 秒，首次失败发生在约 60.77 秒，说明不是本应用的大文件请求超时。
+- `JobExecutionContext.orderSucceeded()` 调用 `JobEvidenceService.order(..., "SUCCEEDED", null)`；服务将实体失败字段设为 `null` 后调用 `updateById`，但默认非空字段更新策略不会生成清空 SQL，数据库保留首次失败证据。
+- 残留失败证据具有审计价值，不应直接丢弃；读取任务明细时应显式投影为“重试后恢复成功”，前端用成功态展示“已重试成功”和历史首次失败，而不是继续标记为当前失败。
+- 文件证据使用同样的 `evidence(..., null) + updateById` 模式，必须与订单明细一并修复展示语义。
+- 整单失败时，除真正失败文件外还会写入独立的 `BACKUP_ROLLBACK/FAILED` 文件行；重试只更新对应的 `BACKUP_DOWNLOAD` 行，因此展示层还必须结合订单最终状态，把回滚行识别为已经恢复的历史失败。
+- `RETRY_PENDING/RETRYING` 是非终态，虽带有最近失败证据，也不能按最终失败渲染；应使用黄色等待/执行中语义。
+- 修复采用“保留历史证据 + 服务端明确投影 + 前端三态展示”，无需数据库结构迁移，已有历史记录刷新后也能得到正确语义。

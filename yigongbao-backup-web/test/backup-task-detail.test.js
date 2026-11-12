@@ -179,3 +179,14 @@ test('task order table launches the drawer and no longer expands business JSON i
   assert.match(detail, /@click="openJobOrderDetail\(row\)"/);
   assert.doesNotMatch(detail, /type="expand"/);
 });
+
+test('task and order detail visibly prioritize incomplete successful backups', () => {
+  const detail = read('../src/components/jobs/JobDetail.vue');
+  const drawer = read('../src/components/jobs/JobOrderDetailDrawer.vue');
+  assert.match(detail, /backupResultSummary/);
+  assert.match(detail, /文件可能不完整/);
+  assert.match(detail, /evidence\(row\)\.kind === 'incomplete'/);
+  assert.match(detail, /<el-tag[^>]*type="warning"/);
+  assert.match(drawer, /evidence\(selectedJobOrder\)\.kind === 'incomplete'/);
+  assert.match(drawer, /<el-alert[\s\S]*type="warning"/);
+});

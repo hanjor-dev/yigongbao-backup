@@ -68,8 +68,8 @@ public final class LocalOrderRestoreService {
     /**
      * 按 manifest 期望资产逐文件上传。任何一项失败都不提交线上会话，避免出现整单部分恢复。
      */
-    public void restore(Path orderZip, String orderId) throws IOException {
-        restore(orderZip, orderId, RestoreAssetListener.noOp());
+    public RestoreOutcome restore(Path orderZip, String orderId) throws IOException {
+        return restore(orderZip, orderId, RestoreAssetListener.noOp());
     }
 
     /**
@@ -123,7 +123,7 @@ public final class LocalOrderRestoreService {
      * @param orderId 线上订单标识
      * @param listener 单个 ZIP 条目的上传生命周期监听器
      */
-    public void restore(Path orderZip, String orderId, RestoreAssetListener listener) throws IOException {
+    public RestoreOutcome restore(Path orderZip, String orderId, RestoreAssetListener listener) throws IOException {
         listener = listener == null ? RestoreAssetListener.noOp() : listener;
         if (orderZip == null || !Files.isRegularFile(orderZip)) {
             throw new FileNotFoundException(String.valueOf(orderZip));
@@ -147,12 +147,12 @@ public final class LocalOrderRestoreService {
                 ? client.prepare(orderId) : client.prepare(orderId, prepareRequest);
         if ("SKIPPED_DELETED".equalsIgnoreCase(session.status())) {
             // 线上订单已不存在时禁止上传和提交，符合“恢复默认跳过已删除订单”的约定。
-            return;
+            return RestoreOutcome.SKIPPED_DELETED;
         }
         // 重试前 prepare 发现线上已成功提交时，禁止再次覆盖恢复对象或重复回写关联。
         if ("COMMITTED".equalsIgnoreCase(session.status())) {
             log.info("线上恢复订单已提交，跳过重复上传｜订单ID={}｜会话ID={}", orderId, session.id());
-            return;
+            return RestoreOutcome.ALREADY_COMMITTED;
         }
         if (!"PREPARED".equalsIgnoreCase(session.status())) {
             throw new IllegalStateException("线上恢复会话状态不可执行: " + session.status());
@@ -218,6 +218,7 @@ public final class LocalOrderRestoreService {
                 }
             }
         }
+        return RestoreOutcome.COMMITTED;
     }
 
     /** 恢复订单 ZIP 内单个资产的执行证据回调；默认无操作，兼容非任务调用方。 */
@@ -308,6 +309,9 @@ public final class LocalOrderRestoreService {
             throw new IOException("读取恢复包 manifest.json 失败", ex);
         }
     }
+
+    /** 线上会话的业务终态；调用方必须区分“已删除而跳过”和恢复成功。 */
+    public enum RestoreOutcome { COMMITTED, ALREADY_COMMITTED, SKIPPED_DELETED }
 
     /**
      * v2 关系摘要按固定字段投影生成。线上全局 NON_NULL 序列化会省略空 relationValue，

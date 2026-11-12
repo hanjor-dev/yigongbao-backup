@@ -255,7 +255,7 @@ public class PersistentJobService {
                         .eq(JobFileEntity::getSourceOrderId, sourceOrderId)
                         .eq(JobFileEntity::getStep, "RESTORE_OBJECT_UPLOAD")
                         .orderByAsc(JobFileEntity::getId));
-        return new JobFilePage(enrichCurrentVolumes(page.getRecords()), page.getTotal(), page.getCurrent(),
+        return new JobFilePage(enrichTaskFileDisplay(jobId, page.getRecords()), page.getTotal(), page.getCurrent(),
                 page.getSize(), page.getPages());
     }
 
@@ -309,7 +309,7 @@ public class PersistentJobService {
         if (orderMapper == null) throw new IllegalStateException("任务订单明细持久化未配置");
         List<JobOrderEntity> rows = orderMapper.selectList(Wrappers.<JobOrderEntity>lambdaQuery().eq(JobOrderEntity::getJobId, jobId)
                 .orderByAsc(JobOrderEntity::getId));
-        return projectDegradedEligibility(jobId, enrichPackageBytes(rows));
+        return projectDegradedEligibility(jobId, enrichPackageBytes(enrichSnapshotCompleteness(jobId, rows)));
     }
 
     /** 分页读取任务订单明细，并回填已生成订单 ZIP 的实际容量。 */
@@ -319,7 +319,8 @@ public class PersistentJobService {
         Page<JobOrderEntity> page = orderMapper.selectPage(Page.of(current, size),
                 Wrappers.<JobOrderEntity>lambdaQuery().eq(JobOrderEntity::getJobId, jobId)
                         .orderByAsc(JobOrderEntity::getId));
-        return new JobOrderPage(projectDegradedEligibility(jobId, enrichPackageBytes(page.getRecords())), page.getTotal(), page.getCurrent(),
+        return new JobOrderPage(projectDegradedEligibility(jobId,
+                enrichPackageBytes(enrichSnapshotCompleteness(jobId, page.getRecords()))), page.getTotal(), page.getCurrent(),
                 page.getSize(), page.getPages());
     }
 
@@ -365,7 +366,7 @@ public class PersistentJobService {
 
     public List<JobFileEntity> listFiles(long jobId) {
         if (fileMapper == null) throw new IllegalStateException("任务文件明细持久化未配置");
-        return enrichCurrentVolumes(listFilesRaw(jobId));
+        return enrichTaskFileDisplay(jobId, listFilesRaw(jobId));
     }
 
     /** 分页读取任务文件证据；可按来源订单收窄，用于任务详情和订单详情共用。 */
@@ -391,14 +392,27 @@ public class PersistentJobService {
         List<Long> sourceOrderIds = rows.stream().map(JobFileEntity::getSourceOrderId)
                 .filter(Objects::nonNull).distinct().toList();
         if (sourceOrderIds.isEmpty()) return rows;
-        Map<Long, String> orderCodes = orderMapper.selectList(
-                        new com.baomidou.mybatisplus.core.conditions.query.QueryWrapper<JobOrderEntity>()
-                                .eq("job_id", jobId).in("source_order_id", sourceOrderIds))
-                .stream().filter(order -> order.getSourceOrderId() != null
+        List<JobOrderEntity> orderRows = orderMapper.selectList(
+                new com.baomidou.mybatisplus.core.conditions.query.QueryWrapper<JobOrderEntity>()
+                        .eq("job_id", jobId).in("source_order_id", sourceOrderIds));
+        Map<Long, String> orderCodes = orderRows.stream()
+                .filter(order -> order.getSourceOrderId() != null
                         && order.getOrderCode() != null && !order.getOrderCode().isBlank())
                 .collect(java.util.stream.Collectors.toMap(JobOrderEntity::getSourceOrderId,
                         JobOrderEntity::getOrderCode, (left, right) -> left));
-        rows.forEach(row -> row.setOrderCode(orderCodes.get(row.getSourceOrderId())));
+        java.util.Set<Long> recoveredOrderIds = orderRows.stream()
+                .filter(order -> order.getSourceOrderId() != null
+                        && retryRecovered(order.getStatus(), order.getFailureCode(), order.getFailureMessage()))
+                .map(JobOrderEntity::getSourceOrderId).collect(java.util.stream.Collectors.toSet());
+        rows.forEach(row -> {
+            row.setOrderCode(orderCodes.get(row.getSourceOrderId()));
+            // 整单原子回滚会生成独立的 BACKUP_ROLLBACK 失败行；订单重试成功后这些行是历史失败，
+            // 不能继续作为当前失败展示。
+            if (recoveredOrderIds.contains(row.getSourceOrderId())
+                    && hasFailureEvidence(row.getFailureCode(), row.getFailureMessage())) {
+                row.setRetryRecovered(true);
+            }
+        });
         return rows;
     }
 
@@ -427,8 +441,11 @@ public class PersistentJobService {
         if (rows == null || rows.isEmpty()) return rows;
         Map<Long, com.yigongbao.backup.storage.volume.StorageVolumeEntity> current = currentVolumes(
                 rows.stream().map(JobFileEntity::getStorageVolumeId).toList());
-        rows.forEach(row -> applyCurrentVolume(row, row.getStorageVolumeId(),
-                row.getStorageVolumeId() == null ? null : current.get(row.getStorageVolumeId())));
+        rows.forEach(row -> {
+            row.setRetryRecovered(retryRecovered(row.getStatus(), row.getFailureCode(), row.getFailureMessage()));
+            applyCurrentVolume(row, row.getStorageVolumeId(),
+                    row.getStorageVolumeId() == null ? null : current.get(row.getStorageVolumeId()));
+        });
         return rows;
     }
 
@@ -439,13 +456,45 @@ public class PersistentJobService {
         return enrichPackageBytes(rows, current);
     }
 
+    /** 一次批量查询投影快照完整性，避免任务详情按订单逐条读取快照。 */
+    private List<JobOrderEntity> enrichSnapshotCompleteness(long jobId, List<JobOrderEntity> rows) {
+        if (rows == null || rows.isEmpty()) return rows;
+        rows.forEach(row -> {
+            row.setBackupCompleteness(null);
+            row.setRelationGapCount(null);
+            row.setAutoDegraded(false);
+        });
+        if (snapshotMapper == null) return rows;
+        List<Long> snapshotIds = rows.stream().map(JobOrderEntity::getSnapshotId)
+                .filter(Objects::nonNull).distinct().toList();
+        if (snapshotIds.isEmpty()) return rows;
+        List<OrderSnapshotEntity> snapshots = snapshotMapper.selectBatchIds(snapshotIds);
+        Map<Long, OrderSnapshotEntity> byId = snapshots == null ? Map.of() : snapshots.stream()
+                .filter(snapshot -> snapshot.getId() != null)
+                .collect(java.util.stream.Collectors.toMap(OrderSnapshotEntity::getId, snapshot -> snapshot,
+                        (left, right) -> left));
+        JobEntity job = mapper.selectById(jobId);
+        boolean automaticTask = job != null && !"DEGRADED_BACKUP".equals(job.getJobType());
+        rows.forEach(row -> {
+            OrderSnapshotEntity snapshot = row.getSnapshotId() == null ? null : byId.get(row.getSnapshotId());
+            if (snapshot == null) return;
+            row.setBackupCompleteness(snapshot.getBackupCompleteness());
+            row.setRelationGapCount(snapshot.getRelationGapCount());
+            row.setAutoDegraded(automaticTask && "INCOMPLETE".equals(snapshot.getBackupCompleteness()));
+        });
+        return rows;
+    }
+
     private List<JobOrderEntity> enrichPackageBytes(
             List<JobOrderEntity> rows,
             Map<Long, com.yigongbao.backup.storage.volume.StorageVolumeEntity> current) {
         if (rows == null || rows.isEmpty()) return rows;
         // 历史名称/层级是审计快照；当前状态写入独立展示字段，禁止覆盖历史证据。
-        rows.forEach(row -> applyCurrentVolume(row, row.getStorageVolumeId(),
-                row.getStorageVolumeId() == null ? null : current.get(row.getStorageVolumeId())));
+        rows.forEach(row -> {
+            row.setRetryRecovered(retryRecovered(row.getStatus(), row.getFailureCode(), row.getFailureMessage()));
+            applyCurrentVolume(row, row.getStorageVolumeId(),
+                    row.getStorageVolumeId() == null ? null : current.get(row.getStorageVolumeId()));
+        });
         if (packageMapper == null) return rows;
         List<Long> snapshotIds = rows.stream().map(JobOrderEntity::getSnapshotId)
                 .filter(java.util.Objects::nonNull).distinct().toList();
@@ -506,6 +555,15 @@ public class PersistentJobService {
 
     private static boolean hasHistoricalStorage(String volumeName, String tier) {
         return (volumeName != null && !volumeName.isBlank()) || (tier != null && !tier.isBlank());
+    }
+
+    private static boolean retryRecovered(String status, String failureCode, String failureMessage) {
+        return "SUCCEEDED".equals(status) && hasFailureEvidence(failureCode, failureMessage);
+    }
+
+    private static boolean hasFailureEvidence(String failureCode, String failureMessage) {
+        return (failureCode != null && !failureCode.isBlank())
+                || (failureMessage != null && !failureMessage.isBlank());
     }
 
     private List<JobOrderEntity> projectDegradedEligibility(long jobId, List<JobOrderEntity> rows) {

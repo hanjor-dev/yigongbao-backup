@@ -5,9 +5,9 @@ import VolumeArchiveDetail from '../components/storage/VolumeArchiveDetail.vue';
 import ColdVolumeMountDialog from '../components/storage/ColdVolumeMountDialog.vue';
 import { confirmAction, promptAction } from '../uiFeedback.js';
 
-const { coldStorageArchives, selectedStorageArchive, coldStorageLoading, storageVolumes, storageCandidates,
+const { coldStorageArchives, coldArchivePage, coldArchiveSize, coldArchiveTotal, selectedStorageArchive, coldStorageLoading, storageVolumes, storageCandidates,
   loadColdStorage, openColdStorageArchive, closeColdStorageArchive, scanColdMountCandidates, confirmColdVolumeMounted,
-  prepareColdVolumeOffline, abandonStorageArchive, navigate, consumeRouteQuery } = useBackupContext();
+  prepareColdVolumeOffline, abandonStorageArchive, changeColdArchivePage, changeColdArchiveSize, navigate, consumeRouteQuery } = useBackupContext();
 const coldVolumes = computed(() => storageVolumes.value.filter((volume) => volume.tier === 'COLD'));
 const activeArchives = computed(() => coldStorageArchives.value.filter((item) => ['REQUESTED', 'SWITCHED', 'MANIFEST_FROZEN', 'VERIFYING', 'COMMITTING'].includes(item.archive?.phase)));
 const failedArchives = computed(() => coldStorageArchives.value.filter((item) => ['PREPARE_FAILED', 'VERIFY_FAILED', 'COMMIT_FAILED', 'CANCELLED'].includes(item.archive?.phase)));
@@ -46,7 +46,7 @@ async function abandon(archive) {
   const reason = await promptAction('请输入放弃原因', { title: '放弃封存尝试', inputValue: '管理员确认放弃本次失败尝试', inputPlaceholder: '请输入放弃原因' });
   if (reason && await abandonStorageArchive(archive.id, reason)) { closeColdStorageArchive(); await loadColdStorage(); }
 }
-onMounted(async () => { closeColdStorageArchive(); await loadColdStorage(); const { archiveId } = consumeRouteQuery(['archiveId']); if (archiveId) await openColdStorageArchive(archiveId); refreshTimer = window.setInterval(() => { if (activeArchives.value.length) refresh(); }, 5000); });
+onMounted(async () => { closeColdStorageArchive(); await loadColdStorage(); const { archiveId } = consumeRouteQuery(['archiveId']); if (archiveId) await openColdStorageArchive(archiveId); refreshTimer = window.setInterval(() => { if (coldArchiveTotal.value) refresh(); }, 5000); });
 onUnmounted(() => { if (refreshTimer) window.clearInterval(refreshTimer); closeColdStorageArchive(); });
 </script>
 
@@ -57,13 +57,13 @@ onUnmounted(() => { if (refreshTimer) window.clearInterval(refreshTimer); closeC
       <div class="heading-actions"><el-button :loading="coldStorageLoading" @click="refresh"><el-icon><Refresh /></el-icon>刷新状态</el-button><el-button @click="navigate('storage-volumes')">返回存储卷管理</el-button></div>
     </section>
     <section class="cold-metrics">
-      <el-card shadow="never"><span>正在封存</span><strong>{{ activeArchives.length }}</strong><small>校验期间请勿拔盘</small></el-card>
-      <el-card shadow="never"><span>需要处理</span><strong class="danger-value">{{ failedArchives.length }}</strong><small>失败或取消的封存尝试</small></el-card>
+      <el-card shadow="never"><span>本页正在封存</span><strong>{{ activeArchives.length }}</strong><small>校验期间请勿拔盘</small></el-card>
+      <el-card shadow="never"><span>本页需要处理</span><strong class="danger-value">{{ failedArchives.length }}</strong><small>失败或取消的封存尝试</small></el-card>
       <el-card shadow="never"><span>在线冷备介质</span><strong>{{ onlineCold.length }}</strong><small>可直接下载或线上恢复</small></el-card>
       <el-card shadow="never"><span>离线冷备介质</span><strong>{{ coldVolumes.length - onlineCold.length }}</strong><small>按标签与存放位置查找</small></el-card>
     </section>
     <el-card shadow="never" class="page-card">
-      <template #header><div class="card-title"><span>封存任务</span><el-tag>{{ coldStorageArchives.length }} 次尝试</el-tag></div></template>
+      <template #header><div class="card-title"><span>封存任务</span><el-tag>{{ coldArchiveTotal }} 次尝试</el-tag></div></template>
       <el-table v-loading="coldStorageLoading" :data="coldStorageArchives" empty-text="暂无整盘封存记录" stripe>
         <el-table-column label="封存卷" min-width="180"><template #default="{ row }"><strong>{{ row.sourceVolume?.displayName || row.archive.displayNameSnapshot || '未知卷' }}</strong><div class="table-muted">{{ row.sourceVolume?.volumeCode || row.archive.sourceVolumeId }}</div></template></el-table-column>
         <el-table-column label="阶段 / 进度" min-width="190"><template #default="{ row }"><status-badge :value="row.archive.phase" /><el-progress :percentage="progress(row)" :show-text="false" class="archive-progress" /></template></el-table-column>
@@ -74,6 +74,10 @@ onUnmounted(() => { if (refreshTimer) window.clearInterval(refreshTimer); closeC
         <el-table-column prop="archive.failureMessage" label="失败原因" min-width="220" show-overflow-tooltip><template #default="{ row }"><span :class="{ 'danger-value': row.archive.failureMessage }">{{ row.archive.failureMessage || '—' }}</span></template></el-table-column>
         <el-table-column label="操作" width="150" fixed="right"><template #default="{ row }"><el-button link type="primary" @click="openColdStorageArchive(row.archive.id)">查看详情</el-button><el-button v-if="['PREPARE_FAILED','VERIFY_FAILED','COMMIT_FAILED','CANCELLED'].includes(row.archive.phase)" link @click="navigate('storage-volumes')">重新封存</el-button></template></el-table-column>
       </el-table>
+      <el-pagination v-if="coldArchiveTotal" class="table-pagination" background
+        :current-page="coldArchivePage" :page-size="coldArchiveSize" :total="coldArchiveTotal"
+        :page-sizes="[10, 20, 50, 100]" layout="total, sizes, prev, pager, next, jumper"
+        @current-change="changeColdArchivePage" @size-change="changeColdArchiveSize" />
     </el-card>
     <el-card shadow="never" class="page-card">
       <template #header><div class="card-title"><span>冷备介质</span><el-tag type="info">{{ coldVolumes.length }} 块</el-tag></div></template>

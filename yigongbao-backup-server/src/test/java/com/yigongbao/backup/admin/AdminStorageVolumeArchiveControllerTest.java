@@ -21,26 +21,31 @@ class AdminStorageVolumeArchiveControllerTest {
         VolumeArchiveMapper archiveMapper=mock(VolumeArchiveMapper.class);
         VolumeArchiveEntity older=archive(10L,1L,2L,"SUCCEEDED");
         VolumeArchiveEntity newer=archive(20L,1L,2L,"VERIFY_FAILED");
-        when(archiveMapper.selectList(any())).thenReturn(List.of(older,newer));
+        Page<VolumeArchiveEntity> attempts=new Page<>(1,20,2);attempts.setRecords(List.of(newer,older));
+        when(archiveMapper.selectPage(any(Page.class),any())).thenReturn(attempts);
         StorageVolumeMapper volumeMapper=mock(StorageVolumeMapper.class);
         VolumeArchiveItemMapper itemMapper=mock(VolumeArchiveItemMapper.class);
-        when(itemMapper.selectList(any())).thenReturn(List.of(verified(20L),verified(20L),verified(20L)));
+        when(itemMapper.countVerifiedByArchiveIds(anyList())).thenReturn(List.of(
+                new VolumeArchiveItemMapper.ArchiveVerifiedCount(20L,3L)));
         when(volumeMapper.selectBatchIds(any())).thenReturn(List.of(volume(1L,"源盘","COLD","OFFLINE"),volume(2L,"接替盘","HOT","ONLINE")));
         AdminStorageVolumeArchiveController controller=new AdminStorageVolumeArchiveController(
                 mock(VolumeArchivePreviewService.class),mock(VolumeArchiveService.class),archiveMapper,
                 itemMapper,mock(StorageVolumeReadLeaseService.class),
-                mock(StorageVolumeLifecycleService.class),volumeMapper,mock(OrderSnapshotMapper.class));
+                mock(StorageVolumeLifecycleService.class),volumeMapper,mock(OrderSnapshotMapper.class),
+                mock(StorageVolumeAbnormalStateRepairService.class));
 
         try(MockedStatic<StpUtil> auth=mockStatic(StpUtil.class)) {
-            List<AdminStorageVolumeArchiveController.ArchiveListItem> result=controller.listArchives().data();
+            Page<AdminStorageVolumeArchiveController.ArchiveListItem> page=controller.listArchives(1,20).data();
+            List<AdminStorageVolumeArchiveController.ArchiveListItem> result=page.getRecords();
             assertThat(result).extracting(item->item.archive().getId()).containsExactly(20L,10L);
             assertThat(result.getFirst().sourceVolume().displayName()).isEqualTo("源盘");
             assertThat(result.getFirst().sourceVolume().mountStatus()).isEqualTo("OFFLINE");
             assertThat(result.getFirst().successorVolume().displayName()).isEqualTo("接替盘");
             assertThat(result.getFirst().verifiedFileCount()).isEqualTo(3L);
             assertThat(result.get(1).verifiedFileCount()).isZero();
-            verify(itemMapper,times(1)).selectList(any());
-            verify(itemMapper,never()).selectCount(any());
+            assertThat(page.getTotal()).isEqualTo(2);
+            verify(itemMapper).countVerifiedByArchiveIds(anyList());
+            verify(itemMapper,never()).selectList(any());
             auth.verify(()->StpUtil.checkRole("ADMIN"));
         }
     }
@@ -59,7 +64,7 @@ class AdminStorageVolumeArchiveControllerTest {
         AdminStorageVolumeArchiveController controller=new AdminStorageVolumeArchiveController(
                 mock(VolumeArchivePreviewService.class),archives,mock(VolumeArchiveMapper.class),itemMapper,
                 mock(StorageVolumeReadLeaseService.class),mock(StorageVolumeLifecycleService.class),
-                mock(StorageVolumeMapper.class),snapshotMapper);
+                mock(StorageVolumeMapper.class),snapshotMapper,mock(StorageVolumeAbnormalStateRepairService.class));
 
         try(MockedStatic<StpUtil> auth=mockStatic(StpUtil.class)) {
             AdminStorageVolumeArchiveController.ArchiveDetail result=controller.detail(7L,2,50).data();

@@ -1,7 +1,7 @@
 <script setup>
 import { computed } from 'vue';
 import { useBackupContext } from '../../composables/useBackupContext.js';
-import { canRetryFailedOrders, formatJobOrderCreatedAt, jobOrderPatientName, storageVolumeView } from '../../taskCenter.js';
+import { backupResultSummary, canRetryFailedOrders, formatJobOrderCreatedAt, jobEvidencePresentation, jobOrderPatientName, storageVolumeView } from '../../taskCenter.js';
 import JobFileTable from './JobFileTable.vue';
 import ExecutionLogPanel from './ExecutionLogPanel.vue';
 import JobOrderDetailDrawer from './JobOrderDetailDrawer.vue';
@@ -20,6 +20,7 @@ const jobState = (job) => job?.state || job?.status || '';
 const progress = computed(() => selectedJob.value ? jobProgress(selectedJob.value) : 0);
 const simulation = computed(() => selectedJob.value?.executionMode === 'METADATA_SIMULATION');
 const orderBackup = computed(() => ['ORDER_BACKUP', 'MANUAL_BACKUP', 'DEGRADED_BACKUP'].includes(selectedJob.value?.jobType));
+const outcome = computed(() => backupResultSummary(selectedJob.value));
 const bytes = (value) => {
   const n = Number(value || 0);
   if (n < 1024) return `${n} B`;
@@ -28,6 +29,7 @@ const bytes = (value) => {
   return `${(n / 1073741824).toFixed(2)} GB`;
 };
 const volume = (row, fallback = null) => storageVolumeView(row, fallback);
+const evidence = (row) => jobEvidencePresentation(row);
 </script>
 
 <template>
@@ -69,11 +71,27 @@ const volume = (row, fallback = null) => storageVolumeView(row, fallback);
           <el-descriptions-item label="目标存储卷">
             <div class="summary-volume"><strong>{{ volume(selectedJob, selectedJob.targetStorageVolumeId).name }}</strong><span v-if="volume(selectedJob).current">当前：{{ volume(selectedJob).current }}</span><small v-if="volume(selectedJob).historical">任务时：{{ volume(selectedJob).historical }}</small></div>
           </el-descriptions-item>
+          <el-descriptions-item label="完整成功">{{ outcome.completeSucceeded }}</el-descriptions-item>
+          <el-descriptions-item label="文件可能不完整">
+            <el-tag :type="outcome.incompleteSucceeded > 0 ? 'warning' : 'info'">{{ outcome.incompleteSucceeded }}</el-tag>
+          </el-descriptions-item>
+          <el-descriptions-item label="失败">{{ outcome.orderFailed }}</el-descriptions-item>
+          <el-descriptions-item label="自动降级">
+            {{ outcome.autoDegradedSucceeded }} / {{ outcome.autoDegradedAttempted }}
+          </el-descriptions-item>
           <template v-if="simulation">
             <el-descriptions-item label="Manifest">成功 {{ selectedJob.manifestSucceeded || 0 }} / 失败 {{ selectedJob.manifestFailed || 0 }}</el-descriptions-item>
             <el-descriptions-item label="预计文件">{{ selectedJob.expectedFileTotal || 0 }}</el-descriptions-item>
           </template>
         </el-descriptions>
+        <el-alert
+          v-if="outcome.incompleteSucceeded > 0"
+          type="warning"
+          :closable="false"
+          show-icon
+          title="部分订单已完成备份，但文件关系存在缺口"
+          :description="`共有 ${outcome.incompleteSucceeded} 个订单标记为“文件可能不完整”，恢复前请核对缺失关系。`"
+        />
         <el-alert v-if="selectedJob.failureCode" type="error" :closable="false" show-icon>
           失败原因：{{ selectedJob.failureCode }} {{ selectedJob.failureEvidence || '' }}
         </el-alert>
@@ -94,7 +112,28 @@ const volume = (row, fallback = null) => storageVolumeView(row, fallback);
               </template>
             </el-table-column>
             <el-table-column v-if="simulation" prop="expectedFileCount" label="预计文件" width="100" />
-            <el-table-column label="失败原因" min-width="230"><template #default="{ row }"><span class="error-text">{{ row.failureCode || '' }} {{ row.failureMessage || '' }}</span></template></el-table-column>
+            <el-table-column label="执行说明" min-width="260">
+              <template #default="{ row }">
+                <el-space v-if="evidence(row).kind === 'incomplete'" direction="vertical" alignment="flex-start" :size="2">
+                  <el-tag type="warning" size="small">{{ evidence(row).label }}</el-tag>
+                  <el-text type="warning" size="small">{{ evidence(row).detail }}</el-text>
+                </el-space>
+                <el-space v-else-if="evidence(row).kind === 'recovered'" direction="vertical" alignment="flex-start" :size="2">
+                  <el-tag type="success" size="small">{{ evidence(row).label }}</el-tag>
+                  <el-text type="info" size="small">{{ evidence(row).detail }}</el-text>
+                </el-space>
+                <el-space v-else-if="evidence(row).kind === 'retrying'" direction="vertical" alignment="flex-start" :size="2">
+                  <el-tag type="warning" size="small">{{ evidence(row).label }}</el-tag>
+                  <el-text type="info" size="small">{{ evidence(row).detail }}</el-text>
+                </el-space>
+                <el-space v-else-if="evidence(row).kind === 'degrading'" direction="vertical" alignment="flex-start" :size="2">
+                  <el-tag type="warning" size="small">{{ evidence(row).label }}</el-tag>
+                  <el-text type="warning" size="small">{{ evidence(row).detail }}</el-text>
+                </el-space>
+                <el-text v-else-if="evidence(row).kind === 'failed'" type="danger">{{ evidence(row).detail }}</el-text>
+                <el-text v-else type="info">—</el-text>
+              </template>
+            </el-table-column>
             <el-table-column label="操作" width="92" fixed="right"><template #default="{ row }"><el-button link type="primary" @click="openJobOrderDetail(row)">详情</el-button></template></el-table-column>
           </el-table>
           <el-pagination

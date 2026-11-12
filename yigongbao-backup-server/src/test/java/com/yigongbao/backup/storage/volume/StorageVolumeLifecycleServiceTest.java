@@ -24,10 +24,52 @@ import java.util.UUID;
 import java.nio.file.Files;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.Mockito.doAnswer;
+import static org.mockito.Mockito.doThrow;
 import static org.mockito.Mockito.never;
 
 /** 存储卷状态机的关键安全边界测试。 */
 class StorageVolumeLifecycleServiceTest {
+
+    @Test
+    void cancelStandbyChangesIdleHotVolumeToReadOnly() {
+        StorageVolumeMapper mapper = mock(StorageVolumeMapper.class);
+        StorageVolumeEntity standby = transitionVolume(5L);
+        standby.setWriteStatus("STANDBY");
+        when(mapper.findByIdForUpdate(5L)).thenReturn(standby);
+        StorageVolumeLifecycleService service = service(mapper, mock(StorageVolumeMarkerService.class),
+                mock(StorageVolumeHealthService.class), mock(JobMapper.class), mock(JobOrderMapper.class),
+                mock(ArtifactCopyMapper.class), mock(SpaceReservationMapper.class), mock(RuntimeConfigService.class));
+
+        StorageVolumeEntity result = service.cancelStandby(5L, 100L);
+
+        assertThat(result.getTier()).isEqualTo("HOT");
+        assertThat(result.getWriteStatus()).isEqualTo("READ_ONLY");
+        assertThat(result.getOperationStatus()).isEqualTo("IDLE");
+        assertThat(result.getUpdateBy()).isEqualTo(100L);
+        verify(mapper).updateById(standby);
+    }
+
+    @Test
+    void cancelStandbyRejectsBusyOrNonStandbyVolume() {
+        StorageVolumeMapper mapper = mock(StorageVolumeMapper.class);
+        StorageVolumeEntity busy = transitionVolume(6L);
+        busy.setWriteStatus("STANDBY");
+        busy.setOperationStatus("ARCHIVE_GUARD");
+        StorageVolumeEntity readOnly = transitionVolume(7L);
+        when(mapper.findByIdForUpdate(6L)).thenReturn(busy);
+        when(mapper.findByIdForUpdate(7L)).thenReturn(readOnly);
+        StorageVolumeLifecycleService service = service(mapper, mock(StorageVolumeMarkerService.class),
+                mock(StorageVolumeHealthService.class), mock(JobMapper.class), mock(JobOrderMapper.class),
+                mock(ArtifactCopyMapper.class), mock(SpaceReservationMapper.class), mock(RuntimeConfigService.class));
+
+        assertThatThrownBy(() -> service.cancelStandby(6L, 100L))
+                .isInstanceOf(StorageVolumeOperationException.class)
+                .hasMessageContaining("生命周期操作");
+        assertThatThrownBy(() -> service.cancelStandby(7L, 100L))
+                .isInstanceOf(StorageVolumeOperationException.class)
+                .hasMessageContaining("备用卷");
+        verify(mapper, never()).updateById(any(StorageVolumeEntity.class));
+    }
 
     @Test
     void logsStandbyTransitionStartAndSuccessWithOperationalContext() {
@@ -400,6 +442,86 @@ class StorageVolumeLifecycleServiceTest {
                 .hasMessageContaining("卷标记");
     }
 
+    @Test
+    void automaticallyRecreatesMissingManagedRootForSameEmptyPhysicalVolume() throws Exception {
+        Path mount = Files.createTempDirectory("managed-root-recovery");
+        Path root = mount.resolve("yigongbao-backup");
+        DiscoveredStorageVolume candidate = new DiscoveredStorageVolume(
+                mount, root, StorageAccessType.LOCAL, "disk-d", "NTFS", "1234", 1_000L, 800L, 200L);
+        StorageVolumeDiscoveryService discovery = mock(StorageVolumeDiscoveryService.class);
+        when(discovery.discoverMountedPaths(List.of(mount))).thenReturn(List.of(candidate));
+        StorageVolumeMapper mapper = mock(StorageVolumeMapper.class);
+        StorageVolumeHealthService health = mock(StorageVolumeHealthService.class);
+        when(health.probe(any())).thenReturn(new StorageVolumeHealthService.HealthSnapshot(
+                true, true, 1_000L, 800L, null, null, 1L));
+        ArtifactCopyMapper copies = mock(ArtifactCopyMapper.class);
+        JobMapper jobs = mock(JobMapper.class);
+        UUID markerId = UUID.randomUUID();
+        StorageVolumeEntity volume = recoverableVolume(21L, mount, root, markerId);
+        StorageVolumeLifecycleService service = new StorageVolumeLifecycleService(mapper, discovery,
+                new StorageVolumeMarkerService(), health, mock(AuditLogService.class), new ObjectMapper(),
+                jobs, mock(JobOrderMapper.class), copies, mock(SpaceReservationMapper.class),
+                mock(RuntimeConfigService.class));
+
+        StorageVolumeLifecycleService.RootRecoveryResult result = service.recoverMissingManagedRoot(volume, 0L);
+
+        assertThat(result.recovered()).isTrue();
+        assertThat(Files.isDirectory(root)).isTrue();
+        assertThat(new StorageVolumeMarkerService().verify(root, markerId).valid()).isTrue();
+        assertThat(volume.getMountStatus()).isEqualTo(StorageVolumeStatus.Mount.ONLINE.name());
+        verify(mapper).updateById(volume);
+    }
+
+    @Test
+    void refusesToRecreateMissingManagedRootWhenHistoricalCopiesExist() throws Exception {
+        Path mount = Files.createTempDirectory("managed-root-recovery-blocked");
+        Path root = mount.resolve("yigongbao-backup");
+        StorageVolumeDiscoveryService discovery = mock(StorageVolumeDiscoveryService.class);
+        when(discovery.discoverMountedPaths(List.of(mount))).thenReturn(List.of(new DiscoveredStorageVolume(
+                mount, root, StorageAccessType.LOCAL, "disk-d", "NTFS", "1234", 1_000L, 800L, 200L)));
+        ArtifactCopyMapper copies = mock(ArtifactCopyMapper.class);
+        when(copies.selectCount(any())).thenReturn(1L);
+        UUID markerId = UUID.randomUUID();
+        StorageVolumeEntity volume = recoverableVolume(22L, mount, root, markerId);
+        StorageVolumeLifecycleService service = new StorageVolumeLifecycleService(mock(StorageVolumeMapper.class),
+                discovery, new StorageVolumeMarkerService(), mock(StorageVolumeHealthService.class),
+                mock(AuditLogService.class), new ObjectMapper(), mock(JobMapper.class),
+                mock(JobOrderMapper.class), copies, mock(SpaceReservationMapper.class),
+                mock(RuntimeConfigService.class));
+
+        StorageVolumeLifecycleService.RootRecoveryResult result = service.recoverMissingManagedRoot(volume, 0L);
+
+        assertThat(result.recovered()).isFalse();
+        assertThat(result.reason()).contains("文件副本记录");
+        assertThat(Files.exists(root)).isFalse();
+    }
+
+    @Test
+    void removesNewManagedRootWhenDatabaseOrAuditCommitPathFails() throws Exception {
+        Path mount = Files.createTempDirectory("managed-root-recovery-rollback");
+        Path root = mount.resolve("yigongbao-backup");
+        StorageVolumeDiscoveryService discovery = mock(StorageVolumeDiscoveryService.class);
+        when(discovery.discoverMountedPaths(List.of(mount))).thenReturn(List.of(new DiscoveredStorageVolume(
+                mount, root, StorageAccessType.LOCAL, "disk-d", "NTFS", "1234", 1_000L, 800L, 200L)));
+        StorageVolumeHealthService health = mock(StorageVolumeHealthService.class);
+        when(health.probe(any())).thenReturn(new StorageVolumeHealthService.HealthSnapshot(
+                true, true, 1_000L, 800L, null, null, 1L));
+        AuditLogService audit = mock(AuditLogService.class);
+        doThrow(new IllegalStateException("audit down")).when(audit).append(any());
+        UUID markerId = UUID.randomUUID();
+        StorageVolumeEntity volume = recoverableVolume(23L, mount, root, markerId);
+        StorageVolumeLifecycleService service = new StorageVolumeLifecycleService(mock(StorageVolumeMapper.class),
+                discovery, new StorageVolumeMarkerService(), health, audit, new ObjectMapper(),
+                mock(JobMapper.class), mock(JobOrderMapper.class), mock(ArtifactCopyMapper.class),
+                mock(SpaceReservationMapper.class), mock(RuntimeConfigService.class));
+
+        StorageVolumeLifecycleService.RootRecoveryResult result = service.recoverMissingManagedRoot(volume, 0L);
+
+        assertThat(result.recovered()).isFalse();
+        assertThat(result.reason()).contains("audit down");
+        assertThat(root).doesNotExist();
+    }
+
     private static StorageVolumeLifecycleService service(StorageVolumeMapper mapper, StorageVolumeMarkerService markers,
             StorageVolumeHealthService health, JobMapper jobs, JobOrderMapper jobOrders, ArtifactCopyMapper copies,
             SpaceReservationMapper reservations, RuntimeConfigService configs) {
@@ -417,6 +539,24 @@ class StorageVolumeLifecycleServiceTest {
         volume.setOperationStatus("IDLE");
         volume.setRootPath("D:/managed-" + id);
         volume.setMarkerJson("{\"volumeId\":\"00000000-0000-0000-0000-00000000000" + id + "\"}");
+        volume.setIsDeleted(0);
+        return volume;
+    }
+
+    private static StorageVolumeEntity recoverableVolume(long id, Path mount, Path root, UUID markerId) {
+        StorageVolumeEntity volume = new StorageVolumeEntity();
+        volume.setId(id);
+        volume.setVolumeCode("volume-recovery");
+        volume.setDisplayName("恢复测试卷");
+        volume.setMountPath(mount.toString());
+        volume.setRootPath(root.toString());
+        volume.setVolumeFingerprint("VSN|1234|NTFS|1000");
+        volume.setMarkerJson("{\"volumeId\":\"" + markerId + "\",\"formatVersion\":1}");
+        volume.setTier(StorageVolumeStatus.Tier.HOT.name());
+        volume.setMountStatus(StorageVolumeStatus.Mount.UNAVAILABLE.name());
+        volume.setWriteStatus(StorageVolumeStatus.Write.ACTIVE.name());
+        volume.setAdminStatus(StorageVolumeStatus.Admin.ENABLED.name());
+        volume.setOperationStatus(StorageVolumeStatus.Operation.IDLE.name());
         volume.setIsDeleted(0);
         return volume;
     }

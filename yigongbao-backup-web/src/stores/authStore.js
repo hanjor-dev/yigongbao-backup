@@ -29,10 +29,14 @@ export function createAuthStore() {
     await api('/auth/password', { method: 'PUT', body: JSON.stringify({ password }) });
   }
 
-  function logout() {
-    clearAuth();
-    token.value = null;
-    role.value = 'USER';
+  async function logout() {
+    try {
+      await api('/auth/logout', { method: 'POST' });
+    } finally {
+      clearAuth();
+      token.value = null;
+      role.value = 'USER';
+    }
   }
 
   function handleAuthExpired() {

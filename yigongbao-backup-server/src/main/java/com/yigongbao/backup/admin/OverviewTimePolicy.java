@@ -3,6 +3,7 @@ package com.yigongbao.backup.admin;
 import com.yigongbao.backup.common.time.BusinessClock;
 import org.springframework.stereotype.Component;
 import java.time.*;
+import java.time.temporal.TemporalAdjusters;
 
 /** 概览日期窗口、计划槽位与新鲜度的纯策略。 */
 @Component
@@ -17,6 +18,23 @@ public final class OverviewTimePolicy {
     public DateWindow sevenDays() {
         LocalDateTime to = clock.today().plusDays(1).atStartOfDay();
         return new DateWindow(to.minusDays(7), to);
+    }
+    public DateWindow trendWindow(OverviewTrendPeriod period) {
+        LocalDate today = clock.today();
+        return switch (period == null ? OverviewTrendPeriod.WEEK : period) {
+            case WEEK -> {
+                LocalDate from = today.with(TemporalAdjusters.previousOrSame(DayOfWeek.MONDAY));
+                yield new DateWindow(from.atStartOfDay(), from.plusWeeks(1).atStartOfDay());
+            }
+            case MONTH -> {
+                LocalDate from = today.withDayOfMonth(1);
+                yield new DateWindow(from.atStartOfDay(), from.plusMonths(1).atStartOfDay());
+            }
+            case YEAR -> {
+                LocalDate from = today.withDayOfYear(1);
+                yield new DateWindow(from.atStartOfDay(), from.plusYears(1).atStartOfDay());
+            }
+        };
     }
     public boolean capacityFresh(LocalDateTime observedAt, int intervalMinutes) {
         if (observedAt == null) return false;

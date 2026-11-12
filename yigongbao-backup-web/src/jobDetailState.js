@@ -78,6 +78,27 @@ export function createDetailRequestGuard() {
   };
 }
 
+/** 为分页列表的并发请求分配单调代次，只允许同一通道最后发出的请求回写。 */
+export function createLatestRequestGuard() {
+  const versions = new Map();
+  return {
+    begin(lane = 'default') {
+      const version = (versions.get(lane) || 0) + 1;
+      versions.set(lane, version);
+      return { lane, version };
+    },
+    isCurrent(token) {
+      return Boolean(token) && versions.get(token.lane) === token.version;
+    },
+    invalidate(lane = 'default') {
+      versions.set(lane, (versions.get(lane) || 0) + 1);
+    },
+    invalidateAll() {
+      for (const lane of versions.keys()) this.invalidate(lane);
+    },
+  };
+}
+
 /** 记录某个详情区块最后成功加载的数据键，支持任务与订单区块独立失效。 */
 export function createSectionLoadTracker() {
   const loaded = new Map();

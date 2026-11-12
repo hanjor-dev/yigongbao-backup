@@ -1,5 +1,5 @@
 <script setup>
-import { formatJobOrderCreatedAt, jobOrderPatientName, storageVolumeView } from '../../taskCenter.js';
+import { formatJobOrderCreatedAt, jobEvidencePresentation, jobOrderPatientName, storageVolumeView } from '../../taskCenter.js';
 import { useBackupContext } from '../../composables/useBackupContext.js';
 import OrderBusinessFields from '../orders/OrderBusinessFields.vue';
 import JobFileTable from './JobFileTable.vue';
@@ -17,6 +17,7 @@ const volume = (row) => storageVolumeView(
   row,
   row?.storageVolumeId || row?.sourceStorageVolumeId || selectedJob.value?.targetStorageVolumeId,
 );
+const evidence = (row) => jobEvidencePresentation(row);
 </script>
 
 <template>
@@ -59,9 +60,46 @@ const volume = (row) => storageVolumeView(
               </dl>
             </section>
 
-            <el-alert v-if="selectedJobOrder.failureCode || selectedJobOrder.failureMessage" type="error" :closable="false" show-icon>
-              {{ selectedJobOrder.failureCode || '' }} {{ selectedJobOrder.failureMessage || '' }}
-            </el-alert>
+            <el-alert
+              v-if="evidence(selectedJobOrder).kind === 'incomplete'"
+              type="warning"
+              :closable="false"
+              show-icon
+              :title="evidence(selectedJobOrder).label"
+              :description="evidence(selectedJobOrder).detail"
+            />
+            <el-alert
+              v-else-if="evidence(selectedJobOrder).kind === 'recovered'"
+              type="success"
+              :closable="false"
+              show-icon
+              :title="evidence(selectedJobOrder).label"
+              :description="evidence(selectedJobOrder).detail"
+            />
+            <el-alert
+              v-else-if="evidence(selectedJobOrder).kind === 'retrying'"
+              type="warning"
+              :closable="false"
+              show-icon
+              :title="evidence(selectedJobOrder).label"
+              :description="evidence(selectedJobOrder).detail"
+            />
+            <el-alert
+              v-else-if="evidence(selectedJobOrder).kind === 'degrading'"
+              type="warning"
+              :closable="false"
+              show-icon
+              :title="evidence(selectedJobOrder).label"
+              :description="evidence(selectedJobOrder).detail"
+            />
+            <el-alert
+              v-else-if="evidence(selectedJobOrder).kind === 'failed'"
+              type="error"
+              :closable="false"
+              show-icon
+              title="备份失败"
+              :description="evidence(selectedJobOrder).detail"
+            />
 
             <el-collapse class="business-snapshot">
               <el-collapse-item title="订单信息（备份时）" name="business">

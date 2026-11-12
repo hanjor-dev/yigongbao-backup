@@ -1,0 +1,40 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<configuration>
+    <!-- Reuse Spring Boot's standard console/file patterns and conversion rules. -->
+    <include resource="org/springframework/boot/logging/logback/defaults.xml"/>
+
+    <!-- 所有日志策略集中在此文件；相对路径以启动 JAR 时的工作目录为基准。 -->
+    <property name="LOG_DIR" value="./log"/>
+    <property name="ACTIVE_LOG_FILE" value="${LOG_DIR}/yigongbao-backup-server.log"/>
+    <property name="ACTIVE_LOG_LEVEL" value="INFO"/>
+    <property name="ACTIVE_ARCHIVE_PATTERN"
+              value="${LOG_DIR}/yigongbao-backup-server.%d{yyyy-MM-dd}.%i.log.gz"/>
+    <property name="ACTIVE_MAX_FILE_SIZE" value="100MB"/>
+    <property name="ACTIVE_MAX_HISTORY" value="30"/>
+    <property name="ACTIVE_TOTAL_SIZE_CAP" value="2GB"/>
+    <property name="ACTIVE_CLEAN_HISTORY_ON_START" value="true"/>
+
+    <include resource="org/springframework/boot/logging/logback/console-appender.xml"/>
+
+    <appender name="ROLLING_FILE" class="ch.qos.logback.core.rolling.RollingFileAppender">
+        <file>${ACTIVE_LOG_FILE}</file>
+        <append>true</append>
+        <encoder>
+            <pattern>${FILE_LOG_PATTERN}</pattern>
+            <charset>${FILE_LOG_CHARSET}</charset>
+        </encoder>
+        <rollingPolicy class="ch.qos.logback.core.rolling.SizeAndTimeBasedRollingPolicy">
+            <fileNamePattern>${ACTIVE_ARCHIVE_PATTERN}</fileNamePattern>
+            <maxFileSize>${ACTIVE_MAX_FILE_SIZE}</maxFileSize>
+            <maxHistory>${ACTIVE_MAX_HISTORY}</maxHistory>
+            <totalSizeCap>${ACTIVE_TOTAL_SIZE_CAP}</totalSizeCap>
+            <cleanHistoryOnStart>${ACTIVE_CLEAN_HISTORY_ON_START}</cleanHistoryOnStart>
+        </rollingPolicy>
+    </appender>
+
+    <!-- Keep console output for the customer BAT's live log window. -->
+    <root level="${ACTIVE_LOG_LEVEL}">
+        <appender-ref ref="CONSOLE"/>
+        <appender-ref ref="ROLLING_FILE"/>
+    </root>
+</configuration>

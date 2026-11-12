@@ -9,6 +9,7 @@ import lombok.RequiredArgsConstructor;
 import org.springframework.security.crypto.bcrypt.BCryptPasswordEncoder;
 import org.springframework.web.bind.annotation.*;
 import com.yigongbao.backup.config.RuntimeConfigService;
+import jakarta.servlet.http.HttpServletRequest;
 
 import java.util.List;
 import java.util.UUID;
@@ -54,30 +55,33 @@ public class AdminAccountController {
 
     /** 管理员立即触发同步；与定时同步使用同一互斥锁和持久化检查点。 */
     @PostMapping("/sync")
-    public ApiResponse<AccountSyncCoordinator.Result> syncNow() {
+    public ApiResponse<AccountSyncCoordinator.Result> syncNow(HttpServletRequest request) {
         admin();
         long actor = StpUtil.getLoginIdAsLong();
         AccountSyncCoordinator.Result result = syncCoordinator.synchronize(true);
-        audit.append(new AuditLogService.Event("ACCOUNT_SYNC_MANUAL", "USER", String.valueOf(actor), result.status()));
+        audit.appendActor(request, actor, "ADMIN", "ACCOUNT_SYNC_MANUAL", "USER",
+                String.valueOf(actor), null, result.status(), null);
         return ApiResponse.ok(result, rid());
     }
 
     /** 仅修改本地启用状态，保留线上同步值作为来源信息。 */
     @PutMapping("/{id}/status")
-    public ApiResponse<AccountView> status(@PathVariable("id") long id, @RequestBody StatusCommand command) {
+    public ApiResponse<AccountView> status(@PathVariable("id") long id, @RequestBody StatusCommand command,
+                                           HttpServletRequest request) {
         admin();
         BkUserEntity user = required(id);
         if (command == null || !command.enabledStatus().matches("ENABLED|DISABLED")) throw new IllegalArgumentException("账号状态非法");
-        long actor = StpUtil.getLoginIdAsLong(); user.setEnabledStatus(command.enabledStatus()); user.setUpdateBy(actor); mapper.updateById(user); fieldControl.markLocal(user.getId(), BkUserFieldControlService.STATUS_FIELD, actor); if ("DISABLED".equals(command.enabledStatus())) StpUtil.kickout(id); audit.append(new AuditLogService.Event("ACCOUNT_STATUS_CHANGE", "USER", String.valueOf(id), "OK"));
+        long actor = StpUtil.getLoginIdAsLong(); user.setEnabledStatus(command.enabledStatus()); user.setUpdateBy(actor); mapper.updateById(user); fieldControl.markLocal(user.getId(), BkUserFieldControlService.STATUS_FIELD, actor); if ("DISABLED".equals(command.enabledStatus())) StpUtil.kickout(id); audit.appendActor(request, actor, "ADMIN", "ACCOUNT_STATUS_CHANGE", "USER", String.valueOf(id), null, "OK", null);
         return ApiResponse.ok(view(user), rid());
     }
 
     /** 仅修改本地密码，不同步线上。 */
     @PutMapping("/{id}/password")
-    public ApiResponse<Void> password(@PathVariable("id") long id, @RequestBody PasswordCommand command) {
+    public ApiResponse<Void> password(@PathVariable("id") long id, @RequestBody PasswordCommand command,
+                                      HttpServletRequest request) {
         admin();
         if (command == null || command.password() == null || command.password().length() < 8) throw new IllegalArgumentException("密码至少八位");
-        long actor = StpUtil.getLoginIdAsLong(); BkUserEntity user = required(id); user.setPasswordHash(encoder.encode(command.password())); user.setUpdateBy(actor); mapper.updateById(user); fieldControl.markLocal(user.getId(), BkUserFieldControlService.PASSWORD_FIELD, actor); audit.append(new AuditLogService.Event("ADMIN_PASSWORD_RESET", "USER", String.valueOf(id), "OK"));
+        long actor = StpUtil.getLoginIdAsLong(); BkUserEntity user = required(id); user.setPasswordHash(encoder.encode(command.password())); user.setUpdateBy(actor); mapper.updateById(user); fieldControl.markLocal(user.getId(), BkUserFieldControlService.PASSWORD_FIELD, actor); StpUtil.kickout(id); audit.appendActor(request, actor, "ADMIN", "ADMIN_PASSWORD_RESET", "USER", String.valueOf(id), null, "OK", null);
         return ApiResponse.ok(null, rid());
     }
 

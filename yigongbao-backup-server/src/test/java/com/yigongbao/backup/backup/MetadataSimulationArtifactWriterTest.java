@@ -49,7 +49,7 @@ class MetadataSimulationArtifactWriterTest {
             try (var input = zip.getInputStream(zip.getEntry("manifest.json"))) {
                 manifestText = new String(input.readAllBytes(), java.nio.charset.StandardCharsets.UTF_8);
             }
-            assertThat(manifestText).contains("[PRESIGNED_URL_REDACTED]").doesNotContain("signature=secret");
+            assertThat(manifestText).contains("\"sourceKey\" : null").doesNotContain("signature=secret");
             String summaryText;
             try (var input = zip.getInputStream(zip.getEntry("_simulation.json"))) {
                 summaryText = new String(input.readAllBytes(), java.nio.charset.StandardCharsets.UTF_8);

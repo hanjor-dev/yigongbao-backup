@@ -7,6 +7,7 @@ import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
 import java.time.LocalDateTime;
+import java.time.Duration;
 import java.util.List;
 import java.util.UUID;
 
@@ -79,13 +80,19 @@ public class CleanupTaskService {
         if (evaluation == null || request == null || blank(idempotencyKey)) {
             throw new IllegalArgumentException("清理评估或幂等键不能为空");
         }
-        List<ItemInput> items = evaluation.objectKeys().stream()
-                .distinct()
-                .map(key -> new ItemInput("COS", "UNKNOWN", key, "UNVERSIONED", null,
-                        "UNVERIFIED", 0L))
+        if (blank(evaluation.snapshotHash()) || blank(evaluation.objectSetHash())
+                || evaluation.objects().stream().anyMatch(item -> item == null || blank(item.objectKey())
+                    || blank(item.versionIdentity())))
+            throw new IllegalStateException("线上清理评估缺少快照摘要、对象集合摘要或精确对象版本");
+        List<ItemInput> items = evaluation.objects().stream()
+                .map(item -> new ItemInput(blank(item.platform()) ? "COS" : item.platform(),
+                        blank(item.bucket()) ? "UNKNOWN" : item.bucket(), item.objectKey(), item.versionIdentity(),
+                        item.sourceFileId(), blank(item.sharedReferenceStatus()) ? "UNVERIFIED" : item.sharedReferenceStatus(),
+                        item.versionBytes()))
                 .toList();
         return create(new CreateInput(evaluation.taskId(), idempotencyKey, request.olderThanDays(),
-                request.dryRun() ? "DRY_RUN" : "ACTUAL", null, null, evaluation.estimatedBytes(), items), actor);
+                request.dryRun() ? "DRY_RUN" : "ACTUAL", evaluation.snapshotHash(), evaluation.objectSetHash(),
+                evaluation.estimatedBytes(), items), actor);
     }
 
     public List<CleanupTaskEntity> list() {
@@ -109,6 +116,15 @@ public class CleanupTaskService {
         return listItems(task.getId()).stream()
                 .filter(item -> "DELETED".equals(item.getDeletionStatus()) || "SKIPPED".equals(item.getDeletionStatus()))
                 .map(CleanupItemEntity::getObjectKey)
+                .collect(java.util.stream.Collectors.toSet());
+    }
+
+    public java.util.Set<String> completedObjectVersions(String taskNo) {
+        CleanupTaskEntity task = findByTaskNo(taskNo);
+        if (task == null) return java.util.Set.of();
+        return listItems(task.getId()).stream()
+                .filter(item -> "DELETED".equals(item.getDeletionStatus()) || "SKIPPED".equals(item.getDeletionStatus()))
+                .map(item -> exactIdentity(item.getObjectKey(), item.getVersionIdentity()))
                 .collect(java.util.stream.Collectors.toSet());
     }
 
@@ -170,25 +186,110 @@ public class CleanupTaskService {
                 .eq(DeletePermitEntity::getCleanupTaskId, taskId).orderByDesc(DeletePermitEntity::getAttemptNo));
     }
 
+    /** 从已冻结任务构造线上授权证据，禁止使用 taskId 派生的占位摘要。 */
+    public CleanupClient.PermitRequest permitRequest(long taskId) {
+        CleanupTaskEntity task = get(taskId);
+        if (blank(task.getSnapshotHash()) || blank(task.getObjectSetHash()))
+            throw new IllegalStateException("冻结清理任务缺少快照或对象集合摘要");
+        int attempt = listPermits(taskId).stream().map(DeletePermitEntity::getAttemptNo)
+                .filter(java.util.Objects::nonNull).max(Integer::compareTo).orElse(0) + 1;
+        String verificationDigest = sha256(listItems(taskId).stream()
+                .map(item -> exactIdentity(item.getObjectKey(), item.getVersionIdentity()))
+                .sorted().collect(java.util.stream.Collectors.joining("\n")));
+        return new CleanupClient.PermitRequest(attempt, task.getSnapshotHash(), task.getObjectSetHash(),
+                String.valueOf(task.getFencingToken() == null ? 0L : task.getFencingToken()),
+                task.getTaskNo(), Math.max(task.getVersion() == null ? 0 : task.getVersion(), 1), verificationDigest);
+    }
+
     @Transactional
-    public DeletePermitEntity claimPermit(long permitId) {
+    public DeletePermitEntity claimPermit(long permitId, String owner, Duration lease) {
+        if (blank(owner) || lease == null || lease.isZero() || lease.isNegative()) {
+            throw new IllegalArgumentException("permit 领取参数非法");
+        }
         DeletePermitEntity permit = permitMapper.selectById(permitId);
         if (permit == null) throw new IllegalArgumentException("清理 permit 不存在");
-        if (permit.getExpiresAt() != null && !permit.getExpiresAt().isAfter(LocalDateTime.now())) {
+        LocalDateTime now = LocalDateTime.now();
+        if (permit.getExpiresAt() != null && !permit.getExpiresAt().isAfter(now)) {
             expirePermit(permit.getId());
             throw new IllegalStateException("清理 permit 已过期");
         }
+        if ("CLAIMED".equals(permit.getStatus()) && owner.equals(permit.getClaimOwner())
+                && permit.getClaimUntil() != null && permit.getClaimUntil().isAfter(now)) return permit;
+        long token = (permit.getLocalFencingToken() == null ? 0L : permit.getLocalFencingToken()) + 1L;
         UpdateWrapper<DeletePermitEntity> update = new UpdateWrapper<>();
         update.eq("id", permitId).eq("version", permit.getVersion())
-                .eq("status", "ISSUED").set("status", "CLAIMED")
+                .and(w -> w.eq("status", "ISSUED").or(expired -> expired.eq("status", "CLAIMED")
+                        .le("claim_until", now)))
+                .set("status", "CLAIMED").set("claim_owner", owner)
+                .set("claim_until", now.plus(lease)).set("local_fencing_token", token)
                 .setSql("version=version+1");
         if (permitMapper.update(null, update) != 1) throw new IllegalStateException("permit 已被其他实例领取");
         return permitMapper.selectById(permitId);
     }
 
     @Transactional
-    public DeletePermitEntity consumePermit(long permitId) {
-        return movePermit(permitId, "CLAIMED", "CONSUMED");
+    public DeletePermitEntity consumePermit(long permitId, String owner, long fencingToken) {
+        assertPermitLease(permitId, owner, fencingToken);
+        DeletePermitEntity permit = permitMapper.selectById(permitId);
+        UpdateWrapper<DeletePermitEntity> update = new UpdateWrapper<>();
+        update.eq("id", permitId).eq("version", permit.getVersion()).eq("status", "CLAIMED")
+                .eq("claim_owner", owner).eq("local_fencing_token", fencingToken)
+                .gt("claim_until", LocalDateTime.now()).set("status", "CONSUMED")
+                .set("claim_until", null).setSql("version=version+1");
+        if (permitMapper.update(null, update) != 1) throw new IllegalStateException("permit 租约已失效或被其他实例接管");
+        return permitMapper.selectById(permitId);
+    }
+
+    public void assertPermitLease(long permitId, String owner, long fencingToken) {
+        DeletePermitEntity permit = permitMapper.selectById(permitId);
+        if (permit == null || !"CLAIMED".equals(permit.getStatus()) || !java.util.Objects.equals(owner, permit.getClaimOwner())
+                || permit.getLocalFencingToken() == null || permit.getLocalFencingToken() != fencingToken
+                || permit.getClaimUntil() == null || !permit.getClaimUntil().isAfter(LocalDateTime.now())) {
+            throw new IllegalStateException("permit 租约或 fencing token 无效");
+        }
+    }
+
+    @Transactional
+    public void renewPermitLease(long permitId, String owner, long fencingToken, Duration lease) {
+        if (lease == null || lease.isZero() || lease.isNegative()) {
+            throw new IllegalArgumentException("permit 续租时长非法");
+        }
+        LocalDateTime now = LocalDateTime.now();
+        UpdateWrapper<DeletePermitEntity> update = new UpdateWrapper<>();
+        update.eq("id", permitId).eq("status", "CLAIMED").eq("claim_owner", owner)
+                .eq("local_fencing_token", fencingToken).gt("claim_until", now)
+                .set("claim_until", now.plus(lease)).setSql("version=version+1");
+        if (permitMapper.update(null, update) != 1) {
+            throw new IllegalStateException("permit 租约已失效或被其他实例接管");
+        }
+    }
+
+    public void validatePermitObjectSet(long taskId, List<String> permitKeys) {
+        java.util.Set<String> expected = listItems(taskId).stream().map(CleanupItemEntity::getObjectKey)
+                .collect(java.util.stream.Collectors.toCollection(java.util.LinkedHashSet::new));
+        java.util.Set<String> actual = permitKeys == null ? java.util.Set.of() : permitKeys.stream()
+                .filter(java.util.Objects::nonNull)
+                .collect(java.util.stream.Collectors.toCollection(java.util.LinkedHashSet::new));
+        if (!expected.equals(actual)) throw new IllegalStateException("清理 permit 对象集合与本地冻结任务不匹配");
+    }
+
+    /** permit 必须逐项绑定对象键和不可变版本身份，并复述冻结集合摘要。 */
+    public void validatePermitObjectSet(long taskId, List<CleanupClient.PermitObject> permitObjects,
+                                        String permitObjectSetHash) {
+        CleanupTaskEntity task = get(taskId);
+        if (blank(permitObjectSetHash) || !java.util.Objects.equals(task.getObjectSetHash(), permitObjectSetHash))
+            throw new IllegalStateException("清理 permit 缺少或不匹配冻结对象集合摘要");
+        java.util.Set<String> expected = listItems(taskId).stream()
+                .map(item -> exactIdentity(item.getObjectKey(), item.getVersionIdentity()))
+                .collect(java.util.stream.Collectors.toCollection(java.util.LinkedHashSet::new));
+        if (permitObjects == null || permitObjects.stream().anyMatch(item -> item == null
+                || blank(item.objectKey()) || blank(item.versionIdentity())))
+            throw new IllegalStateException("清理 permit 必须绑定每个对象的精确版本身份");
+        java.util.Set<String> actual = permitObjects.stream()
+                .map(item -> exactIdentity(item.objectKey(), item.versionIdentity()))
+                .collect(java.util.stream.Collectors.toCollection(java.util.LinkedHashSet::new));
+        if (actual.size() != permitObjects.size() || !expected.equals(actual))
+            throw new IllegalStateException("清理 permit 对象版本集合与本地冻结任务不匹配");
     }
 
     @Transactional
@@ -237,13 +338,35 @@ public class CleanupTaskService {
     }
 
     @Transactional
+    public CleanupItemEntity markItem(String taskNo, String objectKey, String versionIdentity, String status,
+                                      String errorMessage, long actualBytes) {
+        CleanupTaskEntity task = findByTaskNo(taskNo);
+        if (task == null) return null;
+        CleanupItemEntity item = itemMapper.selectOne(Wrappers.<CleanupItemEntity>lambdaQuery()
+                .eq(CleanupItemEntity::getCleanupTaskId, task.getId())
+                .eq(CleanupItemEntity::getObjectKey, objectKey)
+                .eq(CleanupItemEntity::getVersionIdentity, versionIdentity).last("LIMIT 1"));
+        if (item == null) throw new IllegalStateException("清理对象精确版本不存在于冻结集合");
+        return markItem(item.getId(), status, errorMessage, actualBytes);
+    }
+
+    private static String exactIdentity(String key, String version) { return key + "\u0000" + version; }
+
+    private static String sha256(String value) {
+        try {
+            return java.util.HexFormat.of().formatHex(java.security.MessageDigest.getInstance("SHA-256")
+                    .digest(value.getBytes(java.nio.charset.StandardCharsets.UTF_8)));
+        } catch (Exception impossible) { throw new IllegalStateException("SHA-256不可用", impossible); }
+    }
+
+    @Transactional
     public CleanupTaskEntity refreshTaskStatus(long taskId) {
         CleanupTaskEntity task = get(taskId);
         List<CleanupItemEntity> items = listItems(taskId);
         String status = "CREATED";
         if (!items.isEmpty()) {
             boolean failed = items.stream().anyMatch(item -> "FAILED".equals(item.getDeletionStatus()));
-            boolean pending = items.stream().anyMatch(item -> !List.of("DELETED", "SKIPPED").contains(item.getDeletionStatus()));
+            boolean pending = items.stream().anyMatch(item -> !List.of("DELETED", "SKIPPED", "FAILED").contains(item.getDeletionStatus()));
             status = pending ? "RUNNING" : failed ? "PARTIAL" : "SUCCEEDED";
         }
         if (!status.equals(task.getStatus()) && !"PAUSED".equals(task.getStatus())) {

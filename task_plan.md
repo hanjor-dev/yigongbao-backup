@@ -10,6 +10,8 @@
 - [complete] 4. 实现后端修复与冷备独立接口/任务查询能力
 - [complete] 5. 实现冷备封存/导入独立前端页面及正确导航
 - [complete] 6. 运行定向与完整测试，代码审查并修复问题
+- [complete] 7. 为管理概览活动告警增加可审计的持久化手动关闭能力，并在异常恢复后解除关闭状态
+- [complete] 8. 修复备份重试成功后仍按最终失败展示旧失败原因的问题，并统一订单/文件明细语义
 
 ## 约束与决策
 - 保留当前工作区已有未提交改动，不回退、不覆盖无关内容。
@@ -20,4 +22,6 @@
 | 错误 | 次数 | 处理 |
 |---|---:|---|
 | `npx openskills read planning-with-files` 找不到技能 | 1 | 从本机技能目录读取 SKILL.md，不重复调用 |
+| planning-with-files 在 `.codex` 与 `.agents` 目录均不存在 | 1 | 从本机 `.cc-switch/skills` 目录读取，不重复失效路径 |
 | `sdd-workspace` 在 Windows 上被 WSL bash 启动器接管且无 `/bin/bash` | 1 | 按技能约定手工创建同结构 ledger，不重复调用 |
+| `npx openskills read planning-with-files` 找不到技能 | 1 | 从本机技能目录读取 SKILL.md，不重复调用 |

@@ -4,6 +4,7 @@ import org.junit.jupiter.api.Test;
 import com.yigongbao.backup.common.time.BusinessClock;
 import java.time.Clock;
 import java.util.List;
+import java.util.Set;
 import static org.assertj.core.api.Assertions.assertThat;
 
 class AdminOverviewAlertServiceTest {
@@ -55,5 +56,39 @@ class AdminOverviewAlertServiceTest {
                 .containsEntry("archiveId","9");
         assertThat(result.alerts().stream().filter(a->"GUARD".equals(a.code())).findFirst().orElseThrow().actionQuery())
                 .containsEntry("volumeId","2");
+    }
+
+    @Test void dismissedCurrentAlertIsExcludedFromHealthAndVisibleAlerts() {
+        AdminOverviewView.Summary summary=new AdminOverviewView.Summary(
+                new AdminOverviewView.ReadableOrders(1,0,0,0,1,0),
+                new AdminOverviewView.ReadableFiles(0,0,0,0,0),
+                new AdminOverviewView.TodayBackup(0,0,0,0,0));
+        var context=new AdminOverviewAlertService.AlertContext(
+                OverviewStoragePolicy.Result.emptyManagedWithoutActive(0,0),summary,null,null,true,
+                List.of(new AdminOverviewView.DataQualityMessage(
+                        "UNREADABLE_BACKUP_ARTIFACTS","WARNING","summary",1,"同一事实的质量提示")),List.of());
+
+        var result=service.evaluate(context,Set.of("UNREADABLE_BACKUP_ARTIFACTS:ORDER:unreadable"));
+
+        assertThat(result.alerts()).isEmpty();
+        assertThat(result.health().activeAlertCount()).isZero();
+        assertThat(result.health().criticalAlertCount()).isZero();
+        assertThat(result.health().level()).isEqualTo("SETUP_REQUIRED");
+    }
+
+    @Test void dismissingMetadataAlertAlsoRemovesItsDuplicateQualityContributionFromHealth() {
+        AdminOverviewView.Summary summary=new AdminOverviewView.Summary(
+                new AdminOverviewView.ReadableOrders(1,1,0,0,0,0),
+                new AdminOverviewView.ReadableFiles(1,10,0,0,1),
+                new AdminOverviewView.TodayBackup(0,0,0,0,0));
+        var context=new AdminOverviewAlertService.AlertContext(
+                OverviewStoragePolicy.Result.emptyManagedWithoutActive(0,0),summary,null,null,true,
+                List.of(new AdminOverviewView.DataQualityMessage(
+                        "ARTIFACT_METADATA_INCOMPLETE","WARNING","summary",1,"元数据不完整")),List.of());
+
+        var result=service.evaluate(context,Set.of("ARTIFACT_METADATA_INCOMPLETE:ORDER:metadata-incomplete"));
+
+        assertThat(result.alerts()).isEmpty();
+        assertThat(result.health().level()).isEqualTo("SETUP_REQUIRED");
     }
 }

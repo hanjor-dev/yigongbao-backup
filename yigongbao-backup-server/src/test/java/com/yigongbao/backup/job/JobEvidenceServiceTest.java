@@ -3,12 +3,108 @@ package com.yigongbao.backup.job;
 import com.yigongbao.backup.storage.volume.StorageVolumeEntity;
 import com.yigongbao.backup.storage.volume.StorageVolumeMapper;
 import com.yigongbao.backup.remote.RemoteCallException;
+import com.yigongbao.backup.order.OrderSnapshotEntity;
+import com.yigongbao.backup.order.OrderSnapshotMapper;
 import org.junit.jupiter.api.Test;
 import java.util.List;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.Mockito.*;
+import static org.assertj.core.api.Assertions.assertThat;
 
 class JobEvidenceServiceTest {
+    @Test void reloadsPersistedSnapshotCompletenessForRestartSummaries() {
+        JobOrderMapper orders = mock(JobOrderMapper.class);
+        OrderSnapshotMapper snapshots = mock(OrderSnapshotMapper.class);
+        JobOrderEntity row = new JobOrderEntity();
+        row.setId(1L); row.setJobId(99L); row.setSourceOrderId(5L); row.setSnapshotId(88L);
+        row.setStatus("SUCCEEDED");
+        OrderSnapshotEntity snapshot = new OrderSnapshotEntity();
+        snapshot.setId(88L); snapshot.setSourceOrderId(5L);
+        snapshot.setBackupCompleteness("INCOMPLETE"); snapshot.setRelationGapCount(2);
+        when(orders.selectList(any())).thenReturn(List.of(row));
+        when(snapshots.selectBatchIds(List.of(88L))).thenReturn(List.of(snapshot));
+        JobEvidenceService service = new JobEvidenceService(
+                orders, mock(JobFileMapper.class), mock(StorageVolumeMapper.class), snapshots);
+
+        assertThat(service.orders(99L)).singleElement().satisfies(saved -> {
+            assertThat(saved.getBackupCompleteness()).isEqualTo("INCOMPLETE");
+            assertThat(saved.getRelationGapCount()).isEqualTo(2);
+        });
+    }
+
+    @Test void persistsPerOrderRetryConsumptionForRestartRecovery() {
+        JobOrderMapper orders = mock(JobOrderMapper.class);
+        JobOrderEntity row = new JobOrderEntity();
+        row.setId(1L); row.setJobId(99L); row.setSourceOrderId(5L); row.setRetryCount(2);
+        when(orders.incrementRetryCount(99L, 5L)).thenReturn(1);
+        when(orders.selectOne(any())).thenReturn(row);
+        JobEvidenceService service = new JobEvidenceService(
+                orders, mock(JobFileMapper.class), mock(StorageVolumeMapper.class));
+
+        assertThat(service.consumeRetry(99L, 5L)).isEqualTo(2);
+        verify(orders).incrementRetryCount(99L, 5L);
+    }
+
+    @Test void storesStableLocalBusinessFailureCode() {
+        JobOrderMapper orders = mock(JobOrderMapper.class);
+        when(orders.selectOne(any())).thenReturn(null);
+        JobEvidenceService service = new JobEvidenceService(
+                orders, mock(JobFileMapper.class), mock(StorageVolumeMapper.class));
+
+        service.order(99L, 5L, null, "FAILED",
+                new JobFailureException("RELATION_STATE_UNSTABLE", "关系状态反复变化"));
+
+        verify(orders).insert(argThat((JobOrderEntity row) ->
+                "RELATION_STATE_UNSTABLE".equals(row.getFailureCode())));
+    }
+
+    @Test void persistsAndReloadsAutomaticDegradedCompensationStates() {
+        JobOrderMapper orders = mock(JobOrderMapper.class);
+        JobOrderEntity row = new JobOrderEntity();
+        row.setId(1L); row.setJobId(99L); row.setSourceOrderId(5L); row.setStatus("RUNNING");
+        JobOrderEntity degrading = new JobOrderEntity();
+        degrading.setId(1L); degrading.setJobId(99L); degrading.setSourceOrderId(5L);
+        degrading.setStatus("DEGRADE_PENDING"); degrading.setFailureCode("RELATION_BROKEN");
+        degrading.setFailureMessage("关系损坏");
+        when(orders.selectOne(any())).thenReturn(row, degrading);
+        when(orders.selectList(any())).thenReturn(List.of(row));
+        JobEvidenceService service = new JobEvidenceService(
+                orders, mock(JobFileMapper.class), mock(StorageVolumeMapper.class));
+        RemoteCallException broken = new RemoteCallException(
+                "关系损坏", 409, false, "RELATION_BROKEN", "req-1", "missing", null);
+
+        service.order(99L, 5L, null, "DEGRADE_PENDING", broken);
+        service.order(99L, 5L, null, "DEGRADING", null);
+
+        verify(orders).updateById(argThat((JobOrderEntity saved) -> "DEGRADE_PENDING".equals(saved.getStatus())
+                && "RELATION_BROKEN".equals(saved.getFailureCode())));
+        verify(orders).updateById(argThat((JobOrderEntity saved) -> "DEGRADING".equals(saved.getStatus())));
+        assertThat(service.orders(99L)).containsExactly(row);
+    }
+
+    @Test void successfulRetryExplicitlyKeepsPriorFailureEvidence() {
+        JobOrderMapper orders = mock(JobOrderMapper.class);
+        JobFileMapper files = mock(JobFileMapper.class);
+        JobOrderEntity order = new JobOrderEntity();
+        order.setId(1L); order.setJobId(99L); order.setSourceOrderId(5L);
+        order.setStatus("RETRY_PENDING"); order.setFailureCode("IOException"); order.setFailureMessage("closed");
+        JobFileEntity file = new JobFileEntity();
+        file.setId(2L); file.setJobId(99L); file.setSourceOrderId(5L);
+        file.setAssetIdentity("asset-1"); file.setStep("BACKUP_DOWNLOAD");
+        file.setStatus("FAILED"); file.setFailureCode("IOException"); file.setFailureMessage("closed");
+        when(orders.selectOne(any())).thenReturn(order);
+        when(files.selectOne(any())).thenReturn(file);
+        JobEvidenceService service = new JobEvidenceService(orders, files, mock(StorageVolumeMapper.class));
+
+        service.order(99L, 5L, 88L, "SUCCEEDED", null);
+        service.file(99L, 5L, "asset-1", "BACKUP_DOWNLOAD", "SUCCEEDED", 12L, 12L, null);
+
+        verify(orders).updateById(argThat((JobOrderEntity saved) -> "SUCCEEDED".equals(saved.getStatus())
+                && "IOException".equals(saved.getFailureCode()) && "closed".equals(saved.getFailureMessage())));
+        verify(files).updateById(argThat((JobFileEntity saved) -> "SUCCEEDED".equals(saved.getStatus())
+                && "IOException".equals(saved.getFailureCode()) && "closed".equals(saved.getFailureMessage())));
+    }
+
     @Test void storesRemoteBusinessCodeInsteadOfJavaExceptionClass() {
         JobOrderMapper orders = mock(JobOrderMapper.class);
         when(orders.selectOne(any())).thenReturn(null);

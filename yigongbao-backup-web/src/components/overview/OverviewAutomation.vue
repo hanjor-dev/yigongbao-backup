@@ -1,7 +1,52 @@
 <script setup>
-import { formatTime } from '../../overviewModel.js';
-defineProps({ automation: Object });
+import { computed } from 'vue';
+import { statusLabel } from '../StatusBadge.js';
+import { automationRows, elementTagType, executionModeLabel, formatInterval, formatTime } from '../../overviewModel.js';
+
+const props = defineProps({ automation: Object });
 defineEmits(['navigate']);
-const rows = value => [{ key:'backup',label:'自动备份',note:'错过计划时间不补跑',...value?.backup },{key:'accountSync',label:'账号同步',note:'按计划拉取线上账号',...value?.accountSync},{key:'cleanup',label:'自动清理',note:'受许可与保留策略保护',...value?.cleanup}];
+
+const rows = computed(() => automationRows(props.automation));
+const schedulePeriodText = item => [
+  item.executionMode ? executionModeLabel(item.executionMode) : '',
+  item.schedule ? `计划 ${item.schedule}` : '',
+  item.intervalValue ? formatInterval(item.intervalValue, item.intervalUnit) : ''
+].filter(Boolean).join(' · ') || '未配置';
 </script>
-<template><el-card shadow="never" class="overview-panel overview-automation"><template #header><div class="overview-panel__title"><div><span>自动化状态</span><small>计划开关、最近结果与下次预期</small></div></div></template><div class="automation-list"><button v-for="item in rows(automation)" :key="item.key" type="button" @click="$emit('navigate',item)"><span class="automation-icon"><el-icon><Timer /></el-icon></span><span class="automation-copy"><strong>{{ item.label }} <status-badge :value="item.enabled ? item.state : 'DISABLED'" /></strong><small>{{ item.message || item.note }}</small><em><template v-if="item.executionMode">模式 {{ item.executionMode }} · </template><template v-if="item.schedule">开始 {{ item.schedule }} · </template><template v-if="item.intervalValue">周期 {{ item.intervalValue }} {{ item.intervalUnit }} · </template>最近处理 {{ item.lastProcessedCount ?? '—' }} · 最近成功 {{ formatTime(item.lastSuccessAt) }} · 下次预期 {{ formatTime(item.nextExpectedAt) }}</em><em v-if="item.lastError">最近错误：{{ item.lastError }}</em></span><el-icon><ArrowRight /></el-icon></button></div></el-card></template>
+
+<template>
+  <el-card shadow="never">
+    <template #header><el-text tag="strong">自动化状态</el-text></template>
+    <el-table :data="rows" size="small">
+      <el-table-column prop="label" label="任务" width="96" />
+      <el-table-column label="状态" width="124">
+        <template #default="{ row }">
+          <el-space direction="vertical" alignment="flex-start" :size="4">
+            <el-tag size="small" :type="elementTagType(row.state)">调度 {{ statusLabel(row.state) }}</el-tag>
+            <el-tag size="small" :type="elementTagType(row.lastRunStatus)">执行 {{ statusLabel(row.lastRunStatus) }}</el-tag>
+          </el-space>
+        </template>
+      </el-table-column>
+      <el-table-column label="任务说明" min-width="220">
+        <template #default="{ row }">
+          <el-space direction="vertical" alignment="flex-start" :size="2">
+            <el-text size="small">{{ row.message || row.note }}</el-text>
+            <el-text v-if="row.lastError" type="danger" size="small">最近错误：{{ row.lastError }}</el-text>
+          </el-space>
+        </template>
+      </el-table-column>
+      <el-table-column label="调度时间" min-width="300">
+        <template #default="{ row }">
+          <el-space direction="vertical" alignment="flex-start" :size="2">
+            <el-text size="small">周期：{{ schedulePeriodText(row) }}</el-text>
+            <el-text type="info" size="small">最近成功：{{ formatTime(row.lastSuccessAt) }}</el-text>
+            <el-text type="info" size="small">下次预期：{{ formatTime(row.nextExpectedAt) }}</el-text>
+          </el-space>
+        </template>
+      </el-table-column>
+      <el-table-column label="操作" width="64" align="right">
+        <template #default="{ row }"><el-button link type="primary" @click="$emit('navigate', row)">查看</el-button></template>
+      </el-table-column>
+    </el-table>
+  </el-card>
+</template>

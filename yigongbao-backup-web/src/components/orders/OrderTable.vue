@@ -1,7 +1,7 @@
 <script setup>
 import { nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue';
 import { useBackupContext } from '../../composables/useBackupContext.js';
-import { formatJobOrderCreatedAt, incompleteBackupLabel, offlineStorageSummary, stickyTableScrollbarState, storageMountState } from '../../taskCenter.js';
+import { formatJobOrderCreatedAt, hotReplicaPresentation, incompleteBackupLabel, offlineStorageSummary, stickyTableScrollbarState, storageMountState } from '../../taskCenter.js';
 
 /* finesse · component: order-file-table · register=product
  * states: populated · empty · selected · unavailable · uploading
@@ -120,7 +120,7 @@ onBeforeUnmount(() => {
     <el-table-column label="文件规模" width="160"><template #default="{ row }"><strong>{{ row.assetCount ?? row.fileCount ?? 0 }}</strong><span class="muted"> 个 · {{ bytes(row.totalBytes ?? row.fileBytes) }}</span></template></el-table-column>
     <el-table-column label="存储卷 / 位置" min-width="300" show-overflow-tooltip><template #default="{ row }"><div>{{ row.storageVolumeName || row.storageVolumeId || '-' }} <status-badge v-if="row.storageTier" :value="row.storageTier" /> <status-badge :value="storageMountState(row)" /></div><small class="muted">{{ row.storageKey || '未记录位置' }}</small><small v-if="row.storageAccessible === false" class="muted">{{ row.storageUnavailableReason || '存储卷不可访问' }}</small><small v-if="row.storageDiagnosticReason" class="muted">副本诊断：{{ row.storageDiagnosticReason }}</small><small v-if="row.storageArchiveNote" class="muted">封存：{{ row.storageArchiveNote }}</small><small v-if="row.storageAccessible === false && offlineStorageSummary(row)" class="muted">冷备定位：{{ offlineStorageSummary(row) }}</small></template></el-table-column>
     <el-table-column label="云端" width="100"><template #default="{ row }"><status-badge :value="row.cloudRollup" /></template></el-table-column>
-    <el-table-column label="热备" width="100"><template #default="{ row }"><status-badge :value="row.hotRollup" /></template></el-table-column>
+    <el-table-column label="热备" width="112"><template #default="{ row }"><div class="replica-state"><status-badge :value="hotReplicaPresentation(row).rollup" /><el-tag v-if="hotReplicaPresentation(row).unreadable" size="small" type="danger" effect="plain">不可读</el-tag></div></template></el-table-column>
     <el-table-column label="冷备副本" width="110"><template #default="{ row }"><status-badge :value="row.coldRollup" /></template></el-table-column>
     <el-table-column label="操作" width="240" fixed="right" align="center">
       <template #default="{ row }">
@@ -166,4 +166,5 @@ onBeforeUnmount(() => {
 .order-actions { display: flex; align-items: center; justify-content: center; gap: 8px; white-space: nowrap; }
 .order-actions :deep(.el-upload) { display: inline-flex; }
 .order-actions :deep(.el-button) { min-height: 44px; margin-left: 0; }
+.replica-state { display: inline-flex; flex-direction: column; align-items: flex-start; gap: 4px; }
 </style>

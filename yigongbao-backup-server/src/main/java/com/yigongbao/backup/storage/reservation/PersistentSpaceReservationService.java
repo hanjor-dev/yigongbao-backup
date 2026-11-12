@@ -62,6 +62,7 @@ public class PersistentSpaceReservationService implements SpaceReservationServic
         if (pool == null || pool.getId() == null) throw new IllegalStateException("容量域不存在");
         pool = pools.selectForUpdate(pool.getId());
         if (pool.getAvailableBytes() == null || pool.getAvailableBytes() < bytes) throw new IllegalStateException("可用空间不足或容量未知");
+        reservations.expireStaleActive(pool.getId());
         Long active = reservations.sumActive(pool.getId());
         if (active == null || active > pool.getAvailableBytes() - bytes) throw new IllegalStateException("空间已被其他任务预留");
         long token = System.nanoTime();
@@ -90,6 +91,7 @@ public class PersistentSpaceReservationService implements SpaceReservationServic
         if (pool == null || pool.getId() == null) throw new IllegalStateException("存储卷容量域不存在");
         pool = pools.selectForUpdate(pool.getId());
         if (pool.getAvailableBytes() == null || pool.getAvailableBytes() < bytes) throw new IllegalStateException("可用空间不足或容量未知");
+        reservations.expireStaleActive(pool.getId());
         Long active = reservations.sumActive(pool.getId());
         if (active == null || active > pool.getAvailableBytes() - bytes) throw new IllegalStateException("空间已被其他任务预留");
         long token = System.nanoTime();

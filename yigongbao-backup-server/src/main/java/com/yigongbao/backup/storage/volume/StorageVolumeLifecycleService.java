@@ -17,6 +17,7 @@ import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
 import java.nio.charset.StandardCharsets;
+import java.nio.file.Files;
 import java.nio.file.Path;
 import java.time.LocalDateTime;
 import java.util.List;
@@ -192,7 +193,7 @@ public class StorageVolumeLifecycleService {
         if(matches>1) throw new StorageVolumeOperationException("检测到同一卷标记同时出现在多个挂载点，疑似克隆介质，拒绝挂载");
     }
 
-    private static String fingerprint(DiscoveredStorageVolume candidate) {
+    static String fingerprint(DiscoveredStorageVolume candidate) {
         if((candidate.volumeSerial()==null||candidate.volumeSerial().isBlank())
                 && candidate.accessType()==StorageAccessType.MAPPED_NETWORK)
             return "NETWORK|"+candidate.fileStoreName()+"|"+candidate.fileStoreType();
@@ -260,6 +261,42 @@ public class StorageVolumeLifecycleService {
 
     private static long elapsedMillis(long startedAt) {
         return (System.nanoTime() - startedAt) / 1_000_000L;
+    }
+
+    /**
+     * 取消备用身份并转为只读热备卷，为后续整盘封存或其他受控状态转换解除死循环。
+     * 备用卷正在承担生命周期操作、任务引用或空间预留时保持 fail-closed。
+     */
+    @Transactional
+    public StorageVolumeEntity cancelStandby(long volumeId, long operatorId) {
+        long startedAt = System.nanoTime();
+        log.info("取消存储卷备用状态开始｜存储卷ID={}｜操作人ID={}", volumeId, operatorId);
+        try {
+            StorageVolumeEntity entity = volumeMapper.findByIdForUpdate(volumeId);
+            if (entity == null || Integer.valueOf(1).equals(entity.getIsDeleted())) {
+                throw new StorageVolumeOperationException("存储卷不存在");
+            }
+            if (!StorageVolumeStatus.Tier.HOT.name().equals(entity.getTier())
+                    || !StorageVolumeStatus.Write.STANDBY.name().equals(entity.getWriteStatus())) {
+                throw new StorageVolumeOperationException("只有 HOT/STANDBY 备用卷可以取消备用");
+            }
+            if (!StorageVolumeStatus.Operation.IDLE.name().equals(defaultOperation(entity))) {
+                throw new StorageVolumeOperationException("存储卷正在执行其他生命周期操作，不能取消备用");
+            }
+            ensureNoOperationalReferences(entity, false);
+            entity.setWriteStatus(StorageVolumeStatus.Write.READ_ONLY.name());
+            entity.setUpdateBy(operatorId);
+            volumeMapper.updateById(entity);
+            audit(operatorId, "CANCEL_STANDBY", entity, "SUCCESS", null);
+            log.info("取消存储卷备用状态成功｜存储卷ID={}｜新写入状态={}｜操作人ID={}｜执行耗时={}毫秒",
+                    volumeId, entity.getWriteStatus(), operatorId, elapsedMillis(startedAt));
+            return entity;
+        } catch (RuntimeException failure) {
+            log.warn("取消存储卷备用状态失败｜存储卷ID={}｜操作人ID={}｜执行耗时={}毫秒｜异常类型={}｜异常原因={}",
+                    volumeId, operatorId, elapsedMillis(startedAt),
+                    failure.getClass().getSimpleName(), failure.getMessage());
+            throw failure;
+        }
     }
 
     /**
@@ -443,7 +480,136 @@ public class StorageVolumeLifecycleService {
 
     /** 供后台探测使用：只有已登记标记的介质才能被重新标记为在线。 */
     public boolean hasValidMarker(StorageVolumeEntity entity) {
-        return markerService.verify(Path.of(entity.getRootPath()), markerId(entity)).valid();
+        if (!markerService.verify(Path.of(entity.getRootPath()), markerId(entity)).valid()) return false;
+        return hasMatchingPhysicalFingerprint(entity);
+    }
+
+    /** marker 可复制，必须同时确认当前挂载点仍对应纳管时记录的物理介质。 */
+    public boolean hasMatchingPhysicalFingerprint(StorageVolumeEntity entity) {
+        if (entity == null || entity.getMountPath() == null || entity.getVolumeFingerprint() == null
+                || entity.getVolumeFingerprint().isBlank()) return false;
+        try {
+            return discoveryService.discoverMountedPaths(List.of(Path.of(entity.getMountPath()))).stream()
+                    .map(StorageVolumeLifecycleService::fingerprint)
+                    .anyMatch(entity.getVolumeFingerprint()::equals);
+        } catch (RuntimeException failure) {
+            return false;
+        }
+    }
+
+    /**
+     * 受控目录被误删后的安全降级恢复。
+     *
+     * <p>仅当挂载点仍是登记的同一物理卷、目录完全不存在且卷内没有任何历史文件副本或
+     * 已绑定任务时，才按原 marker 身份重建目录。目录存在但 marker 丢失时禁止自动补写，
+     * 避免把盘符复用、换盘或历史数据丢失误判为健康。</p>
+     */
+    @Transactional
+    public RootRecoveryResult recoverMissingManagedRoot(StorageVolumeEntity entity, long operatorId) {
+        if (entity == null || entity.getId() == null) {
+            return RootRecoveryResult.blocked("存储卷台账不存在");
+        }
+        Path root;
+        Path mount;
+        try {
+            root = Path.of(entity.getRootPath()).toAbsolutePath().normalize();
+            mount = Path.of(entity.getMountPath()).toAbsolutePath().normalize();
+        } catch (RuntimeException invalidPath) {
+            return recoveryBlocked("存储卷路径非法：" + invalidPath.getMessage());
+        }
+
+        if (Files.isDirectory(root)) {
+            StorageVolumeMarkerService.VerificationResult marker = markerService.verify(root, markerId(entity));
+            return marker.valid() ? RootRecoveryResult.noAction()
+                    : recoveryBlocked("卷标记校验失败：" + marker.reason());
+        }
+        if (Files.exists(root)) {
+            return recoveryBlocked("受控存储路径存在但不是目录，禁止自动重建");
+        }
+        if (!Files.isDirectory(mount)) {
+            return recoveryBlocked("挂载点不可访问，无法自动重建受控存储目录");
+        }
+
+        DiscoveredStorageVolume candidate = discoveryService.discoverMountedPaths(List.of(mount)).stream()
+                .filter(discovered -> root.equals(discovered.rootPath().toAbsolutePath().normalize()))
+                .findFirst().orElse(null);
+        if (candidate == null) {
+            return recoveryBlocked("无法读取挂载点物理信息，禁止自动重建受控存储目录");
+        }
+        String actualFingerprint;
+        try {
+            actualFingerprint = fingerprint(candidate);
+        } catch (RuntimeException unavailableIdentity) {
+            return recoveryBlocked("无法确认物理卷身份：" + unavailableIdentity.getMessage());
+        }
+        if (entity.getVolumeFingerprint() == null || entity.getVolumeFingerprint().isBlank()
+                || !entity.getVolumeFingerprint().equals(actualFingerprint)) {
+            return recoveryBlocked("当前挂载介质与登记物理卷不一致，禁止自动重建受控存储目录");
+        }
+
+        long activeCopies = artifactCopyMapper.selectCount(Wrappers.<ArtifactCopyEntity>lambdaQuery()
+                .eq(ArtifactCopyEntity::getStorageVolumeId, entity.getId())
+                .eq(ArtifactCopyEntity::getIsDeleted, 0));
+        if (activeCopies > 0) {
+            return recoveryBlocked("受控存储目录不存在，且卷内存在文件副本记录，禁止自动重建");
+        }
+        long boundJobs = jobMapper.selectCount(Wrappers.<JobEntity>lambdaQuery()
+                .eq(JobEntity::getTargetStorageVolumeId, entity.getId())
+                .eq(JobEntity::getIsDeleted, 0));
+        if (boundJobs > 0) {
+            return recoveryBlocked("受控存储目录不存在，且卷内存在已绑定任务，禁止自动重建");
+        }
+        if (hasActiveReservations(entity)) {
+            return recoveryBlocked("受控存储目录不存在，且卷内存在活动空间预留，禁止自动重建");
+        }
+
+        String previousMountStatus = entity.getMountStatus();
+        boolean initializedHere = false;
+        try {
+            markerService.initialize(root, markerId(entity));
+            initializedHere = true;
+            StorageVolumeHealthService.HealthSnapshot snapshot = healthService.probe(entity);
+            StorageVolumeCapacitySnapshotPolicy.apply(entity, snapshot, LocalDateTime.now());
+            if (!snapshot.accessible() || !snapshot.writable() || snapshot.totalBytes() <= 0) {
+                entity.setMountStatus(StorageVolumeStatus.Mount.UNAVAILABLE.name());
+                volumeMapper.updateById(entity);
+                return recoveryBlocked("受控目录已重建但健康探测未通过："
+                        + (snapshot.errorMessage() == null ? "目录不可写或容量不可用" : snapshot.errorMessage()));
+            }
+            entity.setMountStatus(StorageVolumeStatus.Mount.ONLINE.name());
+            entity.setUpdateBy(operatorId);
+            volumeMapper.updateById(entity);
+            audit(operatorId, "AUTO_RECOVER_ROOT", entity, "SUCCESS", null);
+            log.warn("受控存储目录自动恢复成功｜存储卷ID={}｜卷代码={}｜挂载点={}｜受控目录={}｜物理指纹={}｜可用容量={}字节",
+                    entity.getId(), entity.getVolumeCode(), mount, root, actualFingerprint, snapshot.usableBytes());
+            return RootRecoveryResult.recoveredSuccessfully();
+        } catch (Exception failure) {
+            entity.setMountStatus(previousMountStatus);
+            if (initializedHere) compensateCreatedRoot(root, markerId(entity));
+            return recoveryBlocked("受控存储目录自动重建失败：" + failure.getMessage());
+        }
+    }
+
+    /** 仅删除本次创建且尚无业务文件的目录；发现并发写入时保留现场并交给人工处理。 */
+    private void compensateCreatedRoot(Path root, UUID expectedMarkerId) {
+        try {
+            if (!markerService.verify(root, expectedMarkerId).valid()) return;
+            try (var entries = Files.list(root)) {
+                List<Path> existing = entries.toList();
+                if (existing.size() != 1 || !".yigongbao-volume.json".equals(existing.getFirst().getFileName().toString())) {
+                    log.error("受控目录恢复失败后发现并发文件，拒绝自动删除｜受控目录={}", root);
+                    return;
+                }
+                Files.deleteIfExists(existing.getFirst());
+            }
+            Files.deleteIfExists(root);
+        } catch (Exception cleanupFailure) {
+            log.error("受控目录恢复失败后的文件系统补偿失败｜受控目录={}", root, cleanupFailure);
+        }
+    }
+
+    private RootRecoveryResult recoveryBlocked(String reason) {
+        return RootRecoveryResult.blocked(reason);
     }
 
     private void audit(long operatorId, String action, StorageVolumeEntity volume, String result, String failureReason) {
@@ -469,6 +635,13 @@ public class StorageVolumeLifecycleService {
 
     public record RegisterCommand(Path mountPath, String volumeCode, String displayName,
                                   StorageVolumeStatus.Tier tier, Integer priority) {
+    }
+
+    public record RootRecoveryResult(boolean recovered, String reason) {
+        public static RootRecoveryResult recoveredSuccessfully() { return new RootRecoveryResult(true, null); }
+        public static RootRecoveryResult noAction() { return new RootRecoveryResult(false, null); }
+        public static RootRecoveryResult blocked(String reason) { return new RootRecoveryResult(false, reason); }
+        public boolean blocked() { return !recovered && reason != null && !reason.isBlank(); }
     }
 
     private record MarkerInfo(String volumeId, int formatVersion) {

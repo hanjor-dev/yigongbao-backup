@@ -1,15 +1,16 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
+import { navigationGroupsForRole } from '../src/stores/routeStore.js';
 
 const read = (path) => readFileSync(new URL(path, import.meta.url), 'utf8');
 
 test('admin backup page renders automatic backup tasks without candidate selection or task-center menu', () => {
   const view = read('../src/views/BackupView.vue');
   const consoleSource = read('../src/composables/useBackupConsole.js');
-  const layout = read('../src/layouts/BackupLayout.vue');
-  assert.match(layout, /key: 'backup'/);
-  assert.doesNotMatch(layout, /key: 'jobs'/);
+  const adminMenuItems = navigationGroupsForRole('ADMIN').flatMap((group) => group.items);
+  assert.ok(adminMenuItems.some((item) => item.key === 'backup'));
+  assert.ok(adminMenuItems.every((item) => item.key !== 'jobs'));
   assert.match(view, /JobTable/);
   assert.match(view, /JobDetail/);
   const table = read('../src/components/jobs/JobTable.vue');
@@ -25,6 +26,9 @@ test('admin backup page renders automatic backup tasks without candidate selecti
   assert.match(consoleSource, /\/admin\/backup\/jobs/);
   assert.match(consoleSource, /\/admin\/backup\/schedule\/run-now/);
   assert.match(view, /立即执行扫描/);
+  assert.match(consoleSource, /确认立即执行一次手工备份扫描/);
+  assert.match(consoleSource, /手工备份扫描已完成/);
+  assert.doesNotMatch(consoleSource, /确认立即执行一次自动备份扫描|自动备份扫描已完成/);
   assert.match(consoleSource, /retry-failed/);
   assert.match(consoleSource, /degraded-backup/);
   assert.match(consoleSource, /await loadJobDetails\(job\.id\);\s*if \(!isTerminalJob\(selectedJob\.value\)\) startJobPolling\(\);/);

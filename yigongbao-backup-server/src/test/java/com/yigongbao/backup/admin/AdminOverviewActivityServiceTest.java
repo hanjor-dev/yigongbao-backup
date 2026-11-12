@@ -27,4 +27,24 @@ class AdminOverviewActivityServiceTest {
         assertThat(activities).extracting(AdminOverviewView.Activity::actionRoute).containsExactlyInAnyOrder("backup","restore");
         assertThat(activities).allSatisfy(item->assertThat(item.actionQuery()).containsKey("jobId"));
     }
+
+    @Test void namesAutomaticCleanupAsCloudCleanup() {
+        LocalDateTime now=LocalDateTime.of(2026,11,12,14,0);
+        var cleanup=new AdminOverviewQueryMapper.RecentJobRow(6L,"J6","AUTO_CLEANUP","SUCCEEDED",1L,1L,1L,0L,0L,0L,now,now,now,null,null,null,null,null);
+
+        List<AdminOverviewView.Activity> activities=new AdminOverviewActivityService().merge(List.of(cleanup),List.of());
+
+        assertThat(activities).singleElement().extracting(AdminOverviewView.Activity::name).isEqualTo("云端清理");
+    }
+
+    @Test void excludesSupplementUploadsFromRecentActivities() {
+        LocalDateTime now=LocalDateTime.of(2026,11,12,10,30);
+        var supplement=new AdminOverviewQueryMapper.RecentJobRow(4L,"J4","SUPPLEMENT_UPLOAD","SUCCEEDED",1L,1L,0L,0L,0L,0L,now,now,now,null,null,null,null,null);
+        var backup=new AdminOverviewQueryMapper.RecentJobRow(5L,"J5","ORDER_BACKUP","SUCCEEDED",1L,1L,1L,0L,0L,0L,now.minusMinutes(1),now.minusMinutes(1),now.minusMinutes(1),null,null,null,null,null);
+
+        List<AdminOverviewView.Activity> activities=new AdminOverviewActivityService().merge(List.of(supplement,backup),List.of());
+
+        assertThat(activities).extracting(AdminOverviewView.Activity::activityType)
+                .containsExactly("ORDER_BACKUP");
+    }
 }

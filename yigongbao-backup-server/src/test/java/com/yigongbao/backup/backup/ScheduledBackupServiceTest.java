@@ -28,11 +28,12 @@ class ScheduledBackupServiceTest {
 
         verify(fixture.candidates).search(eq(""), eq(3), eq(""), any());
         ArgumentCaptor<String> payload = ArgumentCaptor.forClass(String.class);
-        verify(fixture.jobCreation).createForOrders(eq("ORDER_BACKUP"), anyString(), eq(0L), payload.capture(), eq(3));
+        verify(fixture.jobCreation).createForOrders(eq("MANUAL_BACKUP"), anyString(), eq(0L), payload.capture(), eq(3));
         ManualBackupJobHandler.Payload decoded = fixture.mapper.readValue(
                 payload.getValue(), ManualBackupJobHandler.Payload.class);
         assertThat(decoded.sourceOrderIds()).containsExactly(1L, 2L, 3L);
         assertThat(decoded.orderTotal()).isEqualTo(3);
+        assertThat(decoded.resolvedAutoDegradeOnRelationBroken()).isTrue();
     }
 
     @Test
@@ -40,15 +41,28 @@ class ScheduledBackupServiceTest {
         Fixture fixture = fixture(3);
         when(fixture.candidates.search(eq(""), anyInt(), eq(""), any())).thenReturn(new OnlineCandidateClient.Page(
                 candidates(1L, 2L), "", false, "high"));
-        when(fixture.jobOrders.selectList(any())).thenReturn(List.of(failed(3L), failed(4L)));
+        when(fixture.jobOrders.findRetryableFailedSourceOrderIds(1)).thenReturn(List.of(3L));
 
         fixture.service.runNowByAdministrator();
 
         ArgumentCaptor<String> payload = ArgumentCaptor.forClass(String.class);
-        verify(fixture.jobCreation).createForOrders(eq("ORDER_BACKUP"), anyString(), eq(0L), payload.capture(), eq(3));
+        verify(fixture.jobCreation).createForOrders(eq("MANUAL_BACKUP"), anyString(), eq(0L), payload.capture(), eq(3));
         ManualBackupJobHandler.Payload decoded = fixture.mapper.readValue(
                 payload.getValue(), ManualBackupJobHandler.Payload.class);
         assertThat(decoded.sourceOrderIds()).containsExactly(1L, 2L, 3L);
+    }
+
+    @Test
+    void checksExistingSnapshotsInBatchesInsteadOfOneQueryPerCandidate() {
+        Fixture fixture = fixture(3);
+        when(fixture.candidates.search(eq(""), anyInt(), eq(""), any())).thenReturn(new OnlineCandidateClient.Page(
+                candidates(1L, 2L, 3L), "", false, "high"));
+        when(fixture.snapshots.findBackedUpSourceOrderIds(anyList())).thenReturn(List.of(2L));
+
+        fixture.service.runNowByAdministrator();
+
+        verify(fixture.snapshots, times(1)).findBackedUpSourceOrderIds(anyList());
+        verify(fixture.snapshots, never()).selectCount(any());
     }
 
     private static Fixture fixture(int maximumOrders) {
@@ -68,17 +82,18 @@ class ScheduledBackupServiceTest {
         when(configs.get("backup.schedule.start-time", "05:00")).thenReturn("05:00");
         when(configs.getInt("backup.collection.days-before", 7, 0)).thenReturn(7);
         when(configs.getInt("backup.schedule.max-orders-per-run", 100, 1)).thenReturn(maximumOrders);
-        when(snapshots.selectCount(any())).thenReturn(0L);
-        when(jobOrders.selectList(any())).thenReturn(List.of());
+        when(snapshots.findBackedUpSourceOrderIds(anyList())).thenReturn(List.of());
+        when(jobOrders.findRetryableFailedSourceOrderIds(anyInt())).thenReturn(List.of());
         when(executionModes.mode()).thenReturn(BackupExecutionMode.REAL);
+        when(jobCreation.autoDegradeOnRelationBroken()).thenReturn(true);
         JobEntity created = new JobEntity();
         created.setId(99L); created.setJobNo("job-99");
-        when(jobCreation.createForOrders(eq("ORDER_BACKUP"), anyString(), eq(0L), anyString(), anyInt()))
+        when(jobCreation.createForOrders(anyString(), anyString(), anyLong(), anyString(), anyInt()))
                 .thenReturn(created);
 
         ScheduledBackupService service = new ScheduledBackupService(candidates, mapper, snapshots, coordinator,
                 configs, checkpoint, jobOrders, executionModes, jobCreation);
-        return new Fixture(service, candidates, mapper, jobOrders, jobCreation);
+        return new Fixture(service, candidates, mapper, snapshots, jobOrders, jobCreation);
     }
 
     private static List<OnlineCandidateClient.Candidate> candidates(Long... orderIds) {
@@ -96,6 +111,6 @@ class ScheduledBackupServiceTest {
     }
 
     private record Fixture(ScheduledBackupService service, OnlineCandidateClient candidates,
-                           ObjectMapper mapper, JobOrderMapper jobOrders,
+                           ObjectMapper mapper, OrderSnapshotMapper snapshots, JobOrderMapper jobOrders,
                            BackupJobCreationService jobCreation) { }
 }

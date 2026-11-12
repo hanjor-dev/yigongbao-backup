@@ -7,6 +7,16 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 class ConfigValueValidatorTest {
     @Test
+    void validatesDownloadTicketTtlBounds() {
+        assertThatCode(() -> ConfigValueValidator.validate("download.ticket.ttl-seconds", "120"))
+                .doesNotThrowAnyException();
+        assertThatThrownBy(() -> ConfigValueValidator.validate("download.ticket.ttl-seconds", "29"))
+                .isInstanceOf(IllegalArgumentException.class);
+        assertThatThrownBy(() -> ConfigValueValidator.validate("download.ticket.ttl-seconds", "601"))
+                .isInstanceOf(IllegalArgumentException.class);
+    }
+
+    @Test
     void acceptsDedicatedOnlineFileTransferTimeout() {
         assertThatCode(() -> ConfigValueValidator.validate("online.file-transfer-timeout-seconds", "7200"))
                 .doesNotThrowAnyException();
@@ -18,6 +28,12 @@ class ConfigValueValidatorTest {
         assertThatCode(() -> ConfigValueValidator.validate("backup.schedule.start-time", "05:00")).doesNotThrowAnyException();
         assertThatCode(() -> ConfigValueValidator.validate("backup.retry.max-retries", "3")).doesNotThrowAnyException();
         assertThatCode(() -> ConfigValueValidator.validate("backup.retry.delays-seconds", "60,300,900")).doesNotThrowAnyException();
+        assertThatCode(() -> ConfigValueValidator.validate("backup.auto-degrade-on-relation-broken", "true"))
+                .doesNotThrowAnyException();
+        assertThatCode(() -> ConfigValueValidator.validate("backup.auto-degrade-on-relation-broken", "false"))
+                .doesNotThrowAnyException();
+        assertThatThrownBy(() -> ConfigValueValidator.validate("backup.auto-degrade-on-relation-broken", "yes"))
+                .isInstanceOf(IllegalArgumentException.class).hasMessageContaining("true 或 false");
     }
 
     @Test

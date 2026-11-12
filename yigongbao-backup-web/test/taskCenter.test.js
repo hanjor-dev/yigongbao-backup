@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import * as taskCenter from '../src/taskCenter.js';
-import { canRetryFailedOrders, coldBatchCapabilities, coldImportDiagnostic, extractJobId, incompleteBackupLabel, isTerminalJob, jobProgress, normalizePage, offlineStorageSummary, replaceJobById, storageMountState, storageState, storageVolumeView, supplementTaskState, taskFailureSummary } from '../src/taskCenter.js';
+import { canRetryFailedOrders, coldBatchCapabilities, coldImportDiagnostic, extractJobId, hotReplicaPresentation, incompleteBackupLabel, isTerminalJob, jobProgress, normalizePage, offlineStorageSummary, replaceJobById, storageMountState, storageState, storageVolumeView, supplementTaskState, taskFailureSummary } from '../src/taskCenter.js';
 import { statusLabel, statusTone, workflowLabel } from '../src/components/StatusBadge.js';
 
 test('extractJobId handles command response envelope', () => {
@@ -49,6 +49,79 @@ test('normalizePage preserves server pagination metadata and safe defaults', () 
   assert.deepEqual(normalizePage(undefined), { records: [], current: 1, size: 20, total: 0, pages: 0 });
 });
 
+test('job evidence distinguishes retry recovery from a terminal failure', () => {
+  assert.equal(typeof taskCenter.jobEvidencePresentation, 'function');
+  assert.deepEqual(taskCenter.jobEvidencePresentation({
+    status: 'SUCCEEDED', retryRecovered: true,
+    failureCode: 'IOException', failureMessage: 'closed',
+  }), {
+    kind: 'recovered', label: '已重试成功',
+    detail: '最近一次失败：IOException closed',
+  });
+  assert.deepEqual(taskCenter.jobEvidencePresentation({
+    status: 'FAILED', failureCode: 'IOException', failureMessage: 'closed',
+  }), {
+    kind: 'failed', label: '失败', detail: 'IOException closed',
+  });
+  assert.deepEqual(taskCenter.jobEvidencePresentation({ status: 'SUCCEEDED' }), {
+    kind: 'none', label: '', detail: '',
+  });
+  assert.deepEqual(taskCenter.jobEvidencePresentation({
+    status: 'RETRY_PENDING', failureCode: 'IOException', failureMessage: 'closed',
+  }), {
+    kind: 'retrying', label: '等待重试', detail: '最近一次失败：IOException closed',
+  });
+  assert.deepEqual(taskCenter.jobEvidencePresentation({
+    status: 'FAILED', retryRecovered: true,
+    failureCode: 'IllegalStateException', failureMessage: '订单内其他文件失败，本文件随整单回滚',
+  }), {
+    kind: 'recovered', label: '已重试成功',
+    detail: '最近一次失败：IllegalStateException 订单内其他文件失败，本文件随整单回滚',
+  });
+  assert.deepEqual(taskCenter.jobEvidencePresentation({
+    status: 'SUCCEEDED', retryRecovered: true, backupCompleteness: 'INCOMPLETE',
+    relationGapCount: 2, autoDegraded: true,
+  }), {
+    kind: 'incomplete', label: '文件可能不完整',
+    detail: '缺失关系 2 · 已自动降级备份',
+  });
+  assert.deepEqual(taskCenter.jobEvidencePresentation({
+    status: 'DEGRADE_PENDING', failureCode: 'RELATION_BROKEN', failureMessage: '文件关系不完整',
+  }), {
+    kind: 'degrading', label: '等待降级备份',
+    detail: '触发原因：RELATION_BROKEN 文件关系不完整',
+  });
+  assert.deepEqual(taskCenter.jobEvidencePresentation({
+    status: 'DEGRADING', failureCode: 'RELATION_BROKEN', failureMessage: '文件关系不完整',
+  }), {
+    kind: 'degrading', label: '正在降级备份',
+    detail: '触发原因：RELATION_BROKEN 文件关系不完整',
+  });
+});
+
+test('automatic degraded workflow statuses have readable labels and non-danger tones', () => {
+  assert.equal(statusLabel('DEGRADE_PENDING'), '等待降级备份');
+  assert.equal(statusLabel('DEGRADING'), '正在降级备份');
+  assert.equal(statusTone('DEGRADE_PENDING'), 'warning');
+  assert.equal(statusTone('DEGRADING'), 'progress');
+});
+
+test('backup result summary distinguishes complete incomplete failed and automatic degraded outcomes', () => {
+  assert.deepEqual(taskCenter.backupResultSummary({
+    resultJson: JSON.stringify({
+      completeSucceeded: 8, incompleteSucceeded: 2, orderFailed: 1,
+      autoDegradedAttempted: 3, autoDegradedSucceeded: 2,
+    }),
+  }), {
+    completeSucceeded: 8, incompleteSucceeded: 2, orderFailed: 1,
+    autoDegradedAttempted: 3, autoDegradedSucceeded: 2,
+  });
+  assert.deepEqual(taskCenter.backupResultSummary({ orderCompleted: 4, orderFailed: 0 }), {
+    completeSucceeded: 4, incompleteSucceeded: 0, orderFailed: 0,
+    autoDegradedAttempted: 0, autoDegradedSucceeded: 0,
+  });
+});
+
 test('sticky order table scrollbar appears only while the native horizontal bar is below the viewport', () => {
   assert.equal(typeof taskCenter.stickyTableScrollbarState, 'function');
   assert.deepEqual(taskCenter.stickyTableScrollbarState({
@@ -81,6 +154,18 @@ test('storageState distinguishes hot backup availability from missing cold backu
   assert.deepEqual(storageState({
     hotRollup: 'PRESENT', storageVolumeId: 7, storageTier: 'COLD', storageMountStatus: 'OFFLINE', storageAccessible: false,
   }), { canDownload: false, message: '订单包所在冷备卷未挂载；请插入对应冷备盘并由管理员确认挂载' });
+});
+
+test('hot replica presentation marks an existing but quarantined hot copy as unreadable', () => {
+  assert.deepEqual(hotReplicaPresentation({
+    hotRollup: 'PRESENT', storageTier: 'HOT', storageAccessible: false,
+  }), { rollup: 'PRESENT', unreadable: true });
+  assert.deepEqual(hotReplicaPresentation({
+    hotRollup: 'PRESENT', storageTier: 'HOT', storageAccessible: true,
+  }), { rollup: 'PRESENT', unreadable: false });
+  assert.deepEqual(hotReplicaPresentation({
+    hotRollup: 'ABSENT', storageTier: 'COLD', storageAccessible: true,
+  }), { rollup: 'ABSENT', unreadable: false });
 });
 
 test('offline cold storage guidance includes the physical lookup information', () => {
@@ -206,6 +291,8 @@ test('statusTone maps common operational states to stable visual tones', () => {
   assert.equal(statusTone('VERIFYING'), 'progress');
   assert.equal(statusTone('REPAIR_REQUIRED'), 'danger');
   assert.equal(statusTone('PARTIAL'), 'warning');
+  assert.equal(statusTone('WAITING'), 'progress');
+  assert.equal(statusTone('NOT_RUN'), 'neutral');
 });
 
 test('statusLabel localizes storage archive verification and workflow values', () => {
@@ -218,11 +305,11 @@ test('statusLabel localizes storage archive verification and workflow values', (
     REPAIR_REQUIRED: '需要修复', REQUESTED: '已申请', SWITCHED: '已切换活动卷',
     MANIFEST_FROZEN: '清单已冻结', VERIFYING: '校验中', COMMITTING: '提交中',
     PREPARE_FAILED: '准备失败', VERIFY_FAILED: '校验失败', COMMIT_FAILED: '提交失败',
-    ABANDONED: '已放弃', VERIFIED: '已校验', PENDING: '待处理',
+    ABANDONED: '已放弃', VERIFIED: '已校验', PENDING: '待处理', WAITING: '等待首次执行', NOT_RUN: '尚未执行',
     ORDER_PACKAGE: '订单备份包', SUPPLEMENT_FILE: '补传文件',
     READY: '待清理', CLEANED: '已清理', FORCE_OVERWRITE: '强制覆盖', REJECT: '拒绝冲突',
     METADATA_SIMULATION: '元数据模拟', REAL: '真实执行', LOCAL: '本地磁盘', HOT_NAS: '热备网络存储',
-    LOGIN_SUCCESS: '登录成功', ACCOUNT_STATUS_CHANGE: '变更账号状态', STORAGE_VOLUME_UNAVAILABLE: '存储卷不可用',
+    LOGIN_SUCCESS: '登录成功', ACCOUNT_STATUS_CHANGE: '变更账号状态', CANCEL_STANDBY: '取消备用', STORAGE_VOLUME_REPAIR_ABNORMAL_STATE: '修复异常状态', STORAGE_VOLUME_UNAVAILABLE: '存储卷不可用',
     STORAGE_VOLUME_PREPARE_OFFLINE: '存储卷准备离线', ARTIFACT_CHECKSUM_FAILED: '文件校验和失败', OK: '成功', AUTH_FAILED: '认证失败',
   };
   for (const [value, label] of Object.entries(cases)) assert.equal(statusLabel(value), label, value);

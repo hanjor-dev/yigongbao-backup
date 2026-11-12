@@ -35,9 +35,7 @@ public class SupplementService {
                              ArtifactCopyMapper copies, ArtifactReplicaResolver replicas) { this.store=store; this.extensions=Set.of("zip", "step", "stl", "dcm"); this.maxBytes=1073741824L; this.mapper=mapper; this.runtimeConfig=runtimeConfig; this.volumes=volumes; this.copies=copies; this.replicas=replicas; }
     public String upload(String orderId, String fileName, InputStream content, long size) throws IOException {
         if (orderId == null || !orderId.matches("[A-Za-z0-9_-]{1,64}")) throw new IllegalArgumentException("订单号非法");
-        if (size < 0 || size > maxBytes()) throw new IllegalArgumentException("补传文件超过大小上限");
-        String safe = safeFileName(fileName); int dot=safe.lastIndexOf('.'); String ext=dot<0?"":safe.substring(dot+1).toLowerCase();
-        if (!allowedExtensions().contains(ext)) throw new IllegalArgumentException("补传文件格式不允许");
+        String safe = validateUpload(fileName, size); int dot=safe.lastIndexOf('.');
         String id=UUID.randomUUID().toString();
         String key="supplements/"+orderId+"/"+id+"-"+safe;
         store.put(0L, key, bounded(content));
@@ -56,11 +54,9 @@ public class SupplementService {
                                    long size, long uploadedBy, String contentType, String remark, long storageVolumeId) throws IOException {
         if (mapper == null) throw new IllegalStateException("补传元数据持久化未配置");
         if (snapshotId < 1) throw new IllegalArgumentException("订单快照非法");
-        String safe = safeFileName(fileName);
+        String safe = validateUpload(fileName, size);
         int dot = safe.lastIndexOf('.');
         String ext = dot < 0 ? "" : safe.substring(dot + 1).toLowerCase();
-        if (!allowedExtensions().contains(ext)) throw new IllegalArgumentException("补传文件格式不允许");
-        if (size < 0 || size > maxBytes()) throw new IllegalArgumentException("补传文件超过大小上限");
         String id = UUID.randomUUID().toString();
         String key = "supplements/" + safeOrder(orderId) + "/" + id + "-" + safe;
         String digest;
@@ -198,12 +194,26 @@ public class SupplementService {
                 .orElseThrow(() -> new java.nio.file.NoSuchFileException(fileId));
     }
 
+    public BkSupplementFileEntity findById(long id) {
+        return mapper == null ? null : mapper.selectById(id);
+    }
+
     private Set<String> allowedExtensions() {
         return runtimeConfig == null ? extensions : runtimeConfig.getCsvSet("supplement.allowed-extensions", String.join(",", extensions));
     }
 
     private long maxBytes() {
         return runtimeConfig == null ? maxBytes : runtimeConfig.getLong("supplement.max-file-size-bytes", maxBytes, 1L);
+    }
+
+    /** 在读取或落盘上传体之前完成文件名、扩展名和声明大小校验。 */
+    public String validateUpload(String fileName, long size) {
+        String safe = safeFileName(fileName);
+        int dot = safe.lastIndexOf('.');
+        String ext = dot < 0 ? "" : safe.substring(dot + 1).toLowerCase();
+        if (!allowedExtensions().contains(ext)) throw new IllegalArgumentException("补传文件格式不允许");
+        if (size < 0 || size > maxBytes()) throw new IllegalArgumentException("补传文件超过大小上限");
+        return safe;
     }
 
     private InputStream bounded(InputStream source) {

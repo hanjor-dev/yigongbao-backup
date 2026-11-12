@@ -29,4 +29,9 @@ public class BackupStageEntity extends BaseEntity {
     private LocalDateTime receiptAcceptedAt;
     private LocalDateTime publishedAt;
     private LocalDateTime supersededAt;
+    private String cleanupStatus;
+    private Integer cleanupRetryCount;
+    private LocalDateTime cleanupNextAt;
+    private String cleanupError;
+    private LocalDateTime cleanedAt;
 }

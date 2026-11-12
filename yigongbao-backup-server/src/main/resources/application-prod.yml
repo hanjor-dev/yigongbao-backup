@@ -1,10 +1,5 @@
 server:
   shutdown: graceful
-logging:
-  file:
-    name: ${BACKUP_LOG_FILE:./logs/yigongbao-backup-server.log}
-  level:
-    root: ${BACKUP_LOG_LEVEL:INFO}
 spring:
   servlet:
     multipart:

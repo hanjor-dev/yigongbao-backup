@@ -24,7 +24,8 @@ public class RemoteClientConfiguration {
         return new RemoteHttpSupport(mapper, () -> {
             OnlineConnectionSettingsProvider.Settings current = settings.current();
             return new RemoteHttpSupport.OnlineSettings(current.baseUri(), current.connectTimeout(),
-                    current.requestTimeout(), current.fileTransferTimeout(), current.sharedSecret());
+                    current.requestTimeout(), current.fileTransferTimeout(), current.sharedSecret(),
+                    current.externalAllowedHosts());
         });
     }
 

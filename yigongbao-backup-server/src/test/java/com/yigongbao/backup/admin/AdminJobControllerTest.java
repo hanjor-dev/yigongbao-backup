@@ -16,6 +16,31 @@ import static org.mockito.Mockito.*;
 
 class AdminJobControllerTest {
     @Test
+    void manualStrictTaskFreezesCurrentAutomaticDegradePolicy() throws Exception {
+        BackupJobCreationService creation = mock(BackupJobCreationService.class);
+        when(creation.autoDegradeOnRelationBroken()).thenReturn(true);
+        com.yigongbao.backup.job.JobEntity created = new com.yigongbao.backup.job.JobEntity();
+        created.setId(1L);
+        when(creation.createForOrders(anyString(), anyString(), anyLong(), anyString(), eq(1))).thenReturn(created);
+        AdminJobController controller = new AdminJobController(mock(PersistentJobService.class),
+                mock(PersistentJobCoordinator.class), new ObjectMapper(), creation,
+                mock(VolumeArchiveService.class));
+
+        try (MockedStatic<StpUtil> auth = mockStatic(StpUtil.class)) {
+            auth.when(() -> StpUtil.checkRole("ADMIN")).thenAnswer(invocation -> null);
+            auth.when(StpUtil::getLoginIdAsLong).thenReturn(9L);
+            controller.create(new AdminJobController.CreateCommand(1, 0,
+                    List.of(new AdminJobController.OrderCommand(7L, null)), List.of()));
+        }
+
+        var payload = org.mockito.ArgumentCaptor.forClass(String.class);
+        verify(creation).createForOrders(eq("MANUAL_BACKUP"), anyString(), eq(9L), payload.capture(), eq(1));
+        assertThat(new ObjectMapper().readValue(payload.getValue(),
+                com.yigongbao.backup.backup.ManualBackupJobHandler.Payload.class)
+                .resolvedAutoDegradeOnRelationBroken()).isTrue();
+    }
+
+    @Test
     void filesEndpointReturnsRequestedServerPageAndOrderScope() {
         PersistentJobService jobs = mock(PersistentJobService.class);
         PersistentJobService.JobFilePage page =

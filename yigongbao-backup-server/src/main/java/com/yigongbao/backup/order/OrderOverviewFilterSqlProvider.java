@@ -7,6 +7,34 @@ public final class OrderOverviewFilterSqlProvider {
     private OrderOverviewFilterSqlProvider(){}
     public static String selectIds(){return base(false);}
     public static String count(){return "SELECT COUNT(*) FROM ("+base(true)+") overview_orders";}
+    public static String readableCopyExistsForSnapshot() {
+        StorageVolumeAccessPolicy policy = new StorageVolumeAccessPolicy();
+        String readable = policy.readableSql(new StorageVolumeAccessSqlPredicate.SqlAliases("v", "a")).sql();
+        return "EXISTS (SELECT 1 FROM bk_order_package p JOIN bk_artifact_copy c "
+                + "ON c.artifact_type='ORDER_PACKAGE' AND c.artifact_id=p.id AND c.lifecycle='ACTIVE' AND c.is_deleted=0 "
+                + "LEFT JOIN bk_storage_volume v ON v.id=c.storage_volume_id "
+                + "LEFT JOIN bk_volume_archive a ON a.id=v.operation_ref_id "
+                + "WHERE p.snapshot_id=bk_order_snapshot.id AND p.is_deleted=0 AND p.status='AVAILABLE' "
+                + "AND p.backup_mode=bk_order_snapshot.backup_mode "
+                + "AND c.state IN ('PRESENT','VERIFIED') AND " + readable + ")";
+    }
+
+    public static String unreadableSnapshotPredicate() {
+        StorageVolumeAccessPolicy policy = new StorageVolumeAccessPolicy();
+        String offline = policy.expectedOfflineSql(new StorageVolumeAccessSqlPredicate.SqlAliases("v", "a")).sql();
+        String copy = " FROM bk_order_package p JOIN bk_artifact_copy c "
+                + "ON c.artifact_type='ORDER_PACKAGE' AND c.artifact_id=p.id AND c.lifecycle='ACTIVE' AND c.is_deleted=0 "
+                + "LEFT JOIN bk_storage_volume v ON v.id=c.storage_volume_id "
+                + "LEFT JOIN bk_volume_archive a ON a.id=v.operation_ref_id "
+                + "WHERE p.snapshot_id=bk_order_snapshot.id AND p.is_deleted=0 AND p.status='AVAILABLE' "
+                + "AND p.backup_mode=bk_order_snapshot.backup_mode";
+        String abnormal = "EXISTS (SELECT 1" + copy
+                + " AND (c.state NOT IN ('PRESENT','VERIFIED') OR c.storage_volume_id IS NULL "
+                + "OR v.id IS NULL OR NOT (" + offline + ")))";
+        return "bk_order_snapshot.backup_mode='REAL' AND bk_order_snapshot.snapshot_status='AVAILABLE' "
+                + "AND NOT " + readableCopyExistsForSnapshot()
+                + " AND (NOT EXISTS (SELECT 1" + copy + ") OR " + abnormal + ")";
+    }
     private static String base(boolean count){
         StorageVolumeAccessPolicy p=new StorageVolumeAccessPolicy();
         String readable=p.readableSql(new StorageVolumeAccessSqlPredicate.SqlAliases("v","a")).sql();

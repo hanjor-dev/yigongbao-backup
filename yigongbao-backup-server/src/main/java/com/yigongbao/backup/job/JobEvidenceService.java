@@ -1,7 +1,9 @@
 package com.yigongbao.backup.job;
 
 import com.baomidou.mybatisplus.core.toolkit.Wrappers;
-import lombok.RequiredArgsConstructor;
+import com.yigongbao.backup.order.OrderSnapshotEntity;
+import com.yigongbao.backup.order.OrderSnapshotMapper;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Service;
 import com.yigongbao.backup.storage.volume.StorageVolumeEntity;
 import com.yigongbao.backup.storage.volume.StorageVolumeMapper;
@@ -10,11 +12,25 @@ import com.yigongbao.backup.remote.RemoteCallException;
 
 /** 持久化任务的订单级、文件级进度以及可展示的订单业务快照。 */
 @Service
-@RequiredArgsConstructor
 public class JobEvidenceService {
     private final JobOrderMapper orders;
     private final JobFileMapper files;
     private final StorageVolumeMapper volumes;
+    private final OrderSnapshotMapper snapshots;
+
+    /** 兼容不启动 Spring 容器的单元测试。 */
+    public JobEvidenceService(JobOrderMapper orders, JobFileMapper files, StorageVolumeMapper volumes) {
+        this(orders, files, volumes, null);
+    }
+
+    @Autowired
+    public JobEvidenceService(JobOrderMapper orders, JobFileMapper files, StorageVolumeMapper volumes,
+                              OrderSnapshotMapper snapshots) {
+        this.orders = orders;
+        this.files = files;
+        this.volumes = volumes;
+        this.snapshots = snapshots;
+    }
 
     /** 在任何远程调用前创建本批全部订单，保证总数、待处理数和取消行为可追踪。 */
     public void initializeOrders(long jobId, List<Long> sourceOrderIds) {
@@ -23,6 +39,44 @@ public class JobEvidenceService {
                 // 任务恢复执行时保留已完成订单的终态，不能将其重置为 PENDING 后重复恢复。
                 .filter(orderId -> findOrder(jobId, orderId) == null)
                 .forEach(orderId -> order(jobId, orderId, null, "PENDING", null));
+    }
+
+    /** 读取任务订单状态，用于执行器租约恢复后重建补偿队列。 */
+    public List<JobOrderEntity> orders(long jobId) {
+        List<JobOrderEntity> rows = orders.selectList(Wrappers.<JobOrderEntity>lambdaQuery()
+                .eq(JobOrderEntity::getJobId, jobId)
+                .orderByAsc(JobOrderEntity::getId));
+        if (snapshots == null || rows == null || rows.isEmpty()) return rows;
+        List<Long> snapshotIds = rows.stream().map(JobOrderEntity::getSnapshotId)
+                .filter(java.util.Objects::nonNull).distinct().toList();
+        if (snapshotIds.isEmpty()) return rows;
+        java.util.Map<Long, OrderSnapshotEntity> byId = snapshots.selectBatchIds(snapshotIds).stream()
+                .collect(java.util.stream.Collectors.toMap(OrderSnapshotEntity::getId, item -> item));
+        rows.forEach(row -> {
+            OrderSnapshotEntity snapshot = byId.get(row.getSnapshotId());
+            if (snapshot == null) return;
+            row.setBackupCompleteness(snapshot.getBackupCompleteness());
+            row.setRelationGapCount(snapshot.getRelationGapCount());
+        });
+        return rows;
+    }
+
+    /** 原子消耗一次订单级重试预算，并返回数据库中的累计次数。 */
+    public int consumeRetry(long jobId, long sourceOrderId) {
+        if (orders.incrementRetryCount(jobId, sourceOrderId) != 1) {
+            throw new IllegalStateException("任务订单不存在，无法记录重试次数: " + sourceOrderId);
+        }
+        JobOrderEntity row = findOrder(jobId, sourceOrderId);
+        if (row == null || row.getRetryCount() == null) {
+            throw new IllegalStateException("任务订单重试次数读取失败: " + sourceOrderId);
+        }
+        return row.getRetryCount();
+    }
+
+    public void updateDegradePhase(long jobId, long sourceOrderId, String phase) {
+        if (orders.updateDegradePhase(jobId, sourceOrderId, phase) != 1) {
+            throw new IllegalStateException("任务订单不存在，无法记录自动降级阶段: " + sourceOrderId);
+        }
     }
 
     /** 执行前置条件失败时，将整批目标标记为失败，使列表统计和失败重试都有完整范围。 */
@@ -139,10 +193,23 @@ public class JobEvidenceService {
         return orders.selectOne(Wrappers.<JobOrderEntity>lambdaQuery().eq(JobOrderEntity::getJobId,jobId)
                 .eq(JobOrderEntity::getSourceOrderId,sourceId).last("limit 1"));
     }
-    private static void evidence(JobOrderEntity row,Throwable e){row.setFailureCode(failureCode(e));row.setFailureMessage(e==null?null:safe(e));}
-    private static void evidence(JobFileEntity row,Throwable e){row.setFailureCode(failureCode(e));row.setFailureMessage(e==null?null:safe(e));}
+    /**
+     * 成功重试只更新最终状态，不抹掉上一次失败证据。
+     *
+     * <p>失败码和失败说明同时承担历史审计用途；查询层会把“终态成功 + 历史失败”投影为
+     * “已重试成功”。显式保留字段也避免该语义依赖 MyBatis-Plus 的 null 更新策略。</p>
+     */
+    private static void evidence(JobOrderEntity row,Throwable e){
+        if(e==null)return;
+        row.setFailureCode(failureCode(e));row.setFailureMessage(safe(e));
+    }
+    private static void evidence(JobFileEntity row,Throwable e){
+        if(e==null)return;
+        row.setFailureCode(failureCode(e));row.setFailureMessage(safe(e));
+    }
     private static String failureCode(Throwable e){
         if(e==null)return null;
+        if(e instanceof JobFailureException failure)return failure.code();
         if(e instanceof JobPreconditionException precondition)return precondition.code();
         if(e instanceof RemoteCallException remote&&remote.code()!=null&&!remote.code().isBlank())return remote.code();
         return e.getClass().getSimpleName();

@@ -2,6 +2,11 @@ import { ref } from 'vue';
 
 const ROUTE_KEY = 'backup-current-page';
 const ROUTES = new Set(['overview', 'backup', 'restore', 'orders', 'accounts', 'storage', 'storage-volumes', 'cold-storage', 'cleanup', 'configs']);
+const NAVIGATION_GROUPS = Object.freeze([
+  { title: '工作台', items: [{ key: 'overview', label: '管理概览', icon: 'DataAnalysis', admin: true }, { key: 'orders', label: '订单文件', icon: 'Files' }] },
+  { title: '运营中心', items: [{ key: 'backup', label: '订单备份', icon: 'Download', admin: true }, { key: 'restore', label: '线上恢复', icon: 'Upload', admin: true }, { key: 'cold-storage', label: '冷备管理', icon: 'Box', admin: true }, { key: 'cleanup', label: 'COS 清理', icon: 'Delete', admin: true }] },
+  { title: '系统管理', items: [{ key: 'accounts', label: '本地账号', icon: 'User', admin: true }, { key: 'storage-volumes', label: '存储卷管理', icon: 'Coin', admin: true }, { key: 'configs', label: '系统配置', icon: 'Setting', admin: true }] }
+]);
 const QUERY_KEYS = Object.freeze({
   orders: new Set(['backupMode', 'storageAccessible', 'storageIssue']),
   backup: new Set(['jobId', 'finishedFrom', 'finishedTo', 'orderResult']),
@@ -13,6 +18,21 @@ const QUERY_KEYS = Object.freeze({
   cleanup: new Set(['focus']),
   configs: new Set(['key'])
 });
+
+export function defaultPageForRole(role) {
+  return role === 'ADMIN' ? 'overview' : 'orders';
+}
+
+export function canAccessPage(role, page) {
+  return ROUTES.has(page) && (role === 'ADMIN' || page === 'orders');
+}
+
+export function navigationGroupsForRole(role) {
+  return NAVIGATION_GROUPS.map((group) => ({
+    ...group,
+    items: group.items.filter((item) => role === 'ADMIN' || !item.admin)
+  })).filter((group) => group.items.length > 0);
+}
 
 function parseHash(hash) {
   const source = String(hash || '').replace(/^#/, '');
@@ -44,10 +64,18 @@ function hashFor(page, query) {
 }
 
 /** 轻量结构化 hash 路由：目标页与查询键均使用白名单，查询参数可一次性消费。 */
-export function createRouteStore() {
+export function createRouteStore(roleProvider = () => 'ADMIN') {
+  const currentRole = () => typeof roleProvider === 'function'
+    ? roleProvider()
+    : (roleProvider?.value || roleProvider || 'USER');
+  const accessiblePage = (candidate) => {
+    if (!ROUTES.has(candidate)) return 'orders';
+    return canAccessPage(currentRole(), candidate) ? candidate : defaultPageForRole(currentRole());
+  };
   const parsed = parseHash(window.location.hash);
   const saved = localStorage.getItem(ROUTE_KEY);
-  const initial = parsed.page || (ROUTES.has(saved) ? saved : 'orders');
+  const requested = parsed.page || (ROUTES.has(saved) ? saved : 'orders');
+  const initial = accessiblePage(requested);
   const page = ref(initial);
   const routeQuery = ref(parsed.page === initial ? parsed.query : {});
 
@@ -56,7 +84,7 @@ export function createRouteStore() {
   }
 
   function navigate(target, query) {
-    const next = ROUTES.has(target) ? target : 'orders';
+    const next = accessiblePage(target);
     const nextQuery = query === undefined && next === page.value ? routeQuery.value : safeQuery(next, query);
     page.value = next;
     routeQuery.value = { ...nextQuery };
@@ -80,10 +108,14 @@ export function createRouteStore() {
   function onHashChange() {
     const next = parseHash(window.location.hash);
     if (!next.page) return;
-    page.value = next.page;
-    routeQuery.value = next.query;
-    localStorage.setItem(ROUTE_KEY, next.page);
+    const accessible = accessiblePage(next.page);
+    page.value = accessible;
+    routeQuery.value = accessible === next.page ? next.query : {};
+    localStorage.setItem(ROUTE_KEY, accessible);
+    if (accessible !== next.page) syncHash();
   }
+
+  if (parsed.page && parsed.page !== initial) syncHash();
 
   return { page, routeQuery, navigate, consumeRouteQuery, onHashChange };
 }

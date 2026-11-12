@@ -1,15 +1,12 @@
 <script setup>
-import { ref } from 'vue';
+import { computed, ref } from 'vue';
 import { useBackupContext } from '../composables/useBackupContext.js';
+import { navigationGroupsForRole } from '../stores/routeStore.js';
 
-const { role, logout, page, navigate, isAdmin, selfPassword, changeSelfPassword } = useBackupContext();
+const { role, logout, page, navigate, selfPassword, changeSelfPassword } = useBackupContext();
 const passwordDialog = ref(false);
 const passwordLoading = ref(false);
-const groups = [
-  { title: '工作台', items: [{ key: 'overview', label: '管理概览', icon: 'DataAnalysis', admin: true }, { key: 'orders', label: '订单文件', icon: 'Files' }] },
-  { title: '运营中心', items: [{ key: 'backup', label: '订单备份', icon: 'Download', admin: true }, { key: 'restore', label: '线上恢复', icon: 'Upload', admin: true }, { key: 'cold-storage', label: '冷备管理', icon: 'Box', admin: true }, { key: 'cleanup', label: 'COS 清理', icon: 'Delete', admin: true }] },
-  { title: '系统管理', items: [{ key: 'accounts', label: '本地账号', icon: 'User', admin: true }, { key: 'storage-volumes', label: '存储卷管理', icon: 'Coin', admin: true }, { key: 'configs', label: '系统配置', icon: 'Setting', admin: true }] }
-];
+const groups = computed(() => navigationGroupsForRole(role.value));
 async function submitPassword() { passwordLoading.value = true; try { await changeSelfPassword(); passwordDialog.value = false; } finally { passwordLoading.value = false; } }
 </script>
 
@@ -21,7 +18,7 @@ async function submitPassword() { passwordLoading.value = true; try { await chan
       <el-menu :default-active="page" class="console-menu" :collapse-transition="false" @select="navigate">
         <template v-for="group in groups" :key="group.title">
           <div class="menu-group-title">{{ group.title }}</div>
-          <el-menu-item v-for="item in group.items" v-show="!item.admin || isAdmin" :key="item.key" :index="item.key"><el-icon><component :is="item.icon" /></el-icon><span>{{ item.label }}</span></el-menu-item>
+          <el-menu-item v-for="item in group.items" :key="item.key" :index="item.key"><el-icon><component :is="item.icon" /></el-icon><span>{{ item.label }}</span></el-menu-item>
         </template>
       </el-menu>
     </el-aside>

@@ -6,7 +6,17 @@ import java.nio.file.Path;
 public record SimulationArtifactResult(Path directory, int expectedFileCount, long expectedBytes,
                                        String storageKey, String packageSha256, long packageSize,
                                        java.util.Map<String, String> placeholderHashes,
-                                       java.util.Map<String, String> packageEntryNames) {
+                                       java.util.Map<String, String> packageEntryNames,
+                                       String backupCompleteness,
+                                       int relationGapCount) {
+    public SimulationArtifactResult(Path directory, int expectedFileCount, long expectedBytes,
+                                    String storageKey, String packageSha256, long packageSize,
+                                    java.util.Map<String, String> placeholderHashes,
+                                    java.util.Map<String, String> packageEntryNames) {
+        this(directory, expectedFileCount, expectedBytes, storageKey, packageSha256, packageSize,
+                placeholderHashes, packageEntryNames, "COMPLETE", 0);
+    }
+
     /** 将模拟包转换为统一的订单包证据结果。 */
     public OrderBackupPipeline.Result packageResult() {
         return new OrderBackupPipeline.Result(storageKey, packageSha256, packageSize,

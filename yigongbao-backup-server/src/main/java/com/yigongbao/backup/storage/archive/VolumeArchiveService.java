@@ -58,7 +58,7 @@ public class VolumeArchiveService {
         if(command.idempotencyKey()!=null&&!command.idempotencyKey().isBlank()){VolumeArchiveEntity existing=archiveMapper.selectOne(Wrappers.<VolumeArchiveEntity>lambdaQuery().eq(VolumeArchiveEntity::getIdempotencyKey,command.idempotencyKey()).eq(VolumeArchiveEntity::getIsDeleted,0).last("LIMIT 1"));if(existing!=null){if(existing.getJobId()!=null)return new Prepared(existing,source.getId(),jobMapper.selectById(existing.getJobId()));return resumePrepared(command,existing,source);}}
         List<VolumeArchiveBlockerService.Blocker> found=blockers.inspect(source.getId(),successorId);if(!found.isEmpty())throw new StorageVolumeOperationException(found.getFirst().message());
         VolumeArchiveEntity archive=new VolumeArchiveEntity();archive.setSourceVolumeId(source.getId());archive.setSuccessorVolumeId(successorId);archive.setAttemptNo((int)(archiveMapper.selectCount(Wrappers.<VolumeArchiveEntity>lambdaQuery().eq(VolumeArchiveEntity::getSourceVolumeId,source.getId()).eq(VolumeArchiveEntity::getIsDeleted,0))+1));archive.setIdempotencyKey(command.idempotencyKey()==null||command.idempotencyKey().isBlank()?UUID.randomUUID().toString():command.idempotencyKey());archive.setPhase("REQUESTED");archive.setArchiveNote(command.archiveNote().trim());archive.setOfflineLabelNote(command.offlineLabelNote());archive.setPhysicalLocation(command.physicalLocation());archive.setDisplayNameSnapshot(source.getDisplayName());archive.setRequestedBy(actorId);archiveMapper.insert(archive);
-        if("ACTIVE".equals(source.getWriteStatus())){lifecycle.switchActive(source.getId(),successorId,actorId);archive.setPhase("SWITCHED");}else{source.setOperationStatus(StorageVolumeStatus.Operation.SEALING.name());source.setUpdateBy(actorId);volumeMapper.updateById(source);StorageVolumeEntity guarantee=volumeMapper.findByIdForUpdate(successorId);if(guarantee==null||!StorageVolumeStatus.Write.ACTIVE.name().equals(guarantee.getWriteStatus()))throw new StorageVolumeOperationException("运行保障卷已不是当前 ACTIVE 卷");guarantee.setOperationStatus(StorageVolumeStatus.Operation.ARCHIVE_GUARD.name());guarantee.setUpdateBy(actorId);volumeMapper.updateById(guarantee);}
+        if("ACTIVE".equals(source.getWriteStatus())){lifecycle.switchActive(source.getId(),successorId,actorId);archive.setPhase("SWITCHED");}else{source.setOperationStatus(StorageVolumeStatus.Operation.SEALING.name());source.setUpdateBy(actorId);volumeMapper.updateById(source);StorageVolumeEntity guarantee=volumeMapper.findByIdForUpdate(successorId);if(guarantee==null||!StorageVolumeStatus.Write.ACTIVE.name().equals(guarantee.getWriteStatus())||!StorageVolumeStatus.Operation.IDLE.name().equals(guarantee.getOperationStatus()))throw new StorageVolumeOperationException("运行保障卷已不是空闲的当前 ACTIVE 卷");guarantee.setOperationStatus(StorageVolumeStatus.Operation.ARCHIVE_GUARD.name());guarantee.setUpdateBy(actorId);volumeMapper.updateById(guarantee);}
         source=volumeMapper.findByIdForUpdate(source.getId());source.setOperationRefId(archive.getId());volumeMapper.updateById(source);StorageVolumeEntity guarantee=volumeMapper.findByIdForUpdate(successorId);if(guarantee!=null&&"ARCHIVE_GUARD".equals(guarantee.getOperationStatus())){guarantee.setOperationRefId(archive.getId());volumeMapper.updateById(guarantee);}archiveMapper.updateById(archive);return new Prepared(archive,source.getId(),null);
     }
 
@@ -131,10 +131,13 @@ public class VolumeArchiveService {
         if (source == null || !StorageVolumeStatus.Tier.HOT.name().equals(source.getTier())
                 || !StorageVolumeStatus.Write.READ_ONLY.name().equals(source.getWriteStatus())
                 || !StorageVolumeStatus.Operation.SEALING.name().equals(source.getOperationStatus())
+                || !archiveIdEquals(source.getOperationRefId(), archiveId)
                 || successor == null || !StorageVolumeStatus.Tier.HOT.name().equals(successor.getTier())
                 || !StorageVolumeStatus.Write.ACTIVE.name().equals(successor.getWriteStatus())
-                || !StorageVolumeStatus.Operation.ARCHIVE_GUARD.name().equals(successor.getOperationStatus()))
-            throw new IllegalStateException("封存提交前卷状态已变化，拒绝提交 COLD");
+                || !StorageVolumeStatus.Operation.ARCHIVE_GUARD.name().equals(successor.getOperationStatus())
+                || !archiveIdEquals(successor.getOperationRefId(), archiveId))
+            throw new IllegalStateException("封存提交前卷状态已变化，拒绝提交 COLD｜"
+                    + volumeState("源卷", source) + "｜" + volumeState("保障卷", successor));
         source.setTier(StorageVolumeStatus.Tier.COLD.name()); source.setWriteStatus(StorageVolumeStatus.Write.READ_ONLY.name());
         source.setOperationStatus(StorageVolumeStatus.Operation.IDLE.name()); source.setOperationRefId(null);
         source.setArchiveNote(archive.getArchiveNote()); source.setOfflineLabelNote(archive.getOfflineLabelNote());
@@ -147,6 +150,16 @@ public class VolumeArchiveService {
         archive.setPhase("SUCCEEDED"); archive.setVerificationCompletedAt(LocalDateTime.now()); archive.setArchivedAt(LocalDateTime.now());
         archiveMapper.updateById(archive);
         audit(archive.getRequestedBy(),"STORAGE_VOLUME_ARCHIVE_SUCCEEDED",archive,"SUCCESS",null);
+    }
+
+    private static String volumeState(String role, StorageVolumeEntity volume) {
+        if (volume == null) return role + "不存在";
+        return role + "ID=" + volume.getId()
+                + ",tier=" + volume.getTier()
+                + ",mountStatus=" + volume.getMountStatus()
+                + ",writeStatus=" + volume.getWriteStatus()
+                + ",operationStatus=" + volume.getOperationStatus()
+                + ",operationRefId=" + volume.getOperationRefId();
     }
 
     @Transactional
@@ -195,7 +208,8 @@ public class VolumeArchiveService {
     private void releaseSuccessorGuard(VolumeArchiveEntity archive) {
         if (archive.getSuccessorVolumeId() == null) return;
         StorageVolumeEntity successor = volumeMapper.findByIdForUpdate(archive.getSuccessorVolumeId());
-        if (successor != null && "ARCHIVE_GUARD".equals(successor.getOperationStatus())) {
+        if (successor != null && "ARCHIVE_GUARD".equals(successor.getOperationStatus())
+                && archive.getId() != null && archiveIdEquals(successor.getOperationRefId(), archive.getId())) {
             successor.setOperationStatus(StorageVolumeStatus.Operation.IDLE.name()); successor.setOperationRefId(null);
             volumeMapper.updateById(successor);
         }

@@ -4,6 +4,7 @@ import com.yigongbao.backup.storage.api.ArtifactStore;
 import java.io.IOException;
 import java.io.InputStream;
 import java.nio.file.*;
+import java.nio.file.attribute.BasicFileAttributes;
 import java.util.Objects;
 import java.util.stream.Stream;
 
@@ -45,12 +46,22 @@ public final class LocalDirectoryArtifactStore implements ArtifactStore {
         Path resolved = root.resolve(relative).normalize();
         if (!resolved.startsWith(root)) throw new IllegalArgumentException("路径超出存储根目录");
         Path current = root;
-        if (Files.isSymbolicLink(current)) throw new IllegalArgumentException("存储根目录不能是符号链接");
+        if (isLinkOrReparsePoint(current)) throw new IllegalArgumentException("存储根目录不能是符号链接或重解析点");
         for (Path segment : relative) {
             current = current.resolve(segment);
             // Existing links are rejected before any API can follow them outside this volume.
-            if (Files.isSymbolicLink(current)) throw new IllegalArgumentException("存储路径不能包含符号链接");
+            if (isLinkOrReparsePoint(current)) throw new IllegalArgumentException("存储路径不能包含符号链接或重解析点");
         }
         return resolved;
+    }
+    private static boolean isLinkOrReparsePoint(Path path) {
+        if (!Files.exists(path, LinkOption.NOFOLLOW_LINKS)) return false;
+        try {
+            BasicFileAttributes attributes = Files.readAttributes(path, BasicFileAttributes.class,
+                    LinkOption.NOFOLLOW_LINKS);
+            return attributes.isSymbolicLink() || attributes.isOther();
+        } catch (IOException failure) {
+            throw new IllegalArgumentException("无法安全检查存储路径", failure);
+        }
     }
 }

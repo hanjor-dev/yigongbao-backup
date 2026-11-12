@@ -25,6 +25,7 @@ CALL add_backup_index_if_missing('bk_backup_candidate','uk_bk_candidate_order','
 CALL add_backup_index_if_missing('bk_backup_candidate','uk_bk_candidate_event','CREATE UNIQUE INDEX uk_bk_candidate_event ON bk_backup_candidate(source_event_id)');
 CALL add_backup_index_if_missing('bk_backup_candidate','idx_bk_candidate_claim','CREATE INDEX idx_bk_candidate_claim ON bk_backup_candidate(candidate_status,next_retry_at,version)');
 CALL add_backup_index_if_missing('bk_backup_candidate','idx_bk_candidate_cursor','CREATE INDEX idx_bk_candidate_cursor ON bk_backup_candidate(backup_eligible_at,source_event_id)');
+CALL add_backup_index_if_missing('bk_backup_stage','idx_bk_backup_stage_cleanup','CREATE INDEX idx_bk_backup_stage_cleanup ON bk_backup_stage(stage_status,cleanup_status,cleanup_next_at,id)');
 CALL add_backup_index_if_missing('bk_order_snapshot','uk_bk_snapshot_order','CREATE UNIQUE INDEX uk_bk_snapshot_order ON bk_order_snapshot(source_order_id)');
 CALL add_backup_index_if_missing('bk_order_snapshot','idx_bk_snapshot_code','CREATE INDEX idx_bk_snapshot_code ON bk_order_snapshot(order_code)');
 CALL add_backup_index_if_missing('bk_order_snapshot','idx_bk_snapshot_completed','CREATE INDEX idx_bk_snapshot_completed ON bk_order_snapshot(backup_completed_at,id)');
@@ -84,6 +85,7 @@ CALL add_backup_index_if_missing('bk_job_order','idx_bk_job_order_source_volume'
 CALL add_backup_index_if_missing('bk_job_order','idx_bk_job_order_storage_volume','CREATE INDEX idx_bk_job_order_storage_volume ON bk_job_order(storage_volume_id,job_id)');
 CALL add_backup_index_if_missing('bk_job','idx_bk_job_overview','CREATE INDEX idx_bk_job_overview ON bk_job(job_type,finished_at,id,is_deleted)');
 CALL add_backup_index_if_missing('bk_job_order','idx_bk_job_order_overview','CREATE INDEX idx_bk_job_order_overview ON bk_job_order(source_order_id,status,job_id,is_deleted)');
+CALL add_backup_index_if_missing('bk_job_order','idx_bk_job_order_failed_retry','CREATE INDEX idx_bk_job_order_failed_retry ON bk_job_order(status,is_deleted,id,source_order_id)');
 CALL add_backup_index_if_missing('bk_order_snapshot','idx_bk_snapshot_overview','CREATE INDEX idx_bk_snapshot_overview ON bk_order_snapshot(backup_mode,snapshot_status,backup_completed_at,source_order_id,is_deleted)');
 CALL add_backup_index_if_missing('bk_order_package','idx_bk_package_overview','CREATE INDEX idx_bk_package_overview ON bk_order_package(backup_mode,status,snapshot_id,is_deleted)');
 CALL add_backup_index_if_missing('bk_artifact_copy','idx_bk_artifact_overview','CREATE INDEX idx_bk_artifact_overview ON bk_artifact_copy(artifact_type,lifecycle,state,artifact_id,storage_volume_id,is_deleted)');
@@ -119,6 +121,7 @@ CALL add_backup_index_if_missing('bk_safety_event_outbox','idx_bk_safety_receipt
 CALL add_backup_index_if_missing('bk_audit_log','uk_bk_audit_sequence','CREATE UNIQUE INDEX uk_bk_audit_sequence ON bk_audit_log(chain_id,sequence_no)');
 CALL add_backup_index_if_missing('bk_audit_log','uk_bk_audit_hash','CREATE UNIQUE INDEX uk_bk_audit_hash ON bk_audit_log(entry_hash)');
 CALL add_backup_index_if_missing('bk_audit_log','idx_bk_audit_object','CREATE INDEX idx_bk_audit_object ON bk_audit_log(object_type,object_id,occurred_at)');
+CALL add_backup_index_if_missing('bk_audit_log','idx_bk_audit_cursor','CREATE INDEX idx_bk_audit_cursor ON bk_audit_log(is_deleted,occurred_at,id)');
 CALL add_backup_index_if_missing('bk_audit_chain_head','uk_bk_audit_chain','CREATE UNIQUE INDEX uk_bk_audit_chain ON bk_audit_chain_head(chain_id)');
 
 CALL add_backup_index_if_missing('cos_cleanup_task','uk_cos_cleanup_task_no','CREATE UNIQUE INDEX uk_cos_cleanup_task_no ON cos_cleanup_task(task_no)');
@@ -130,6 +133,7 @@ CALL add_backup_index_if_missing('cos_delete_permit','uk_cos_delete_permit_id','
 CALL add_backup_index_if_missing('cos_delete_permit','uk_cos_delete_permit_attempt','CREATE UNIQUE INDEX uk_cos_delete_permit_attempt ON cos_delete_permit(cleanup_task_id,attempt_no)');
 CALL add_backup_index_if_missing('cos_delete_permit','uk_cos_delete_permit_nonce','CREATE UNIQUE INDEX uk_cos_delete_permit_nonce ON cos_delete_permit(nonce)');
 CALL add_backup_index_if_missing('cos_delete_permit','idx_cos_delete_permit_status','CREATE INDEX idx_cos_delete_permit_status ON cos_delete_permit(cleanup_task_id,status,expires_at)');
+CALL add_backup_index_if_missing('cos_delete_permit','idx_cos_delete_permit_claim','CREATE INDEX idx_cos_delete_permit_claim ON cos_delete_permit(status,claim_until,claim_owner)');
 
 DROP PROCEDURE IF EXISTS add_backup_index_if_missing;
 

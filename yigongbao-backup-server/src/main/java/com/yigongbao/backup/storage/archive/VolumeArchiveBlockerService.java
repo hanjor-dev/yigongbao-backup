@@ -29,6 +29,13 @@ public class VolumeArchiveBlockerService {
         if (source == null || Integer.valueOf(1).equals(source.getIsDeleted())) return List.of(new Blocker("SOURCE_NOT_FOUND", "源卷不存在"));
         if (!"HOT".equals(source.getTier()) || !"ONLINE".equals(source.getMountStatus()))
             blockers.add(new Blocker("SOURCE_NOT_READY", "源卷必须是 HOT/ONLINE"));
+        if (!List.of(StorageVolumeStatus.Write.ACTIVE.name(), StorageVolumeStatus.Write.READ_ONLY.name())
+                .contains(source.getWriteStatus())) {
+            String message = StorageVolumeStatus.Write.STANDBY.name().equals(source.getWriteStatus())
+                    ? "备用卷不能直接整盘封存，请先取消备用并转为只读"
+                    : "整盘封存源卷必须是 ACTIVE 活动卷或 READ_ONLY 只读卷";
+            blockers.add(new Blocker("SOURCE_WRITE_STATE_NOT_READY", message));
+        }
         if (source.getOperationStatus() != null && !"IDLE".equals(source.getOperationStatus())
                 && !"REPAIR_REQUIRED".equals(source.getOperationStatus()))
             blockers.add(new Blocker("SOURCE_BUSY", "源卷正在执行其他操作"));
@@ -55,16 +62,20 @@ public class VolumeArchiveBlockerService {
             StorageVolumeEntity successor = successorId == null ? null : volumeMapper.selectById(successorId);
             if (successor == null || !"HOT".equals(successor.getTier()) || !"ONLINE".equals(successor.getMountStatus())
                     || !"ACTIVE".equals(successor.getWriteStatus()))
-                blockers.add(new Blocker("INVALID_SUCCESSOR", "重新封存必须选择当前 HOT/ONLINE/ACTIVE 保障卷"));
+                blockers.add(new Blocker("INVALID_SUCCESSOR", "整盘封存必须选择当前 HOT/ONLINE/ACTIVE 保障卷"));
         }
         if (successorId != null && successorId != sourceId) {
+            StorageVolumeEntity successor = volumeMapper.selectById(successorId);
+            if (successor != null && successor.getOperationStatus() != null
+                    && !StorageVolumeStatus.Operation.IDLE.name().equals(successor.getOperationStatus())) {
+                blockers.add(new Blocker("SUCCESSOR_BUSY", "接替卷正在保障其他封存任务或执行生命周期操作"));
+            }
             long successorJobs = jobMapper.selectCount(Wrappers.<JobEntity>lambdaQuery()
                     .eq(JobEntity::getTargetStorageVolumeId, successorId)
                     .in(JobEntity::getStatus, "CREATED", "RUNNING", "RETRYING_FAILED_ORDERS")
                     .eq(JobEntity::getIsDeleted, 0));
             if (successorJobs > 0 || jobOrderMapper.countRunningSourceReferences(successorId) > 0)
                 blockers.add(new Blocker("SUCCESSOR_RUNNING_TASK", "接替卷仍被非终态任务引用"));
-            StorageVolumeEntity successor = volumeMapper.selectById(successorId);
             if (successor != null && successor.getCapacityPoolId() != null
                     && reservationMapper.countActiveAt(successor.getCapacityPoolId(), LocalDateTime.now()) > 0)
                 blockers.add(new Blocker("SUCCESSOR_RESERVATION", "接替卷仍有活动空间预留"));

@@ -6,6 +6,7 @@ import com.fasterxml.jackson.datatype.jsr310.JavaTimeModule;
 import com.yigongbao.backup.storage.volume.StorageVolumeAccessPolicy;
 import org.junit.jupiter.api.Test;
 
+import java.time.LocalDate;
 import java.time.LocalDateTime;
 import java.util.List;
 import java.util.Map;
@@ -18,7 +19,8 @@ class AdminOverviewProjectionTest {
         AdminOverviewView view = new AdminOverviewView(LocalDateTime.of(2026, 11, 11, 17, 30),
                 new AdminOverviewView.Health("NORMAL", 0, 0, 0),
                 new AdminOverviewView.Sections("AVAILABLE", "AVAILABLE", "AVAILABLE", "AVAILABLE", "AVAILABLE", "AVAILABLE"),
-                null, null, List.of(), List.of(), null, List.of(),
+                null, null, List.of(), List.of(new AdminOverviewView.BackupTrendPoint(
+                        LocalDate.of(2026, 11, 11), 1, 0, 0, 0, 1024, 0)), null, List.of(),
                 new AdminOverviewView.DataQuality(true, List.of()), List.of());
 
         Map<String, Object> json = new ObjectMapper().registerModule(new JavaTimeModule())
@@ -26,6 +28,8 @@ class AdminOverviewProjectionTest {
 
         assertThat(json).containsOnlyKeys("observedAt", "health", "sections", "summary", "storage",
                 "activeAlerts", "backupTrend", "automation", "recentActivities", "dataQuality", "sectionErrors");
+        assertThat(((Map<?, ?>) ((List<?>) json.get("backupTrend")).getFirst()).get("date"))
+                .isEqualTo("2026-11-11");
     }
 
     @Test
@@ -86,10 +90,43 @@ class AdminOverviewProjectionTest {
         assertThat(summary.readableOrders().degradedRedundancy()).isEqualTo(1);
     }
 
+    @Test
+    @SuppressWarnings("unchecked")
+    void summarizesCurrentBackedUpOrdersByTierAndCountsAssetMetadata() {
+        LocalDateTime completed = LocalDateTime.of(2026, 11, 11, 8, 0);
+        List<AdminOverviewQueryMapper.ArtifactReplicaCandidateRow> rows = List.of(
+                aggregateWithTiers(1, 10, 100, completed, 1, 0),
+                aggregateWithTiers(2, 20, 200, completed, 0, 1),
+                aggregateWithTiers(3, 30, 300, completed, 1, 1),
+                aggregateWithTiers(4, 40, 400, completed, 0, 0)
+        );
+
+        AdminOverviewView.Summary summary = AdminOverviewProjection.summary(rows,
+                new AdminOverviewQueryMapper.ManagedArtifactSummaryRow(4096L, 0L, 6L),
+                new StorageVolumeAccessPolicy());
+        Map<String, Object> json = new ObjectMapper().convertValue(summary, new TypeReference<>() { });
+
+        assertThat(json).containsKey("orderStatistics");
+        assertThat((Map<String, Object>) json.get("orderStatistics"))
+                .containsEntry("total", 3L)
+                .containsEntry("hot", 2L)
+                .containsEntry("cold", 2L);
+        assertThat((Map<String, Object>) json.get("readableFiles"))
+                .containsEntry("logicalFileCount", 3L)
+                .containsEntry("metadataRecordCount", 6L);
+    }
+
     private static AdminOverviewQueryMapper.ArtifactReplicaCandidateRow aggregate(
             long order, long snapshot, long pkg, LocalDateTime completed, long readable, long abnormal) {
         return new AdminOverviewQueryMapper.ArtifactReplicaCandidateRow(order, snapshot, pkg, completed,
                 "COMPLETE", 1L, 100L, readable, 0L, readable + abnormal, 0L, abnormal);
+    }
+
+    private static AdminOverviewQueryMapper.ArtifactReplicaCandidateRow aggregateWithTiers(
+            long order, long snapshot, long pkg, LocalDateTime completed, long hot, long cold) {
+        long copies = hot + cold;
+        return new AdminOverviewQueryMapper.ArtifactReplicaCandidateRow(order, snapshot, pkg, completed,
+                "COMPLETE", 1L, 100L, hot, cold, copies, 0L, 0L, hot, cold);
     }
 
     private static AdminOverviewQueryMapper.ArtifactReplicaCandidateRow row(
@@ -100,7 +137,9 @@ class AdminOverviewProjectionTest {
         long readable=present&&"ONLINE".equals(mount)&&("HOT".equals(tier)||("COLD".equals(tier)&&"READ_ONLY".equals(write)))&&"IDLE".equals(operation)?1:0;
         long offline=present&&"COLD".equals(tier)&&"OFFLINE".equals(mount)&&"READ_ONLY".equals(write)&&"IDLE".equals(operation)?1:0;
         long abnormal=copyId!=null&&!present?1:0;
+        long hot=present&&"HOT".equals(tier)?1:0;
+        long cold=present&&"COLD".equals(tier)?1:0;
         return new AdminOverviewQueryMapper.ArtifactReplicaCandidateRow(order, snapshot, pkg, completed,
-                completeness, files, 100L,readable,offline,active,0L,abnormal);
+                completeness, files, 100L,readable,offline,active,0L,abnormal,hot,cold);
     }
 }

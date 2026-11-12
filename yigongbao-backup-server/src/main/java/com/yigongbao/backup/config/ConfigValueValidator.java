@@ -10,11 +10,13 @@ public final class ConfigValueValidator {
             "backup.schedule.max-orders-per-run",
             "backup.schedule.reconcile-enabled", "backup.schedule.reconcile-interval-hours",
             "backup.collection.days-before",
+            "backup.auto-degrade-on-relation-broken",
             "backup.retry.max-retries", "backup.retry.delays-seconds",
             "storage.backup-reservation-percent", "storage.volume-switch.enabled",
             "storage.volume-switch.threshold-percent", "storage.volume-health.interval-minutes",
             "storage.threshold.hot.percent", "storage.threshold.cold.percent",
             "storage.read-lease.ttl-seconds", "storage.read-lease.heartbeat-seconds",
+            "download.ticket.ttl-seconds",
             "cold.max-import-bytes",
             "restore.enabled", "restore.conflict-policy", "restore.retry-count",
             "cleanup.schedule.enabled", "cleanup.schedule.interval-hours", "cleanup.retention-days",
@@ -107,6 +109,11 @@ public final class ConfigValueValidator {
             if(seconds<5||seconds>3600) throw new IllegalArgumentException("读取租约心跳必须在5到3600秒之间");
             return;
         }
+        if (key.equals("download.ticket.ttl-seconds")) {
+            int seconds=integer(key,normalized);
+            if(seconds<30||seconds>600) throw new IllegalArgumentException("下载票据有效期必须在30到600秒之间");
+            return;
+        }
         if (key.equals("cleanup.batch-size") || key.endsWith("page-size")) {
             int size = integer(key, normalized);
             if (size < 1 || size > 500) throw new IllegalArgumentException(key + "必须在1到500之间");
@@ -126,6 +133,7 @@ public final class ConfigValueValidator {
         if (key.endsWith("-enabled") || key.endsWith("-required") || key.endsWith("-protection")
                 || key.endsWith("-deleted") || key.equals("backup.schedule.enabled")
                 || key.equals("account.sync-enabled") || key.equals("cleanup.schedule.enabled")
+                || key.equals("backup.auto-degrade-on-relation-broken")
                 || key.equals("restore.enabled") || key.equals("online.enabled")) {
             if (!normalized.equalsIgnoreCase("true") && !normalized.equalsIgnoreCase("false")) {
                 throw new IllegalArgumentException(key + "必须是 true 或 false");

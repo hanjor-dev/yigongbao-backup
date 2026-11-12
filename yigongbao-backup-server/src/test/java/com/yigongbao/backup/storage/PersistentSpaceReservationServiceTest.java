@@ -50,4 +50,29 @@ class PersistentSpaceReservationServiceTest {
         verify(probe).probe(artifactStore.root().toAbsolutePath().normalize());
         assertEquals(42L, saved.getValue().getJobId());
     }
+
+    @Test
+    void expiresStaleActiveRowsBeforeReusingTheSameJobReservationKey() {
+        StoragePoolMapper pools = mock(StoragePoolMapper.class);
+        SpaceReservationMapper rows = mock(SpaceReservationMapper.class);
+        StoragePoolEntity pool = new StoragePoolEntity();
+        pool.setId(7L); pool.setAvailableBytes(1000L);
+        when(pools.selectOne(any())).thenReturn(pool);
+        when(pools.selectForUpdate(7L)).thenReturn(pool);
+        when(rows.sumActive(7L)).thenReturn(0L);
+        StorageProbe probe = mock(StorageProbe.class);
+        ArtifactStore artifactStore = mock(ArtifactStore.class);
+        when(artifactStore.root()).thenReturn(Path.of("D:/yigongbao-backup/data"));
+        when(probe.probe(any())).thenReturn(new StorageProbe.StorageSnapshot(
+                "hot", Path.of("D:/yigongbao-backup/data"), 2000L, 1000L, true));
+
+        new PersistentSpaceReservationService(pools, rows, probe, artifactStore)
+                .reserve("hot", 100L, 42L);
+
+        var order = inOrder(pools, rows);
+        order.verify(pools).selectForUpdate(7L);
+        order.verify(rows).expireStaleActive(7L);
+        order.verify(rows).sumActive(7L);
+        order.verify(rows).insert(any(SpaceReservationEntity.class));
+    }
 }

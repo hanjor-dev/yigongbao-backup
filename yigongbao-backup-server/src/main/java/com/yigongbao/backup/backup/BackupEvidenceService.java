@@ -25,6 +25,11 @@ public class BackupEvidenceService {
     private final ArtifactCopyMapper artifactCopies;
     private final ObjectMapper mapper;
 
+    /** 按主键读取已经物化的订单快照，供并发回执冲突时做权威终态校验。 */
+    public OrderSnapshotEntity findSnapshot(Long snapshotId) {
+        return snapshotId == null ? null : snapshots.selectById(snapshotId);
+    }
+
     /** 幂等覆盖同一订单的当前备份证据；外部文件已完整提交后才调用。 */
     @Transactional
     public OrderSnapshotEntity save(Long orderId, BackupManifest manifest, OrderBackupPipeline.Result result) {
@@ -52,6 +57,7 @@ public class BackupEvidenceService {
 
     private OrderSnapshotEntity save(Long orderId, BackupManifest manifest, OrderBackupPipeline.Result result,
                                      BackupExecutionMode mode, Long storageVolumeId) {
+        manifest = manifest.withoutTransientSourceKeys();
         Map<String, Object> rawOrder = manifest.orderRaw() == null ? Map.of() : manifest.orderRaw();
         Map<String, Object> displayOrder = manifest.orderDisplay() == null ? rawOrder : manifest.orderDisplay();
         OrderSnapshotEntity snapshot = snapshots.selectOne(Wrappers.<OrderSnapshotEntity>lambdaQuery()

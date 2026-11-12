@@ -2,6 +2,7 @@ import { computed, onUnmounted, ref } from 'vue';
 import { api } from '../api.js';
 import { isTerminalJob, jobProgress, normalizePage, replaceJobById } from '../taskCenter.js';
 import { confirmAction } from '../uiFeedback.js';
+import { createDetailRequestGuard, createLatestRequestGuard } from '../jobDetailState.js';
 
 /**
  * 线上恢复任务的独立页面状态。
@@ -44,15 +45,29 @@ export function useRestoreTasks() {
   const loading = ref(false);
   const message = ref('');
   let pollTimer = null;
+  const detailRequestGuard = createDetailRequestGuard();
+  const listRequestGuard = createLatestRequestGuard();
 
   const selectedProgress = computed(() => jobProgress(selected.value));
 
   function stopPolling() {
-    if (pollTimer) clearInterval(pollTimer);
+    if (pollTimer) clearTimeout(pollTimer);
     pollTimer = null;
   }
 
+  function schedulePolling(taskId) {
+    stopPolling();
+    const scope = detailRequestGuard.captureTask();
+    pollTimer = setTimeout(async () => {
+      pollTimer = null;
+      if (!detailRequestGuard.isCurrentTask(scope)) return;
+      await loadDetail(taskId, true);
+      if (detailRequestGuard.isCurrentTask(scope) && !isTerminalJob(selected.value)) schedulePolling(taskId);
+    }, 3000);
+  }
+
   function resetOrderDetail() {
+    detailRequestGuard.closeOrder();
     selectedOrder.value = null;
     orderDetailVisible.value = false;
     orderDetailTab.value = 'overview';
@@ -67,26 +82,34 @@ export function useRestoreTasks() {
   }
 
   async function loadTasks(page = current.value) {
-    const result = await api(`/admin/restores/jobs?current=${encodeURIComponent(page)}&size=${encodeURIComponent(size.value)}`);
-    const data = normalizePage(result.data);
-    tasks.value = data.records;
-    current.value = data.current;
-    size.value = data.size;
-    total.value = data.total;
-    if (selected.value) {
-      const refreshed = tasks.value.find(item => String(item.id) === String(selected.value.id));
-      if (refreshed) selected.value = refreshed;
+    const requestToken = listRequestGuard.begin('restore-tasks');
+    try {
+      const result = await api(`/admin/restores/jobs?current=${encodeURIComponent(page)}&size=${encodeURIComponent(size.value)}`);
+      if (!listRequestGuard.isCurrent(requestToken)) return;
+      const data = normalizePage(result.data);
+      tasks.value = data.records;
+      current.value = data.current;
+      size.value = data.size;
+      total.value = data.total;
+      if (selected.value) {
+        const refreshed = tasks.value.find(item => String(item.id) === String(selected.value.id));
+        if (refreshed) selected.value = refreshed;
+      }
+    } catch (error) {
+      if (listRequestGuard.isCurrent(requestToken)) throw error;
     }
   }
 
   async function loadDetail(id = selected.value?.id, silent = false) {
     if (!id) return;
+    const requestToken = detailRequestGuard.beginTaskRequest('detail');
     loading.value = true;
     try {
       const [taskResult, orderResult] = await Promise.all([
         api(`/admin/restores/jobs/${encodeURIComponent(id)}`),
         api(`/admin/restores/jobs/${encodeURIComponent(id)}/orders?current=${encodeURIComponent(orderCurrent.value)}&size=${encodeURIComponent(orderSize.value)}`)
       ]);
+      if (!detailRequestGuard.isCurrentTaskRequest(requestToken)) return;
       selected.value = taskResult.data || null;
       tasks.value = replaceJobById(tasks.value, selected.value);
       const page = normalizePage(orderResult.data);
@@ -96,15 +119,17 @@ export function useRestoreTasks() {
       orderTotal.value = page.total;
       if (isTerminalJob(selected.value)) stopPolling();
     } catch (error) {
+      if (!detailRequestGuard.isCurrentTaskRequest(requestToken)) return;
       if (!silent) message.value = error.message || '恢复任务详情加载失败';
       stopPolling();
     } finally {
-      loading.value = false;
+      if (detailRequestGuard.isCurrentTaskRequest(requestToken)) loading.value = false;
     }
   }
 
   async function selectTask(task) {
     stopPolling();
+    detailRequestGuard.openTask(task.id);
     selected.value = task;
     detailVisible.value = true;
     detailTab.value = 'orders';
@@ -114,13 +139,12 @@ export function useRestoreTasks() {
     taskLogTotal.value = 0;
     resetOrderDetail();
     await loadDetail(task.id);
-    if (!isTerminalJob(selected.value)) {
-      pollTimer = setInterval(() => loadDetail(task.id, true), 3000);
-    }
+    if (detailRequestGuard.isCurrentTask(detailRequestGuard.captureTask()) && !isTerminalJob(selected.value)) schedulePolling(task.id);
   }
 
   function closeTaskDetail() {
     stopPolling();
+    detailRequestGuard.closeTask();
     detailVisible.value = false;
     detailTab.value = 'orders';
     selected.value = null;
@@ -169,18 +193,21 @@ export function useRestoreTasks() {
 
   async function loadTaskLogs(page = taskLogCurrent.value) {
     if (!selected.value?.id) return;
+    const requestToken = detailRequestGuard.beginTaskRequest('logs');
     taskLogLoading.value = true;
     try {
       const result = await api(`/admin/restores/jobs/${encodeURIComponent(selected.value.id)}/logs?current=${encodeURIComponent(page)}&size=${encodeURIComponent(taskLogSize.value)}`);
+      if (!detailRequestGuard.isCurrentTaskRequest(requestToken)) return;
       const data = normalizePage(result.data);
       taskLogRecords.value = data.records;
       taskLogCurrent.value = data.current;
       taskLogSize.value = data.size;
       taskLogTotal.value = data.total;
     } catch (error) {
+      if (!detailRequestGuard.isCurrentTaskRequest(requestToken)) return;
       message.value = error.message || '任务执行日志加载失败';
     } finally {
-      taskLogLoading.value = false;
+      if (detailRequestGuard.isCurrentTaskRequest(requestToken)) taskLogLoading.value = false;
     }
   }
 
@@ -191,6 +218,7 @@ export function useRestoreTasks() {
 
   function openOrderDetail(row) {
     resetOrderDetail();
+    detailRequestGuard.openOrder(row.sourceOrderId);
     selectedOrder.value = row;
     orderDetailVisible.value = true;
   }
@@ -201,35 +229,41 @@ export function useRestoreTasks() {
 
   async function loadOrderFiles(page = orderFileCurrent.value) {
     if (!selected.value?.id || !selectedOrder.value?.sourceOrderId) return;
+    const requestToken = detailRequestGuard.beginOrderRequest('files');
     orderFileLoading.value = true;
     try {
       const result = await api(`/admin/restores/jobs/${encodeURIComponent(selected.value.id)}/orders/${encodeURIComponent(selectedOrder.value.sourceOrderId)}/files?current=${encodeURIComponent(page)}&size=${encodeURIComponent(orderFileSize.value)}`);
+      if (!detailRequestGuard.isCurrentOrderRequest(requestToken)) return;
       const data = normalizePage(result.data);
       orderFiles.value = data.records;
       orderFileCurrent.value = data.current;
       orderFileSize.value = data.size;
       orderFileTotal.value = data.total;
     } catch (error) {
+      if (!detailRequestGuard.isCurrentOrderRequest(requestToken)) return;
       message.value = error.message || '订单文件明细加载失败';
     } finally {
-      orderFileLoading.value = false;
+      if (detailRequestGuard.isCurrentOrderRequest(requestToken)) orderFileLoading.value = false;
     }
   }
 
   async function loadOrderLogs(page = orderLogCurrent.value) {
     if (!selected.value?.id || !selectedOrder.value?.sourceOrderId) return;
+    const requestToken = detailRequestGuard.beginOrderRequest('logs');
     orderLogLoading.value = true;
     try {
       const result = await api(`/admin/restores/jobs/${encodeURIComponent(selected.value.id)}/orders/${encodeURIComponent(selectedOrder.value.sourceOrderId)}/logs?current=${encodeURIComponent(page)}&size=${encodeURIComponent(orderLogSize.value)}`);
+      if (!detailRequestGuard.isCurrentOrderRequest(requestToken)) return;
       const data = normalizePage(result.data);
       orderLogRecords.value = data.records;
       orderLogCurrent.value = data.current;
       orderLogSize.value = data.size;
       orderLogTotal.value = data.total;
     } catch (error) {
+      if (!detailRequestGuard.isCurrentOrderRequest(requestToken)) return;
       message.value = error.message || '订单执行日志加载失败';
     } finally {
-      orderLogLoading.value = false;
+      if (detailRequestGuard.isCurrentOrderRequest(requestToken)) orderLogLoading.value = false;
     }
   }
 

@@ -12,6 +12,7 @@ SELECT v.config_key, v.config_name, v.category_code, v.category_name, 'GLOBAL', 
        CURRENT_TIMESTAMP(3), CURRENT_TIMESTAMP(3), CURRENT_TIMESTAMP(3)
 FROM (
     SELECT 'backup.schedule.enabled' config_key, '自动备份开关' config_name, 'BACKUP_COLLECTION' category_code, '备份采集策略' category_name, 'BOOLEAN' value_type, 'true' config_value, '[{"label":"启用","value":"true"},{"label":"停用","value":"false"}]' options_json, '控制是否自动发现候选订单并创建热备任务。' description, NULL secret_ref
+    UNION ALL SELECT 'backup.auto-degrade-on-relation-broken','文件关系不完整时自动降级备份','BACKUP_COLLECTION','备份采集策略','BOOLEAN','true','[{"label":"启用","value":"true"},{"label":"停用","value":"false"}]','严格备份因RELATION_BROKEN失败后，在同一任务补偿阶段自动执行不完整备份；即使没有可恢复文件也保存订单快照和关系缺口。',NULL
     UNION ALL SELECT 'backup.schedule.interval-days','自动备份周期（天）','BACKUP_COLLECTION','备份采集策略','INTEGER','1',NULL,'自动备份任务执行周期，最小1天。',NULL
     UNION ALL SELECT 'backup.schedule.start-time','自动备份开始时间','BACKUP_COLLECTION','备份采集策略','STRING','05:00',NULL,'按服务器本地时区执行，格式HH:mm；服务停机错过后当天不补跑。',NULL
     UNION ALL SELECT 'backup.collection.days-before','备份X天前的订单','BACKUP_COLLECTION','备份采集策略','INTEGER','7',NULL,'按订单创建日期和服务器本地自然日计算；配置7表示执行日往前第7天及更早创建的正式订单进入备份范围。',NULL
@@ -44,6 +45,7 @@ FROM (
     UNION ALL SELECT 'online.connect-timeout-seconds','线上连接超时（秒）','ONLINE_INTEGRATION','线上系统连接','INTEGER','10',NULL,'HTTP建连超时，范围1至300秒。',NULL
     UNION ALL SELECT 'online.request-timeout-seconds','线上请求超时（秒）','ONLINE_INTEGRATION','线上系统连接','INTEGER','60',NULL,'普通线上接口请求超时，范围1至3600秒。',NULL
     UNION ALL SELECT 'online.file-transfer-timeout-seconds','线上文件传输超时（秒）','ONLINE_INTEGRATION','线上系统连接','INTEGER','7200',NULL,'备份下载和恢复上传等大文件流式传输超时，范围60至86400秒。',NULL
+    UNION ALL SELECT 'download.ticket.ttl-seconds','下载票据有效期（秒）','DOWNLOAD_SECURITY','下载安全','INTEGER','120',NULL,'单次下载票据有效期，范围30至600秒。',NULL
     UNION ALL SELECT 'storage.read-lease.ttl-seconds','存储读取租约时长（秒）','STORAGE','存储管理','INTEGER','600',NULL,'下载和恢复读取卷时的租约时长，必须大于两倍心跳间隔。',NULL
     UNION ALL SELECT 'storage.read-lease.heartbeat-seconds','存储读取租约心跳（秒）','STORAGE','存储管理','INTEGER','30',NULL,'长文件下载期间续租间隔。',NULL
     UNION ALL SELECT 'job.dispatch-interval-ms','任务派发间隔（毫秒）','JOB_EXECUTION','任务执行策略','INTEGER','1000',NULL,'扫描并领取待执行持久化任务的间隔，最小200毫秒。',NULL

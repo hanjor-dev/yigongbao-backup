@@ -30,7 +30,7 @@ class DegradedBackupInitSchemaTest {
             assertIndexes(indexes(connection, "bk_relation_gap"),
                     "uk_bk_relation_gap_owner", "idx_bk_relation_gap_reason", "idx_bk_relation_gap_hash");
             assertIndexes(indexes(connection, "bk_backup_stage"),
-                    "uk_bk_backup_stage_idempotency", "uk_bk_backup_stage_job_order",
+                    "uk_bk_backup_stage_idempotency", "idx_bk_backup_stage_job_order",
                     "idx_bk_backup_stage_order_status");
         }
     }

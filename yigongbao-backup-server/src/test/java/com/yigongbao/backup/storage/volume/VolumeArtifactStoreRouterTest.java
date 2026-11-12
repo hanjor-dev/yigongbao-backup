@@ -8,6 +8,7 @@ import java.util.UUID;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
+import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.when;
 
@@ -50,6 +51,27 @@ class VolumeArtifactStoreRouterTest {
         assertThatThrownBy(() -> router.open(1L, "../escape")).isInstanceOf(IllegalArgumentException.class);
     }
 
+    @Test
+    void shouldRejectMountedMediumWhosePhysicalFingerprintChanged() throws Exception {
+        StorageVolumeMapper mapper = mock(StorageVolumeMapper.class);
+        StorageVolumeMarkerService markers = new StorageVolumeMarkerService();
+        StorageVolumeDiscoveryService discovery = mock(StorageVolumeDiscoveryService.class);
+        java.nio.file.Path mount = Files.createTempDirectory("volume-fingerprint");
+        StorageVolumeEntity registered = writable(8L, mount);
+        registered.setMountPath(mount.toString());
+        initializeMarker(registered);
+        registered.setVolumeFingerprint("VSN|registered|NTFS|1000");
+        when(mapper.selectById(8L)).thenReturn(registered);
+        when(discovery.discoverMountedPaths(any())).thenReturn(java.util.List.of(
+                new DiscoveredStorageVolume(mount, mount, StorageAccessType.LOCAL,
+                        "disk", "NTFS", "replacement", 1000L, 900L, 100L)));
+        VolumeArtifactStoreRouter router = new VolumeArtifactStoreRouter(mapper, markers, discovery);
+
+        assertThatThrownBy(() -> router.open(8L, "orders/package.zip"))
+                .isInstanceOf(StorageVolumeUnavailableException.class)
+                .hasMessageContaining("物理卷");
+    }
+
     private static StorageVolumeEntity writable(long id, java.nio.file.Path root) {
         StorageVolumeEntity volume = new StorageVolumeEntity();
         volume.setId(id);
@@ -64,5 +86,9 @@ class VolumeArtifactStoreRouterTest {
         UUID markerId = UUID.randomUUID();
         new StorageVolumeMarkerService().initialize(java.nio.file.Path.of(volume.getRootPath()), markerId);
         volume.setMarkerJson("{\"volumeId\":\"" + markerId + "\",\"formatVersion\":1}");
+        volume.setMountPath(volume.getRootPath());
+        DiscoveredStorageVolume discovered = new StorageVolumeDiscoveryService()
+                .discoverMountedPaths(java.util.List.of(java.nio.file.Path.of(volume.getMountPath()))).getFirst();
+        volume.setVolumeFingerprint(StorageVolumeLifecycleService.fingerprint(discovered));
     }
 }

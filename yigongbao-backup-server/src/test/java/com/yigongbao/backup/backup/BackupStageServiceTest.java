@@ -15,6 +15,26 @@ import static org.mockito.Mockito.*;
 
 class BackupStageServiceTest {
     @Test
+    void concurrentReconciliationRequiresAnAuthoritativeAvailableSnapshot() {
+        BackupStageMapper mapper = mock(BackupStageMapper.class);
+        BackupEvidenceService evidence = mock(BackupEvidenceService.class);
+        BackupStageEntity available = new BackupStageEntity();
+        available.setId(7L); available.setSourceOrderId(42L); available.setPublishedSnapshotId(19L);
+        available.setStageStatus("AVAILABLE"); available.setBackupCompleteness("INCOMPLETE");
+        OrderSnapshotEntity snapshot = new OrderSnapshotEntity();
+        snapshot.setId(19L); snapshot.setSourceOrderId(42L); snapshot.setSnapshotStatus("AVAILABLE");
+        snapshot.setBackupCompleteness("INCOMPLETE");
+        when(evidence.findSnapshot(19L)).thenReturn(snapshot);
+        BackupStageService service = new BackupStageService(mapper, evidence, new ObjectMapper());
+
+        assertThat(service.requirePublishedSnapshot(available)).isSameAs(snapshot);
+
+        snapshot.setSnapshotStatus("PENDING_RECEIPT");
+        assertThatThrownBy(() -> service.requirePublishedSnapshot(available))
+                .hasMessageContaining("权威快照");
+    }
+
+    @Test
     void stagesInvisibleEvidenceThenPublishesExactlyOnceAfterReceiptAcceptance() {
         BackupStageMapper mapper = mock(BackupStageMapper.class);
         BackupEvidenceService evidence = mock(BackupEvidenceService.class);
@@ -33,6 +53,7 @@ class BackupStageServiceTest {
         OrderSnapshotEntity snapshot = new OrderSnapshotEntity();
         snapshot.setId(19L);
         when(evidence.save(eq(42L), any(), any(), eq(3L))).thenReturn(snapshot);
+        when(evidence.findSnapshot(19L)).thenReturn(snapshot);
         BackupStageService service = new BackupStageService(mapper, evidence, new ObjectMapper());
 
         BackupStageEntity stage = service.stage(5L, 42L, manifest("INCOMPLETE"), result(), 3L, "receipt-42");
@@ -43,6 +64,9 @@ class BackupStageServiceTest {
 
         service.markReceiptAccepted(stage.getId());
         OrderSnapshotEntity published = service.publish(stage.getId());
+        snapshot.setSourceOrderId(42L);
+        snapshot.setSnapshotStatus("AVAILABLE");
+        snapshot.setBackupCompleteness("INCOMPLETE");
         OrderSnapshotEntity replayed = service.publish(stage.getId());
 
         assertThat(published.getId()).isEqualTo(19L);
@@ -74,6 +98,7 @@ class BackupStageServiceTest {
 
         assertThat(replayed).isSameAs(existing);
         assertThat(existing.getStageStatus()).isEqualTo("SUPERSEDED");
+        assertThat(existing.getCleanupStatus()).isEqualTo("PENDING");
         assertThatThrownBy(() -> service.publish(8L)).hasMessageContaining("SUPERSEDED");
         verifyNoInteractions(evidence);
     }

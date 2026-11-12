@@ -1,5 +1,5 @@
 <script setup>
-import { storageVolumeView } from '../../taskCenter.js';
+import { jobEvidencePresentation, storageVolumeView } from '../../taskCenter.js';
 import { jobFileOrderCode, jobFileOriginalFilename } from '../../jobDetailState.js';
 import { workflowLabel } from '../StatusBadge.js';
 
@@ -14,6 +14,7 @@ defineProps({
 
 const emit = defineEmits(['page-change', 'size-change']);
 const volume = (row) => storageVolumeView(row, row?.storageVolumeId);
+const evidence = (row) => jobEvidencePresentation(row);
 const bytes = (value) => {
   const n = Number(value || 0);
   if (n < 1024) return `${n} B`;
@@ -58,7 +59,24 @@ const changeSize = (value) => emit('size-change', value);
           </div>
         </template>
       </el-table-column>
-      <el-table-column label="失败原因" min-width="240"><template #default="{ row }"><span class="error-text">{{ row.failureCode || '' }} {{ row.failureMessage || '' }}</span></template></el-table-column>
+      <el-table-column label="执行说明" min-width="260">
+        <template #default="{ row }">
+          <el-space v-if="evidence(row).kind === 'recovered'" direction="vertical" alignment="flex-start" :size="2">
+            <el-tag type="success" size="small">{{ evidence(row).label }}</el-tag>
+            <el-text type="info" size="small">{{ evidence(row).detail }}</el-text>
+          </el-space>
+          <el-space v-else-if="evidence(row).kind === 'retrying'" direction="vertical" alignment="flex-start" :size="2">
+            <el-tag type="warning" size="small">{{ evidence(row).label }}</el-tag>
+            <el-text type="info" size="small">{{ evidence(row).detail }}</el-text>
+          </el-space>
+          <el-space v-else-if="evidence(row).kind === 'degrading'" direction="vertical" alignment="flex-start" :size="2">
+            <el-tag type="warning" size="small">{{ evidence(row).label }}</el-tag>
+            <el-text type="warning" size="small">{{ evidence(row).detail }}</el-text>
+          </el-space>
+          <el-text v-else-if="evidence(row).kind === 'failed'" type="danger">{{ evidence(row).detail }}</el-text>
+          <el-text v-else type="info">—</el-text>
+        </template>
+      </el-table-column>
       <el-table-column v-if="compactIdentity" label="步骤" width="132">
         <template #default="{ row }">{{ workflowLabel(row.step) }}</template>
       </el-table-column>

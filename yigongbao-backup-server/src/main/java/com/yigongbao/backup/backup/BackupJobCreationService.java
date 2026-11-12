@@ -20,6 +20,11 @@ public class BackupJobCreationService {
     private final OrderPackageMapper packages;
     private final RuntimeConfigService configs;
 
+    /** 仅在创建新严格备份任务时读取，并由调用方固化进任务参数快照。 */
+    public boolean autoDegradeOnRelationBroken() {
+        return configs.getBoolean("backup.auto-degrade-on-relation-broken", true);
+    }
+
     @Transactional(rollbackFor = Exception.class)
     public JobEntity create(String type, String key, long actor, String config, long requiredBytes) {
         PersistentJobCoordinator.CreationResult reservation = jobs.reserve(type, key, actor, config);

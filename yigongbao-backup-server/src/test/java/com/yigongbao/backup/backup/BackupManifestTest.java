@@ -72,4 +72,21 @@ class BackupManifestTest {
         assertThatThrownBy(() -> manifest.order().put("newField", "value"))
                 .isInstanceOf(UnsupportedOperationException.class);
     }
+
+    @Test
+    void durableManifestDropsTransientDownloadCredentialButKeepsObjectIdentity() {
+        BackupManifest.Asset asset = new BackupManifest.Asset("7", "a.pdf", "ORDER_FILE", 12,
+                "https://cos.example/a?signature=secret", "a".repeat(64), "COS", "bucket",
+                "orders/a.pdf", "version-1", 7L, List.of());
+        BackupManifest manifest = new BackupManifest("1", "2026-11-12T00:00:00Z", List.of(asset));
+
+        BackupManifest durable = manifest.withoutTransientSourceKeys();
+
+        assertThat(durable.assets()).singleElement().satisfies(saved -> {
+            assertThat(saved.sourceKey()).isNull();
+            assertThat(saved.objectKey()).isEqualTo("orders/a.pdf");
+            assertThat(saved.versionIdentity()).isEqualTo("version-1");
+        });
+        assertThat(manifest.assets().getFirst().sourceKey()).contains("signature=secret");
+    }
 }

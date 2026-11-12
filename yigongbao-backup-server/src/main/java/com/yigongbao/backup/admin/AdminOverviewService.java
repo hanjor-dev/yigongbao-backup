@@ -14,6 +14,7 @@ import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
 import java.time.*;
+import java.time.temporal.ChronoUnit;
 import java.util.*;
 import java.util.concurrent.CompletableFuture;
 import java.util.function.Supplier;
@@ -27,6 +28,7 @@ public class AdminOverviewService {
     private final AdminOverviewActivityService activities; private final AdminOverviewAlertService alerts;
     private final RuntimeConfigService configs; private final BusinessClock clock; private final BkSyncCursorMapper cursors;
     private final BackupExecutionModeProvider executionMode;
+    private final OverviewAlertDismissalService alertDismissals;
     private volatile Cached cached;
     private volatile CompletableFuture<AdminOverviewView> inFlight;
 
@@ -54,24 +56,68 @@ public class AdminOverviewService {
         List<AdminOverviewView.SectionError> errors=new ArrayList<>();
         SectionResult<SummaryFacts> summary=section("summary",this::summary,safeRequest,errors);
         SectionResult<StorageFacts> storage=section("storage",this::storage,safeRequest,errors);
-        SectionResult<List<AdminOverviewView.BackupTrendPoint>> trend=section("backupTrend",this::trend,safeRequest,errors);
+        SectionResult<List<AdminOverviewView.BackupTrendPoint>> trend=section("backupTrend",()->trend(OverviewTrendPeriod.WEEK),safeRequest,errors);
         SectionResult<List<AdminOverviewView.Activity>> recent=section("recentActivities",this::recent,safeRequest,errors);
         SectionResult<AutomationFacts> automation=section("automation",this::automation,safeRequest,errors);
         List<AdminOverviewView.DataQualityMessage> quality=quality(storage.value(),trend.value(),automation.value(),summary.value());
         List<AdminOverviewAlertService.CurrentArchiveIssue> archiveIssues=storage.value()==null?List.of():archiveIssues(storage.value().volumes(),storage.value().archives());
-        SectionResult<AdminOverviewAlertService.Evaluation> alert=section("activeAlerts",()->alerts.evaluate(new AdminOverviewAlertService.AlertContext(
+        AdminOverviewAlertService.AlertContext alertContext=new AdminOverviewAlertService.AlertContext(
                 storage.value()==null?null:storage.value().result(),summary.value()==null?null:summary.value().view(),
                 automation.value()==null?null:automation.value().backupSchedule(),
                 automation.value()==null?null:automation.value().account(),
-                summary.available()&&storage.available()&&automation.available(),quality,archiveIssues)),safeRequest,errors);
+                summary.available()&&storage.available()&&automation.available(),quality,archiveIssues);
+        SectionResult<AdminOverviewAlertService.Evaluation> alert=section("activeAlerts",()->{
+            AdminOverviewAlertService.Evaluation current=alerts.evaluate(alertContext);
+            Set<String> dismissed=alertDismissals.reconcile(current.alerts(),alertContext.factsAvailable());
+            return dismissed==null||dismissed.isEmpty()?current:alerts.evaluate(alertContext,dismissed);
+        },safeRequest,errors);
         AdminOverviewView.Health health=alert.value()==null?new AdminOverviewView.Health("UNKNOWN",0,0,0):alert.value().health();
         AdminOverviewView view=new AdminOverviewView(now,health,new AdminOverviewView.Sections(summary.status(),storage.status(),alert.status(),trend.status(),automation.status(),recent.status()),
                 summary.value()==null?null:summary.value().view(),storage.value()==null?null:storage.value().result().storage(),alert.value()==null?null:alert.value().alerts(),trend.value(),automation.value()==null?null:automation.value().view(),recent.value(),new AdminOverviewView.DataQuality(quality.isEmpty(),quality),List.copyOf(errors));
         return view;
     }
-    private SummaryFacts summary(){var base=AdminOverviewProjection.summary(queries.selectArtifactReplicaCandidates(),queries.selectManagedArtifactSummary(),access);var w=time.today();var row=queries.selectBackupResultBuckets(w.from(),w.to()).stream().findFirst().orElse(null);var today=row==null?new AdminOverviewView.TodayBackup(0,0,0,0,0):new AdminOverviewView.TodayBackup(n(row.completeSucceeded()),n(row.incompleteSucceeded()),n(row.failed()),n(row.skipped()),n(row.total()));return new SummaryFacts(new AdminOverviewView.Summary(base.readableOrders(),base.readableFiles(),today),queries.selectDataQualitySummary());}
+
+    public void dismissAlert(String alertKey,long actorUserId){
+        if(alertKey==null||alertKey.isBlank()||alertKey.length()>191)throw new IllegalArgumentException("告警标识非法");
+        AdminOverviewView current=overview(true,"dismiss-alert-"+UUID.randomUUID());
+        AdminOverviewView.Alert target=current.activeAlerts()==null?null:current.activeAlerts().stream()
+                .filter(alert->alertKey.equals(alert.alertKey())).findFirst().orElse(null);
+        if(target==null)throw new IllegalArgumentException("告警已不存在或已关闭");
+        alertDismissals.dismiss(target,actorUserId);
+        cached=null;
+    }
+    private SummaryFacts summary(){var base=AdminOverviewProjection.summary(queries.selectArtifactReplicaCandidates(),queries.selectManagedArtifactSummary(),access);var w=time.today();var row=queries.selectBackupResultBuckets(w.from(),w.to()).stream().findFirst().orElse(null);var today=row==null?new AdminOverviewView.TodayBackup(0,0,0,0,0):new AdminOverviewView.TodayBackup(n(row.completeSucceeded()),n(row.incompleteSucceeded()),n(row.failed()),n(row.skipped()),n(row.total()));return new SummaryFacts(new AdminOverviewView.Summary(base.readableOrders(),base.orderStatistics(),base.readableFiles(),today),queries.selectDataQualitySummary());}
     private StorageFacts storage(){List<StorageVolumeEntity> v=volumes.selectList(Wrappers.<StorageVolumeEntity>lambdaQuery().eq(StorageVolumeEntity::getIsDeleted,0));List<VolumeArchiveEntity> a=archives.selectList(Wrappers.<VolumeArchiveEntity>lambdaQuery().eq(VolumeArchiveEntity::getIsDeleted,0));ConfigValue<Integer> threshold=intConfig("storage.volume-switch.threshold-percent",90,1);ConfigValue<Integer> interval=intConfig("storage.volume-health.interval-minutes",5,1);List<AdminOverviewView.DataQualityMessage> configQuality=java.util.stream.Stream.of(threshold,interval).filter(x->!x.valid()).map(x->new AdminOverviewView.DataQualityMessage("STORAGE_CONFIG_INVALID","WARNING","storage",1,x.message())).toList();return new StorageFacts(storagePolicy.project(v,a,threshold.value(),interval.value()),a,v,configQuality);}
-    private List<AdminOverviewView.BackupTrendPoint> trend(){var w=time.sevenDays();Map<LocalDate,AdminOverviewQueryMapper.BackupResultBucketRow> r=new HashMap<>();queries.selectBackupResultBuckets(w.from(),w.to()).forEach(x->r.put(x.day(),x));Map<LocalDate,AdminOverviewQueryMapper.BackupBytesBucketRow>b=new HashMap<>();queries.selectBackupBytesBuckets(w.from(),w.to()).forEach(x->b.put(x.day(),x));List<AdminOverviewView.BackupTrendPoint> out=new ArrayList<>();for(int i=0;i<7;i++){LocalDate d=w.from().toLocalDate().plusDays(i);var x=r.get(d);var y=b.get(d);out.add(new AdminOverviewView.BackupTrendPoint(d,x==null?0:n(x.completeSucceeded()),x==null?0:n(x.incompleteSucceeded()),x==null?0:n(x.failed()),x==null?0:n(x.skipped()),y==null?0:n(y.addedPackageBytes()),y==null?0:n(y.unknownPackageCount())));}return out;}
+    public List<AdminOverviewView.BackupTrendPoint> trend(OverviewTrendPeriod period){
+        OverviewTrendPeriod selected=period==null?OverviewTrendPeriod.WEEK:period;
+        var w=time.trendWindow(selected);
+        Map<LocalDate,AdminOverviewQueryMapper.BackupResultBucketRow> results=new HashMap<>();
+        queries.selectBackupResultBuckets(w.from(),w.to()).forEach(x->results.put(x.day(),x));
+        Map<LocalDate,AdminOverviewQueryMapper.BackupBytesBucketRow> bytes=new HashMap<>();
+        queries.selectBackupBytesBuckets(w.from(),w.to()).forEach(x->bytes.put(x.day(),x));
+        if(selected==OverviewTrendPeriod.YEAR){
+            List<AdminOverviewView.BackupTrendPoint> out=new ArrayList<>();
+            LocalDate yearStart=w.from().toLocalDate();
+            for(int month=0;month<12;month++){
+                LocalDate from=yearStart.plusMonths(month),to=from.plusMonths(1);
+                long complete=0,incomplete=0,failed=0,skipped=0,addedBytes=0,unknown=0;
+                for(LocalDate day=from;day.isBefore(to);day=day.plusDays(1)){
+                    var result=results.get(day);var size=bytes.get(day);
+                    if(result!=null){complete+=n(result.completeSucceeded());incomplete+=n(result.incompleteSucceeded());failed+=n(result.failed());skipped+=n(result.skipped());}
+                    if(size!=null){addedBytes+=n(size.addedPackageBytes());unknown+=n(size.unknownPackageCount());}
+                }
+                out.add(new AdminOverviewView.BackupTrendPoint(from,complete,incomplete,failed,skipped,addedBytes,unknown));
+            }
+            return List.copyOf(out);
+        }
+        int days=Math.toIntExact(ChronoUnit.DAYS.between(w.from().toLocalDate(),w.to().toLocalDate()));
+        List<AdminOverviewView.BackupTrendPoint> out=new ArrayList<>();
+        for(int i=0;i<days;i++){
+            LocalDate day=w.from().toLocalDate().plusDays(i);var result=results.get(day);var size=bytes.get(day);
+            out.add(new AdminOverviewView.BackupTrendPoint(day,result==null?0:n(result.completeSucceeded()),result==null?0:n(result.incompleteSucceeded()),result==null?0:n(result.failed()),result==null?0:n(result.skipped()),size==null?0:n(size.addedPackageBytes()),size==null?0:n(size.unknownPackageCount())));
+        }
+        return List.copyOf(out);
+    }
     private List<AdminOverviewView.Activity> recent(){List<VolumeArchiveEntity>a=archives.selectList(Wrappers.<VolumeArchiveEntity>lambdaQuery().eq(VolumeArchiveEntity::getIsDeleted,0).orderByDesc(VolumeArchiveEntity::getUpdateTime).orderByDesc(VolumeArchiveEntity::getId).last("LIMIT 10"));return activities.merge(queries.selectRecentJobs(10),a);}
     private AutomationFacts automation(){
         ConfigValue<Boolean> onlineConfig=booleanConfig("online.enabled",false);
@@ -94,7 +140,9 @@ public class AdminOverviewService {
                 ?time.backupSchedule(new OverviewTimePolicy.BackupScheduleInput(backupEnabled,backupEnabledAt,startConfig.value(),
                     intervalConfig.value(),backup==null?null:backup.getLastSuccessAt(),backup==null?null:backup.getSyncStatus()))
                 :new OverviewTimePolicy.BackupScheduleState("UNKNOWN",null,null,false,"自动备份配置缺失、非法或没有生效时间");
-        AdminOverviewView.AutomationItem backupItem=new AdminOverviewView.AutomationItem(schedule.state(),backupEnabled,executionMode.mode().name(),
+        String backupLastRun=lastRunStatus(backup==null?null:backup.getSyncStatus());
+        AdminOverviewView.AutomationItem backupItem=new AdminOverviewView.AutomationItem(
+                automationState(schedule.state(),backupLastRun),schedule.state(),backupLastRun,backupEnabled,executionMode.mode().name(),
                 startConfig.value(),intervalConfig.value(),"DAYS",backup==null?null:backup.getLastItemCount(),backup==null?null:backup.getLastErrorMessage(),
                 backup==null?null:backup.getLastAttemptAt(),backup==null?null:backup.getLastSuccessAt(),schedule.nextExpectedAt(),
                 backupMessage(backupEnabled,schedule,backup),"backup",Map.of());
@@ -104,20 +152,24 @@ public class AdminOverviewService {
         LocalDateTime firstAccount=accountEnabledAt==null?null:accountEnabledAt.plusMinutes(syncDelay);
         boolean accountConfigValid=onlineConfig.valid()&&accountSwitch.valid()&&syncConfig.valid()
                 &&(!accountEnabled||(onlineEnabledAt!=null&&accountSwitchAt!=null));
-        String accountState=accountConfigValid?accountState(accountEnabled,account,firstAccount,syncDelay):"UNKNOWN";
+        String accountScheduleState=accountConfigValid?accountScheduleState(accountEnabled,account,firstAccount,syncDelay):"UNKNOWN";
+        String accountLastRun=lastRunStatus(account==null?null:account.getSyncStatus());
+        String accountState=automationState(accountScheduleState,accountLastRun);
         LocalDateTime nextAccount=accountEnabled?(account!=null&&account.getLastSuccessAt()!=null?account.getLastSuccessAt().plusMinutes(syncDelay):firstAccount):null;
-        AdminOverviewView.AutomationItem accountItem=new AdminOverviewView.AutomationItem(accountState,accountEnabled,null,
+        AdminOverviewView.AutomationItem accountItem=new AdminOverviewView.AutomationItem(accountState,accountScheduleState,accountLastRun,accountEnabled,null,
                 null,syncDelay,"MINUTES",account==null?null:account.getLastItemCount(),account==null?null:account.getLastErrorMessage(),
                 account==null?null:account.getLastAttemptAt(),account==null?null:account.getLastSuccessAt(),nextAccount,
                 accountMessage(accountEnabled,accountState,account),"accounts",Map.of("focus","sync"));
         AdminOverviewQueryMapper.RecentJobRow cleanup=queries.selectLatestAutoCleanup();
         int cleanupHours=cleanupInterval.value();
         boolean cleanupConfigValid=onlineConfig.valid()&&cleanupSwitch.valid()&&cleanupInterval.valid();
-        String cleanupState=cleanupConfigValid?(cleanupEnabled?(cleanup==null?"IDLE":cleanup.status()):"DISABLED"):"UNKNOWN";
-        AdminOverviewView.AutomationItem cleanupItem=new AdminOverviewView.AutomationItem(cleanupState,cleanupEnabled,null,
+        String cleanupScheduleState=cleanupConfigValid?(cleanupEnabled?"READY":"DISABLED"):"UNKNOWN";
+        String cleanupLastRun=lastRunStatus(cleanup==null?null:cleanup.status());
+        String cleanupState=automationState(cleanupScheduleState,cleanupLastRun);
+        AdminOverviewView.AutomationItem cleanupItem=new AdminOverviewView.AutomationItem(cleanupState,cleanupScheduleState,cleanupLastRun,cleanupEnabled,null,
                 null,cleanupHours,"HOURS",null,cleanup==null?null:cleanup.failureMessage(),
                 cleanup==null?null:cleanup.requestedAt(),cleanup!=null&&"SUCCEEDED".equals(cleanup.status())?cleanup.finishedAt():null,null,
-                cleanupConfigValid?(cleanupEnabled?(cleanup==null?"尚无自动清理任务":"最近自动清理任务 #"+cleanup.jobId()):"管理员已停用"):"自动清理配置缺失或非法","cleanup",Map.of());
+                cleanupConfigValid?(cleanupEnabled?(cleanup==null?"尚无云端清理任务":"最近云端清理任务 #"+cleanup.jobId()):"管理员已停用"):"云端清理配置缺失或非法","cleanup",Map.of());
         List<AdminOverviewView.DataQualityMessage> configQuality=new ArrayList<>();
         List.of(onlineConfig,backupSwitch,accountSwitch,cleanupSwitch,startConfig,intervalConfig,syncConfig,cleanupInterval).stream()
                 .filter(v->!v.valid()).forEach(v->configQuality.add(new AdminOverviewView.DataQualityMessage(
@@ -129,12 +181,22 @@ public class AdminOverviewService {
         return new AutomationFacts(new AdminOverviewView.Automation(backupItem,accountItem,cleanupItem),schedule,
                 new AdminOverviewAlertService.AutomationFact(accountEnabled,accountState),List.copyOf(configQuality));
     }
-    private String accountState(boolean enabled,BkSyncCursorEntity row,LocalDateTime first,int delay){
+    private String accountScheduleState(boolean enabled,BkSyncCursorEntity row,LocalDateTime first,int delay){
         if(!enabled)return "DISABLED";
         if(row==null)return first!=null&&!first.isAfter(clock.now())?"MISSING":"READY";
-        if("FAILED".equals(row.getSyncStatus()))return "FAILED";
         if(time.accountSyncStale(new OverviewTimePolicy.AccountSyncInput(true,first,row.getLastSuccessAt(),delay)))return "STALE";
-        return row.getSyncStatus()==null||"IDLE".equals(row.getSyncStatus())?"READY":row.getSyncStatus();
+        return "READY";
+    }
+    private static String lastRunStatus(String status){String normalized=status==null?"":status.trim().toUpperCase(Locale.ROOT);return normalized.isBlank()||"IDLE".equals(normalized)?"NOT_RUN":normalized;}
+    private static String automationState(String scheduleState,String lastRunStatus){
+        String schedule=scheduleState==null?"UNKNOWN":scheduleState.toUpperCase(Locale.ROOT);
+        String run=lastRunStatus==null?"NOT_RUN":lastRunStatus.toUpperCase(Locale.ROOT);
+        if("UNKNOWN".equals(schedule)||"DISABLED".equals(schedule))return schedule;
+        if(Set.of("MISSED","MISSING","CHECKPOINT_MISSING","STALE").contains(schedule))return schedule;
+        if(Set.of("CREATED","RUNNING","PROCESSING","RETRYING","RETRY_PENDING").contains(run))return run;
+        if(Set.of("FAILED","PARTIAL_FAILED","CANCELLED","CANCELED","ERROR").contains(run))return run;
+        if(Set.of("SUCCESS","SUCCEEDED","COMPLETED","SIMULATED").contains(run))return "NORMAL";
+        return "WAITING";
     }
     private static String backupMessage(boolean enabled,OverviewTimePolicy.BackupScheduleState state,BkSyncCursorEntity row){
         if("UNKNOWN".equals(state.state()))return safe(state.qualityMessage(),"自动备份配置状态未知");

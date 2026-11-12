@@ -15,4 +15,9 @@ public interface CosObjectClient {
     default void delete(String sourceKey, CleanupClient.Permit permit) throws IOException {
         throw new UnsupportedOperationException("当前 COS 客户端未配置授权删除能力");
     }
+
+    /** 删除必须显式携带冻结时的精确对象版本，生产实现不得退化为按键删除。 */
+    default void delete(String sourceKey, String versionIdentity, CleanupClient.Permit permit) throws IOException {
+        throw new UnsupportedOperationException("当前 COS 客户端不支持精确版本删除");
+    }
 }

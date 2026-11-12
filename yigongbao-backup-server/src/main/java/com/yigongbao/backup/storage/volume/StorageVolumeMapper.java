@@ -11,6 +11,11 @@ public interface StorageVolumeMapper extends BaseMapper<StorageVolumeEntity> {
             "AND write_status = 'ACTIVE' AND is_deleted = 0 LIMIT 1 FOR UPDATE")
     StorageVolumeEntity findActiveForUpdate();
 
+    /** 锁定活动卷台账，即使卷已被健康巡检降级为不可用也允许执行受控恢复。 */
+    @Select("SELECT * FROM bk_storage_volume WHERE tier = 'HOT' " +
+            "AND write_status = 'ACTIVE' AND is_deleted = 0 LIMIT 1 FOR UPDATE")
+    StorageVolumeEntity findActiveLedgerForUpdate();
+
     @Select("SELECT * FROM bk_storage_volume WHERE id = #{id} AND is_deleted = 0 FOR UPDATE")
     StorageVolumeEntity findByIdForUpdate(long id);
 }

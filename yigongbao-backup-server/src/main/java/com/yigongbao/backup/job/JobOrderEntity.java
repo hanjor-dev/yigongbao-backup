@@ -54,9 +54,24 @@ public class JobOrderEntity extends BaseEntity {
     private String currentStorageUnavailableReason;
     private String simulationPath;
     private String status;
+    /** 该订单在当前任务内已消耗的重试次数；用于进程重启后继续执行同一重试预算。 */
+    private Integer retryCount;
+    /** 自动降级有界状态机阶段，用于进程重启续跑。 */
+    private String degradePhase;
     private String failureCode;
     private String failureMessage;
+    /** 最终成功但仍保留早期失败证据时，明确表示该订单由重试恢复。 */
+    @TableField(exist = false)
+    private Boolean retryRecovered;
     /** 仅供任务详情展示；服务端创建降级任务时仍会重新校验全部条件。 */
     @TableField(exist = false)
     private Boolean degradedBackupEligible;
+    /** 由关联订单快照批量投影，任务订单表不重复保存。 */
+    @TableField(exist = false)
+    private String backupCompleteness;
+    @TableField(exist = false)
+    private Integer relationGapCount;
+    /** 当前任务内由自动补偿形成的不完整成功；显式降级任务为 false。 */
+    @TableField(exist = false)
+    private Boolean autoDegraded;
 }

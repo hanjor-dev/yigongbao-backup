@@ -38,9 +38,25 @@ public interface AdminOverviewQueryMapper {
                                        LocalDateTime backupCompletedAt, String completeness,
                                        Long fileCount, Long packageSize, Long readableCopyCount,
                                        Long expectedOfflineCopyCount, Long activeCopyCount,
-                                       Long invalidMetadataCount, Long abnormalActiveCopyCount) { }
+                                       Long invalidMetadataCount, Long abnormalActiveCopyCount,
+                                       Long hotCopyCount, Long coldCopyCount) {
+        ArtifactReplicaCandidateRow(Long sourceOrderId, Long snapshotId, Long packageId,
+                                    LocalDateTime backupCompletedAt, String completeness,
+                                    Long fileCount, Long packageSize, Long readableCopyCount,
+                                    Long expectedOfflineCopyCount, Long activeCopyCount,
+                                    Long invalidMetadataCount, Long abnormalActiveCopyCount) {
+            this(sourceOrderId, snapshotId, packageId, backupCompletedAt, completeness, fileCount, packageSize,
+                    readableCopyCount, expectedOfflineCopyCount, activeCopyCount, invalidMetadataCount,
+                    abnormalActiveCopyCount, 0L, 0L);
+        }
+    }
 
-    record ManagedArtifactSummaryRow(Long managedArtifactBytes, Long unknownSizeCopyCount) { }
+    record ManagedArtifactSummaryRow(Long managedArtifactBytes, Long unknownSizeCopyCount,
+                                     Long metadataRecordCount) {
+        ManagedArtifactSummaryRow(Long managedArtifactBytes, Long unknownSizeCopyCount) {
+            this(managedArtifactBytes, unknownSizeCopyCount, 0L);
+        }
+    }
     record DataQualitySummaryRow(Long realSnapshotSimulationPackageCount,
                                  Long missingCompletionTimePackageCount,
                                  Long missingVolumeCopyCount) { }

@@ -7,9 +7,13 @@ const root = path.resolve(import.meta.dirname, '..');
 
 test('storage volume page exposes lifecycle actions and detail context', () => {
   const source = fs.readFileSync(path.join(root, 'src', 'views', 'StorageView.vue'), 'utf8');
-  for (const action of ['confirm-mounted', 'set-standby', 'previewStorageArchive', 'prepare-offline', '卷详情', '运行任务']) {
+  for (const action of ['confirm-mounted', 'set-standby', 'cancel-standby', 'repair-abnormal-state', 'previewStorageArchive', 'prepare-offline', '取消备用', '修复异常状态', '卷详情', '运行任务']) {
     assert.match(source, new RegExp(action));
   }
+  assert.match(source, /canArchiveVolume\(row\)/);
+  assert.match(source, /canCancelStandbyVolume\(row\)/);
+  assert.match(source, /canRepairAbnormalState\(row\)/);
+  assert.match(source, /reason/);
 });
 
 test('discovered volume candidates display used available and total capacity', () => {
@@ -88,4 +92,10 @@ test('order list renders offline cold lookup metadata instead of only an offline
   assert.match(orderDetail, /offlineStorageSummary/);
   assert.match(orderDetail, /row\.storageUnavailableReason/);
   assert.match(orderDetail, /storageDiagnosticReason/);
+});
+
+test('order list distinguishes a present hot copy from a currently readable hot copy', () => {
+  const orderTable = fs.readFileSync(path.join(root, 'src', 'components', 'orders', 'OrderTable.vue'), 'utf8');
+  assert.match(orderTable, /hotReplicaPresentation/);
+  assert.match(orderTable, /不可读/);
 });

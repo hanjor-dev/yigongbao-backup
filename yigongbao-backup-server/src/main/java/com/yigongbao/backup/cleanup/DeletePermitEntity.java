@@ -25,4 +25,7 @@ public class DeletePermitEntity extends BaseEntity {
     private LocalDateTime issuedAt;
     private LocalDateTime expiresAt;
     private String nonce;
+    private String claimOwner;
+    private LocalDateTime claimUntil;
+    private Long localFencingToken;
 }

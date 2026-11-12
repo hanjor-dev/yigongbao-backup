@@ -51,7 +51,7 @@ public class ScheduledBackupService {
     /** 定时入口；线上适配器未启用时由配置条件保证不会实例化。 */
     @Scheduled(fixedDelay = 60000)
     public void runScheduled() {
-        run(false);
+        run(false, 0L);
     }
 
     /**
@@ -59,10 +59,14 @@ public class ScheduledBackupService {
      * 仍遵守自动备份总开关、候选资格、已备份排除及任务幂等约束。
      */
     public void runNowByAdministrator() {
-        run(true);
+        runNowByAdministrator(0L);
     }
 
-    private synchronized void run(boolean forced) {
+    public void runNowByAdministrator(long actorId) {
+        run(true, actorId);
+    }
+
+    private synchronized void run(boolean forced, long actorId) {
         LocalDateTime now = LocalDateTime.now();
         LocalDateTime previousPollAt = previousSchedulePollAt;
         previousSchedulePollAt = now;
@@ -95,12 +99,14 @@ public class ScheduledBackupService {
                     BusinessTimeCodec.toUtcOffset(orderCreatedBefore));
             int beforePage = orderIds.size();
             if (highWatermark.isBlank() && page.highWatermark() != null) highWatermark = page.highWatermark();
-            page.items().stream()
+            List<Long> pageOrderIds = page.items().stream()
                     .filter(candidate -> candidate.orderId() != null)
                     .filter(candidate -> !isTerminal(candidate.eventStatus()))
-                    .filter(candidate -> !alreadyBackedUp(candidate.orderId()))
                     .map(OnlineCandidateClient.Candidate::orderId)
-                    .limit(remaining)
+                    .distinct().toList();
+            java.util.Set<Long> alreadyBackedUp = pageOrderIds.isEmpty() ? java.util.Set.of()
+                    : new java.util.HashSet<>(snapshots.findBackedUpSourceOrderIds(pageOrderIds));
+            pageOrderIds.stream().filter(orderId -> !alreadyBackedUp.contains(orderId)).limit(remaining)
                     .forEach(orderIds::add);
             log.info("定时备份候选分页完成｜请求数量={}｜线上返回数量={}｜本页接纳数量={}｜累计待备份数量={}｜是否还有下一页={}",
                     pageSize, page.items().size(), orderIds.size() - beforePage, orderIds.size(), page.hasMore());
@@ -111,26 +117,22 @@ public class ScheduledBackupService {
           // 上一批经过任务内重试仍失败的订单，等待下一个计划时间自动补偿。
           int remaining = Math.max(0, maximumOrders - orderIds.size());
           if (remaining > 0) {
-            jobOrders.selectList(Wrappers.<JobOrderEntity>lambdaQuery()
-                            .eq(JobOrderEntity::getStatus, "FAILED")
-                            .orderByAsc(JobOrderEntity::getId))
-                    .stream().map(JobOrderEntity::getSourceOrderId)
-                    .filter(java.util.Objects::nonNull).distinct()
-                    .filter(orderId -> !alreadyBackedUp(orderId))
-                    .limit(remaining).forEach(orderIds::add);
+            jobOrders.findRetryableFailedSourceOrderIds(remaining).forEach(orderIds::add);
           }
           if (!orderIds.isEmpty()) {
             String payload;
             try { payload = mapper.writeValueAsString(new ManualBackupJobHandler.Payload(List.copyOf(orderIds), orderIds.size(),
                     now.toLocalDate().format(DateTimeFormatter.BASIC_ISO_DATE), daysBefore,
                     BusinessTimeCodec.toUtcOffset(orderCreatedBefore).toString(), executionModes.mode().name(),
-                    executionModes.simulationRoot() == null ? null : executionModes.simulationRoot().toString())); }
+                    executionModes.simulationRoot() == null ? null : executionModes.simulationRoot().toString(),
+                    jobCreation.autoDegradeOnRelationBroken())); }
             catch (Exception exception) { throw new IllegalStateException("定时备份任务参数序列化失败", exception); }
             String dailyPayload = now.toLocalDate() + ":" + payload;
+            String jobType = forced ? "MANUAL_BACKUP" : "ORDER_BACKUP";
             com.yigongbao.backup.job.JobEntity created = jobCreation.createForOrders(
-                    "ORDER_BACKUP", JobIdempotency.key("ORDER_BACKUP", 0L, dailyPayload), 0L, payload, orderIds.size());
-            log.info("定时备份任务已创建｜任务ID={}｜任务编号={}｜订单总数={}｜计划日期={}｜首个订单ID={}｜最后订单ID={}",
-                    created.getId(), created.getJobNo(), orderIds.size(), now.toLocalDate(),
+                    jobType, JobIdempotency.key(jobType, actorId, dailyPayload), actorId, payload, orderIds.size());
+            log.info("{}备份任务已创建｜任务ID={}｜任务编号={}｜订单总数={}｜计划日期={}｜操作人ID={}｜首个订单ID={}｜最后订单ID={}",
+                    forced ? "管理员手工" : "定时自动", created.getId(), created.getJobNo(), orderIds.size(), now.toLocalDate(), actorId,
                     orderIds.iterator().next(), last(orderIds));
           }
           checkpoint.complete(orderIds.size(), "");
@@ -162,12 +164,6 @@ public class ScheduledBackupService {
         } catch (RuntimeException error) {
             log.error("线上候选对账失败，将在下一周期重试", error);
         }
-    }
-
-    private boolean alreadyBackedUp(Long orderId) {
-        return snapshots.selectCount(Wrappers.<OrderSnapshotEntity>lambdaQuery()
-                .eq(OrderSnapshotEntity::getSourceOrderId, orderId)
-                .in(OrderSnapshotEntity::getSnapshotStatus, "AVAILABLE", "SUCCESS", "BACKED_UP")) > 0;
     }
 
     private static boolean isTerminal(String status) { return status != null && ("CANCELLED".equalsIgnoreCase(status) || "DELETED".equalsIgnoreCase(status) || "DELETE".equalsIgnoreCase(status)); }

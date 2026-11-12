@@ -166,7 +166,7 @@ public final class OrderBackupPipeline {
             }
 
             Path meta = staging.resolve("manifest.json");
-            mapper.writeValue(meta.toFile(), manifest);
+            mapper.writeValue(meta.toFile(), manifest.withoutTransientSourceKeys());
             Path zip = staging.resolve(safeOrderPart(orderId, "order") + ".zip");
             long compressStartedAt = System.nanoTime();
             log.info("订单包压缩开始: orderId={}, assetCount={}", orderId, manifest.assets().size());

@@ -1,12 +1,14 @@
 import { computed, ref, watch, onMounted, onUnmounted } from 'vue';
 import { canRetryFailedOrders, coldImportDiagnostic, extractJobId, isTerminalJob, jobProgress, normalizePage, replaceJobById, storageState, supplementTaskState, taskFailureSummary } from '../taskCenter.js';
-import { api, binary, saveBlob, uploadWithProgress } from '../api.js';
-import { buildJobFilePageUrl, createDetailRequestGuard, createSectionLoadTracker } from '../jobDetailState.js';
+import { api, startTicketDownload, uploadWithProgress } from '../api.js';
+import { buildJobFilePageUrl, createDetailRequestGuard, createLatestRequestGuard, createSectionLoadTracker } from '../jobDetailState.js';
+import { loadOrderDetailSections } from '../orderDetailLoader.js';
 import { createAuthStore } from '../stores/authStore.js';
-import { createRouteStore } from '../stores/routeStore.js';
+import { canAccessPage, createRouteStore, defaultPageForRole } from '../stores/routeStore.js';
 import { storageVolumeActionSuccessMessage } from '../storageVolumeActions.js';
 import { normalizeStorageArchiveDetail } from '../storageArchiveDetail.js';
 import { confirmAction } from '../uiFeedback.js';
+import { overviewAlertDismissUrl, overviewTrendUrl } from '../overviewModel.js';
 
 /**
  * 备份控制台领域状态与服务动作。
@@ -17,7 +19,7 @@ import { confirmAction } from '../uiFeedback.js';
 export function useBackupConsole() {
   const auth = createAuthStore();
   const { token, role, isAdmin } = auth;
-  const route = createRouteStore();
+  const route = createRouteStore(() => role.value);
   const { page, routeQuery } = route;
   // 兼容现有模板中的 page 直接赋值，同时将导航状态持久化并同步到 hash。
   watch(page, (value) => route.navigate(value));
@@ -66,6 +68,10 @@ export function useBackupConsole() {
   const storageVolumes = ref([]);
   const storageCandidates = ref([]);
   const coldStorageArchives = ref([]);
+  const coldArchivePage = ref(1);
+  const coldArchiveSize = ref(20);
+  const coldArchiveTotal = ref(0);
+  const coldArchivePages = ref(0);
   const selectedStorageArchive = ref(null);
   const coldStorageLoading = ref(false);
   const days = ref(180);
@@ -131,7 +137,12 @@ export function useBackupConsole() {
   const overviewLoading = ref(false);
   const overviewError = ref(null);
   const overviewLastSuccessAt = ref(null);
+  const overviewTrendPeriod = ref('WEEK');
+  const overviewTrendLoading = ref(false);
+  const overviewTrendError = ref(null);
   let overviewRequest = null;
+  let overviewTrendGeneration = 0;
+  let lastSuccessfulTrendPeriod = 'WEEK';
   const backupJobFilters = ref({ jobId: '', finishedFrom: '', finishedTo: '', orderResult: '' });
   const accounts = ref([]);
   const accountPage = ref(1);
@@ -149,6 +160,7 @@ export function useBackupConsole() {
   let jobLoadingCount = 0;
   const detailRequestGuard = createDetailRequestGuard();
   const orderFileDetailGuard = createDetailRequestGuard();
+  const listRequestGuard = createLatestRequestGuard();
   orderFileDetailGuard.openTask('order-files');
   const detailSectionTracker = createSectionLoadTracker();
 
@@ -228,8 +240,9 @@ export function useBackupConsole() {
   async function login() {
     try {
       await auth.login(username.value, password.value);
+      route.navigate(defaultPageForRole(role.value));
       notice.value = '登录成功';
-      await loadOrders();
+      await loadCurrentPage();
     } catch (error) {
       notice.value = error.message || '登录失败';
     }
@@ -251,6 +264,7 @@ export function useBackupConsole() {
   }
 
   async function loadOrders(pageNumber = orderPage.value) {
+    const requestToken = listRequestGuard.begin('orders');
     try {
       const params = new URLSearchParams({
         current: String(pageNumber),
@@ -271,6 +285,7 @@ export function useBackupConsole() {
       if (storageAccessible.value !== '' && storageAccessible.value != null) params.set('storageAccessible', storageAccessible.value);
       if (storageIssue.value) params.set('storageIssue', storageIssue.value);
       const result = await api('/orders?' + params.toString());
+      if (!listRequestGuard.isCurrent(requestToken)) return;
       const page = normalizePage(result.data);
       orderPage.value = page.current;
       orderSize.value = page.size;
@@ -283,6 +298,7 @@ export function useBackupConsole() {
         if (selectedOrder.value) await loadSelectedOrder();
       }
     } catch (error) {
+      if (!listRequestGuard.isCurrent(requestToken)) return;
       notice.value = error.message || '订单查询失败';
     }
   }
@@ -324,17 +340,18 @@ export function useBackupConsole() {
     if (!selectedOrder.value) return;
     const requestToken = orderFileDetailGuard.beginOrderRequest('detail');
     const orderId = selectedOrder.value.id;
-    const id = encodeURIComponent(selectedOrder.value.id);
-    const key = encodeURIComponent(selectedOrderKey());
     try {
-      const [assetResult, supplementResult, locationResult] = await Promise.all([api('/orders/' + id + '/assets'), api('/orders/' + key + '/supplements'), api('/orders/' + id + '/package-location')]);
+      const details = await loadOrderDetailSections(orderId, api);
       if (!orderFileDetailGuard.isCurrentOrderRequest(requestToken) || selectedOrder.value?.id !== orderId) return;
-      assets.value = assetResult.data || [];
-      supplements.value = supplementResult.data || [];
+      assets.value = details.assets;
+      supplements.value = details.supplements;
       selectedOrder.value = {
         ...selectedOrder.value,
-        storageLocation: locationResult.data || null,
+        storageLocation: details.storageLocation,
       };
+      if (details.errors.length) {
+        notice.value = `订单详情部分加载失败：${details.errors.map((item) => `${item.section}（${item.message}）`).join('；')}`;
+      }
     } catch (error) {
       if (!orderFileDetailGuard.isCurrentOrderRequest(requestToken)) return;
       notice.value = error.message || '订单文件加载失败';
@@ -347,9 +364,8 @@ export function useBackupConsole() {
       return;
     }
     try {
-      const response = await binary('/orders/' + encodeURIComponent(order.id) + '/package/download');
-      const blob = await response.blob();
-      saveBlob(blob, (order.orderCode || order.sourceOrderId || order.id) + '.zip');
+      await startTicketDownload('/download-tickets/order-packages/' + encodeURIComponent(order.id));
+      notice.value = '下载已开始';
     } catch (error) {
       notice.value = error.message || '订单包下载失败';
     }
@@ -413,8 +429,8 @@ export function useBackupConsole() {
       return;
     }
     try {
-      const response = await binary('/orders/' + encodeURIComponent(selectedOrderKey()) + '/supplements/' + encodeURIComponent(file.fileId) + '/download');
-      saveBlob(await response.blob(), file.fileName || file.fileId);
+      await startTicketDownload('/download-tickets/supplements/' + encodeURIComponent(selectedOrderKey()) + '/' + encodeURIComponent(file.fileId));
+      notice.value = '下载已开始';
     } catch (error) {
       notice.value = error.message || '补传文件下载失败';
     }
@@ -512,10 +528,12 @@ export function useBackupConsole() {
   }
 
   async function loadJobs(pageNumber = jobPage.value) {
+    const requestToken = listRequestGuard.begin('jobs');
     try {
       const params = new URLSearchParams({ current: String(pageNumber), size: String(jobSize.value) });
       for (const [key, value] of Object.entries(backupJobFilters.value)) if (value) params.set(key, value);
       const result = await api(`/admin/backup/jobs?${params.toString()}`);
+      if (!listRequestGuard.isCurrent(requestToken)) return;
       const pageData = normalizePage(result.data);
       jobs.value = pageData.records;
       jobPage.value = pageData.current;
@@ -528,6 +546,7 @@ export function useBackupConsole() {
         }
       }
     } catch (error) {
+      if (!listRequestGuard.isCurrent(requestToken)) return;
       notice.value = error.message;
     }
   }
@@ -755,7 +774,7 @@ export function useBackupConsole() {
   }
   async function changeStorageVolumeState(id, action, body = null) {
     try {
-      const knownAction = ['set-active', 'set-standby', 'to-hot', 'disable', 'probe', 'confirm-mounted', 'prepare-offline', 'failover'];
+      const knownAction = ['set-active', 'set-standby', 'cancel-standby', 'repair-abnormal-state', 'to-hot', 'disable', 'probe', 'confirm-mounted', 'prepare-offline', 'failover'];
       const suffix = knownAction.includes(action) ? `/${action}` : '/state';
       await api(`/admin/storage-volumes/${id}${suffix}`, {
         method: 'POST',
@@ -801,21 +820,31 @@ export function useBackupConsole() {
       return null;
     }
   }
-  async function loadColdStorage() {
+  async function loadColdStorage(pageNumber = coldArchivePage.value) {
+    const requestToken = listRequestGuard.begin('cold-storage');
     coldStorageLoading.value = true;
     try {
       const [archiveResult, volumeResult] = await Promise.all([
-        api('/admin/storage-volumes/archives'),
+        api(`/admin/storage-volumes/archives?current=${encodeURIComponent(pageNumber)}&size=${encodeURIComponent(coldArchiveSize.value)}`),
         api('/admin/storage-volumes'),
       ]);
-      coldStorageArchives.value = archiveResult.data || [];
+      if (!listRequestGuard.isCurrent(requestToken)) return;
+      const archivePage = normalizePage(archiveResult.data);
+      coldStorageArchives.value = archivePage.records;
+      coldArchivePage.value = archivePage.current;
+      coldArchiveSize.value = archivePage.size;
+      coldArchiveTotal.value = archivePage.total;
+      coldArchivePages.value = archivePage.pages;
       storageVolumes.value = volumeResult.data || [];
     } catch (error) {
+      if (!listRequestGuard.isCurrent(requestToken)) return;
       notice.value = error.message || '加载冷备管理信息失败';
     } finally {
-      coldStorageLoading.value = false;
+      if (listRequestGuard.isCurrent(requestToken)) coldStorageLoading.value = false;
     }
   }
+  async function changeColdArchivePage(pageNumber) { await loadColdStorage(pageNumber); }
+  async function changeColdArchiveSize(value) { coldArchiveSize.value = value; await loadColdStorage(1); }
   async function openColdStorageArchive(archiveId, silent = false, current = 1, size = 20) {
     try {
       selectedStorageArchive.value = await loadStorageArchiveDetail(archiveId, current, size);
@@ -872,10 +901,10 @@ export function useBackupConsole() {
     }
   }
 
-  /** 管理员主动执行一次候选扫描；服务端仍复用自动备份的筛选、排重与任务幂等规则。 */
+  /** 管理员主动执行一次候选扫描；服务端复用计划备份的筛选与排重规则，但任务归类为手工备份。 */
   async function runScheduledBackupNow() {
     if (scheduledBackupRunning.value) return;
-    if (!await confirmAction('确认立即执行一次自动备份扫描？该操作会跳过今日计划时间限制，但仍仅处理符合备份条件且尚未完成备份的订单。', { title: '立即执行备份扫描' })) return;
+    if (!await confirmAction('确认立即执行一次手工备份扫描？该操作会跳过今日计划时间限制，但仍仅处理符合备份条件且尚未完成备份的订单。', { title: '立即执行备份扫描' })) return;
     scheduledBackupRunning.value = true;
     try {
       await api('/admin/backup/schedule/run-now', {
@@ -883,9 +912,9 @@ export function useBackupConsole() {
         body: '{}',
       });
       await loadJobs(1);
-      notice.value = '自动备份扫描已完成，请在任务列表查看本次创建的任务；如无新任务，表示当前没有待备份订单。';
+      notice.value = '手工备份扫描已完成，请在任务列表查看本次创建的任务；如无新任务，表示当前没有待备份订单。';
     } catch (error) {
-      notice.value = error.message || '立即执行自动备份扫描失败';
+      notice.value = error.message || '立即执行手工备份扫描失败';
     } finally {
       scheduledBackupRunning.value = false;
     }
@@ -1317,9 +1346,18 @@ export function useBackupConsole() {
     overviewRequest = (async () => {
       try {
         const result = await api(`/admin/overview${refresh ? '?refresh=true' : ''}`);
-        overview.value = result.data || null;
+        const nextOverview = result.data || null;
+        if (overviewTrendPeriod.value === 'WEEK') {
+          overview.value = nextOverview;
+          lastSuccessfulTrendPeriod = 'WEEK';
+        } else {
+          overview.value = nextOverview && overview.value
+            ? { ...nextOverview, backupTrend: overview.value.backupTrend }
+            : nextOverview;
+        }
         overviewLastSuccessAt.value = new Date().toISOString();
         overviewError.value = null;
+        if (overviewTrendPeriod.value !== 'WEEK') await loadOverviewTrend(overviewTrendPeriod.value);
       } catch (error) {
         overviewError.value = { code: error.code || 'OVERVIEW_LOAD_FAILED', message: error.message || '概览加载失败', requestId: error.requestId || '' };
       } finally {
@@ -1329,14 +1367,56 @@ export function useBackupConsole() {
     })();
     return overviewRequest;
   }
+  async function dismissOverviewAlert(alert) {
+    const endpoint = overviewAlertDismissUrl(alert?.alertKey);
+    if (!endpoint) {
+      notice.value = '告警标识无效，无法关闭';
+      return;
+    }
+    const confirmed = await confirmAction(
+      `确定关闭“${alert.title || '当前告警'}”吗？同一异常持续存在期间将不再在首页显示；异常恢复后若未来再次发生，系统会重新告警。`,
+      { title:'关闭告警', confirmButtonText:'确认关闭', type:'warning' }
+    );
+    if (!confirmed) return;
+    try {
+      await api(endpoint, { method:'POST', body:'{}' });
+      notice.value = '告警已关闭';
+      if (overviewRequest) await overviewRequest;
+      await loadOverview({ refresh:true });
+    } catch (error) {
+      notice.value = error.message || '关闭告警失败';
+    }
+  }
+  async function loadOverviewTrend(period) {
+    const normalized = ['WEEK','MONTH','YEAR'].includes(String(period || '').toUpperCase())
+      ? String(period).toUpperCase() : 'WEEK';
+    const generation = ++overviewTrendGeneration;
+    overviewTrendPeriod.value = normalized;
+    overviewTrendLoading.value = true;
+    overviewTrendError.value = null;
+    try {
+      const result = await api(overviewTrendUrl(normalized));
+      if (generation !== overviewTrendGeneration) return;
+      if (overview.value) overview.value = { ...overview.value, backupTrend: result.data || [] };
+      lastSuccessfulTrendPeriod = normalized;
+    } catch (error) {
+      if (generation !== overviewTrendGeneration) return;
+      overviewTrendPeriod.value = lastSuccessfulTrendPeriod;
+      overviewTrendError.value = { code:error.code || 'OVERVIEW_TREND_LOAD_FAILED', message:error.message || '趋势数据加载失败', requestId:error.requestId || '' };
+    } finally {
+      if (generation === overviewTrendGeneration) overviewTrendLoading.value = false;
+    }
+  }
   function clearBackupJobFilters() {
     backupJobFilters.value = { jobId: '', finishedFrom: '', finishedTo: '', orderResult: '' };
     loadJobs(1);
   }
 
   async function loadAccounts(pageNumber = accountPage.value) {
+    const requestToken = listRequestGuard.begin('accounts');
     try {
       const [accountsResult, syncResult] = await Promise.all([api(`/admin/accounts?current=${encodeURIComponent(pageNumber)}&size=${encodeURIComponent(accountSize.value)}`), api('/admin/accounts/sync/status')]);
+      if (!listRequestGuard.isCurrent(requestToken)) return;
       const pageData = normalizePage(accountsResult.data);
       accounts.value = pageData.records;
       accountPage.value = pageData.current;
@@ -1345,6 +1425,7 @@ export function useBackupConsole() {
       accountPages.value = pageData.pages;
       accountSyncStatus.value = syncResult.data || null;
     } catch (error) {
+      if (!listRequestGuard.isCurrent(requestToken)) return;
       notice.value = error.message || '账号列表加载失败';
     }
   }
@@ -1433,9 +1514,9 @@ export function useBackupConsole() {
     }
   }
 
-  function logout() {
+  async function logout() {
     closeJobDetail();
-    auth.logout();
+    await auth.logout();
     route.navigate('orders');
   }
 
@@ -1449,7 +1530,7 @@ export function useBackupConsole() {
   onMounted(async () => {
     window.addEventListener('backup-auth-expired', handleAuthExpired);
     window.addEventListener('hashchange', handleHashChange);
-    if (!isAdmin.value && page.value !== 'orders') route.navigate('orders');
+    if (!canAccessPage(role.value, page.value)) route.navigate(defaultPageForRole(role.value));
     if (token.value) await loadCurrentPage();
   });
   onUnmounted(() => {
@@ -1461,12 +1542,12 @@ export function useBackupConsole() {
 
   function handleHashChange() {
     route.onHashChange();
-    if (!isAdmin.value && page.value !== 'orders') route.navigate('orders');
+    if (!canAccessPage(role.value, page.value)) route.navigate(defaultPageForRole(role.value));
   }
 
   function navigate(target, query) {
-    if (!isAdmin.value && target !== 'orders') {
-      route.navigate('orders');
+    if (!canAccessPage(role.value, target)) {
+      route.navigate(defaultPageForRole(role.value));
       return;
     }
     if (target !== 'backup' && jobDetailVisible.value) closeJobDetail();
@@ -1575,6 +1656,10 @@ export function useBackupConsole() {
     storageVolumes,
     storageCandidates,
     coldStorageArchives,
+    coldArchivePage,
+    coldArchiveSize,
+    coldArchiveTotal,
+    coldArchivePages,
     selectedStorageArchive,
     coldStorageLoading,
     days,
@@ -1611,6 +1696,9 @@ export function useBackupConsole() {
     overviewLoading,
     overviewError,
     overviewLastSuccessAt,
+    overviewTrendPeriod,
+    overviewTrendLoading,
+    overviewTrendError,
     routeQuery,
     consumeRouteQuery: route.consumeRouteQuery,
     jobLogRecords,
@@ -1690,12 +1778,16 @@ export function useBackupConsole() {
     loadStorageArchiveDetail,
     abandonStorageArchive,
     loadColdStorage,
+    changeColdArchivePage,
+    changeColdArchiveSize,
     openColdStorageArchive,
     closeColdStorageArchive,
     scanColdMountCandidates,
     confirmColdVolumeMounted,
     prepareColdVolumeOffline,
     loadOverview,
+    loadOverviewTrend,
+    dismissOverviewAlert,
     dryCleanup,
     executeCleanup,
     loadJobs,

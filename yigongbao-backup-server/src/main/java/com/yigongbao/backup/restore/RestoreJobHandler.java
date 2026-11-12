@@ -193,7 +193,7 @@ public class RestoreJobHandler implements JobHandler {
                 // 因此不能复用“热备写入”的容量预留入口。
                 context.fileStarted(snapshot.getSourceOrderId(), snapshot.getOrderCode(), "RESTORE_UPLOAD", Files.size(path));
                 log.info("线上恢复订单开始｜任务ID={}｜订单ID={}｜订单号={}｜包大小={}字节", job.getId(), snapshot.getSourceOrderId(), snapshot.getOrderCode(), Files.size(path));
-                service.restore(path, snapshot.getSourceOrderId().toString(), new LocalOrderRestoreService.RestoreAssetListener() {
+                LocalOrderRestoreService.RestoreOutcome restoreOutcome = service.restore(path, snapshot.getSourceOrderId().toString(), new LocalOrderRestoreService.RestoreAssetListener() {
                     @Override public void started(String assetIdentity, String zipEntryName, String objectKey, long totalBytes) {
                         context.fileStepStarted(snapshot.getSourceOrderId(), assetIdentity,
                                 "RESTORE_OBJECT_UPLOAD", totalBytes, objectKey);
@@ -235,6 +235,19 @@ public class RestoreJobHandler implements JobHandler {
                                         "reason", safe(failure)));
                     }
                 });
+                if (restoreOutcome == LocalOrderRestoreService.RestoreOutcome.SKIPPED_DELETED) {
+                    context.fileCompleted(snapshot.getSourceOrderId(), "SKIPPED");
+                    context.orderCompleted("SKIPPED");
+                    done++;
+                    skipped++;
+                    skippedOrderIds.add(snapshot.getSourceOrderId());
+                    context.orderInfo(snapshot.getSourceOrderId(), "ORDER_RESTORE_SKIPPED_DELETED", "订单跳过",
+                            "线上订单已删除，按策略跳过恢复", Map.of(
+                                    "orderNo", snapshot.getOrderCode() == null ? "-" : snapshot.getOrderCode(),
+                                    "reason", "REMOTE_ORDER_DELETED"));
+                    context.safePoint("RESTORE_ORDER_COMPLETED", done);
+                    continue;
+                }
                 context.fileSucceeded(snapshot.getSourceOrderId(), Files.size(path));
                 context.orderSucceeded();
                 succeeded++;

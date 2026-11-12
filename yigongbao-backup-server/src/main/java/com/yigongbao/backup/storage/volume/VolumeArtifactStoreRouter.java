@@ -19,16 +19,19 @@ import java.util.stream.Stream;
 public class VolumeArtifactStoreRouter implements VolumeArtifactStore {
     private final StorageVolumeMapper volumeMapper;
     private final StorageVolumeMarkerService markerService;
+    private final StorageVolumeDiscoveryService discoveryService;
 
     @Autowired
-    public VolumeArtifactStoreRouter(StorageVolumeMapper volumeMapper, StorageVolumeMarkerService markerService) {
+    public VolumeArtifactStoreRouter(StorageVolumeMapper volumeMapper, StorageVolumeMarkerService markerService,
+                                     StorageVolumeDiscoveryService discoveryService) {
         this.volumeMapper = volumeMapper;
         this.markerService = markerService;
+        this.discoveryService = discoveryService;
     }
 
     /** 保持不启动 Spring 容器的历史单元测试兼容。 */
     VolumeArtifactStoreRouter(StorageVolumeMapper volumeMapper) {
-        this(volumeMapper, new StorageVolumeMarkerService());
+        this(volumeMapper, new StorageVolumeMarkerService(), new StorageVolumeDiscoveryService());
     }
 
     @Override
@@ -90,6 +93,21 @@ public class VolumeArtifactStoreRouter implements VolumeArtifactStore {
                 Path.of(volume.getRootPath()), markerService.expectedVolumeId(volume));
         if (!result.valid()) {
             throw new StorageVolumeUnavailableException("STORAGE_VOLUME_MARKER_MISMATCH：卷标记校验失败：" + result.reason());
+        }
+        if (volume.getMountPath() == null || volume.getVolumeFingerprint() == null
+                || volume.getVolumeFingerprint().isBlank()) {
+            throw new StorageVolumeUnavailableException("STORAGE_VOLUME_IDENTITY_MISSING：存储卷缺少物理身份信息");
+        }
+        boolean matched;
+        try {
+            matched = discoveryService.discoverMountedPaths(java.util.List.of(Path.of(volume.getMountPath()))).stream()
+                    .map(StorageVolumeLifecycleService::fingerprint)
+                    .anyMatch(volume.getVolumeFingerprint()::equals);
+        } catch (RuntimeException failure) {
+            matched = false;
+        }
+        if (!matched) {
+            throw new StorageVolumeUnavailableException("STORAGE_VOLUME_FINGERPRINT_MISMATCH：当前物理卷与纳管记录不一致");
         }
     }
 

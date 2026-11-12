@@ -88,7 +88,7 @@ public final class JobDispatcher {
             // 先停止后台心跳，再写入终态，避免心跳与成功状态更新发生并发竞争。
             heartbeat.close();
             coordinator.succeed(job.getId(), owner, token);
-            context.taskInfo("TASK_SUCCEEDED", "任务完成", "任务执行成功｜最终状态=已成功｜执行耗时="
+            context.completedTaskInfo("TASK_SUCCEEDED", "任务完成", "任务执行成功｜最终状态=已成功｜执行耗时="
                             + BusinessLogFormatter.duration(elapsedMillis(startedAt)),
                     Map.of("durationMillis", elapsedMillis(startedAt)));
             log.info("任务执行成功｜任务ID={}｜任务编号={}｜任务类型={}｜最终状态={}｜执行耗时={}",
@@ -111,13 +111,13 @@ public final class JobDispatcher {
             }
             if (partial.allItemsFailed()) {
                 coordinator.failOrRetry(job.getId(), owner, token, 0, partial);
-                context.taskError("TASK_ALL_ORDERS_FAILED", "任务完成", "任务全部订单失败｜原因=" + safe(partial),
+                context.completedTaskError("TASK_ALL_ORDERS_FAILED", "任务完成", "任务全部订单失败｜原因=" + safe(partial),
                         Map.of("reason", safe(partial)));
                 log.error("任务全部订单失败: jobId={}, jobNo={}, jobType={}, durationMs={}, error={}",
                         job.getId(), job.getJobNo(), job.getJobType(), elapsedMillis(startedAt), safe(partial));
             } else {
                 coordinator.partial(job.getId(), owner, token, partial.getMessage());
-                context.taskWarn("TASK_PARTIAL_FAILED", "任务完成", "任务部分失败｜原因=" + safe(partial),
+                context.completedTaskWarn("TASK_PARTIAL_FAILED", "任务完成", "任务部分失败｜原因=" + safe(partial),
                         Map.of("reason", safe(partial)));
                 log.warn("任务部分失败: jobId={}, jobNo={}, jobType={}, durationMs={}, error={}",
                         job.getId(), job.getJobNo(), job.getJobType(), elapsedMillis(startedAt), safe(partial));
@@ -139,14 +139,14 @@ public final class JobDispatcher {
             int nextRetry = value(job.getRetryCount()) + 1;
             boolean willRetry = nextRetry <= effectiveRetries && !Boolean.TRUE.equals(job.getCancelRequested());
             if (willRetry) {
-                context.taskWarn("TASK_RETRY_SCHEDULED", "任务重试", "任务执行失败，已进入任务级重试｜原因=" + safe(failure),
+                context.completedTaskWarn("TASK_RETRY_SCHEDULED", "任务重试", "任务执行失败，已进入任务级重试｜原因=" + safe(failure),
                         Map.of("nextRetry", nextRetry, "retryLimit", effectiveRetries, "reason", safe(failure)));
                 log.warn("任务执行失败，已进入任务级重试｜任务ID={}｜任务编号={}｜任务类型={}｜重试进度={}/{}｜执行耗时={}｜异常类型={}｜异常原因={}",
                         job.getId(), job.getJobNo(), jobType(job.getJobType()), nextRetry, effectiveRetries,
                         BusinessLogFormatter.duration(elapsedMillis(startedAt)),
                         failure.getClass().getSimpleName(), safe(failure), safeThrowable(failure));
             } else {
-                context.taskError("TASK_FAILED", "任务完成", "任务执行终态失败｜原因=" + safe(failure),
+                context.completedTaskError("TASK_FAILED", "任务完成", "任务执行终态失败｜原因=" + safe(failure),
                         Map.of("attempt", nextRetry, "reason", safe(failure)));
                 log.error("任务执行终态失败｜任务ID={}｜任务编号={}｜任务类型={}｜最终状态={}｜累计尝试次数={}｜执行耗时={}｜异常类型={}｜异常原因={}",
                         job.getId(), job.getJobNo(), jobType(job.getJobType()),
@@ -166,7 +166,7 @@ public final class JobDispatcher {
 
     private static void recordCancellation(JobExecutionContext context, JobEntity job, long startedAt,
                                            JobCancelledException cancelled) {
-        context.taskWarn("TASK_CANCELLED", "任务取消", "任务执行已取消｜原因=" + safe(cancelled),
+        context.completedTaskWarn("TASK_CANCELLED", "任务取消", "任务执行已取消｜原因=" + safe(cancelled),
                 Map.of("reason", safe(cancelled)));
         log.warn("任务执行已取消: jobId={}, jobNo={}, currentStep={}, durationMs={}, reason={}",
                 job.getId(), job.getJobNo(), job.getCurrentStep(), elapsedMillis(startedAt), safe(cancelled));

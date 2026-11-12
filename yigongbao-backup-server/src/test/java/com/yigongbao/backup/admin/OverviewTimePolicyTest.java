@@ -18,6 +18,15 @@ class OverviewTimePolicyTest {
         assertThat(policy.capacityFresh(now.minusMinutes(16), 5)).isFalse();
     }
 
+    @Test void exposesCalendarWindowsForWeekMonthAndYearTrends() {
+        assertThat(policy.trendWindow(OverviewTrendPeriod.WEEK)).isEqualTo(new OverviewTimePolicy.DateWindow(
+                LocalDateTime.of(2026, 11, 9, 0, 0), LocalDateTime.of(2026, 11, 16, 0, 0)));
+        assertThat(policy.trendWindow(OverviewTrendPeriod.MONTH)).isEqualTo(new OverviewTimePolicy.DateWindow(
+                LocalDateTime.of(2026, 11, 1, 0, 0), LocalDateTime.of(2026, 12, 1, 0, 0)));
+        assertThat(policy.trendWindow(OverviewTrendPeriod.YEAR)).isEqualTo(new OverviewTimePolicy.DateWindow(
+                LocalDateTime.of(2026, 1, 1, 0, 0), LocalDateTime.of(2027, 1, 1, 0, 0)));
+    }
+
     @Test void anchorsForcedSuccessToTheConfiguredMinuteOnTheFutureCycleDate() {
         var state = policy.backupSchedule(new OverviewTimePolicy.BackupScheduleInput(true,
                 LocalDateTime.of(2026, 11, 1, 9, 0), "05:00", 3,

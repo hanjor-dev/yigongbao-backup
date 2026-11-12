@@ -80,6 +80,12 @@ CREATE TABLE IF NOT EXISTS bk_user_field_control (
  create_time DATETIME(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3) COMMENT '创建时间', update_time DATETIME(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3) ON UPDATE CURRENT_TIMESTAMP(3) COMMENT '更新时间', create_by BIGINT NULL COMMENT '创建人ID', update_by BIGINT NULL COMMENT '更新人ID', is_deleted TINYINT NOT NULL DEFAULT 0 COMMENT '逻辑删除', PRIMARY KEY(id)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci COMMENT='账号字段托管权';
 
+CREATE TABLE IF NOT EXISTS bk_login_throttle (
+ id BIGINT NOT NULL AUTO_INCREMENT COMMENT '主键ID', bucket_key CHAR(64) NOT NULL COMMENT '用户名或来源地址不可逆摘要', scope_type VARCHAR(16) NOT NULL COMMENT 'IDENTITY/IP', failure_count INT NOT NULL DEFAULT 0, window_started_at DATETIME(3) NOT NULL, blocked_until DATETIME(3) NULL, version INT NOT NULL DEFAULT 0,
+ create_time DATETIME(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3), update_time DATETIME(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3) ON UPDATE CURRENT_TIMESTAMP(3), create_by BIGINT NULL, update_by BIGINT NULL, is_deleted TINYINT NOT NULL DEFAULT 0, PRIMARY KEY(id),
+ UNIQUE KEY uk_bk_login_throttle_bucket (bucket_key), KEY idx_bk_login_throttle_expiry (blocked_until,update_time)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci COMMENT='跨实例登录失败限流桶';
+
 CREATE TABLE IF NOT EXISTS bk_backup_candidate (
  id BIGINT NOT NULL AUTO_INCREMENT COMMENT '主键ID', source_order_id BIGINT NOT NULL COMMENT '线上订单ID', source_event_id BIGINT NOT NULL COMMENT '线上候选事件ID', candidate_generation INT NOT NULL COMMENT '资格代次',
  backup_eligible_at DATETIME(3) NOT NULL COMMENT '首次资格时间', candidate_status VARCHAR(32) NOT NULL COMMENT '候选状态', last_attempt_at DATETIME(3) NULL COMMENT '最近尝试时间', next_retry_at DATETIME(3) NULL COMMENT '下次重试时间', failure_code VARCHAR(64) NULL COMMENT '失败码', row_version INT NOT NULL DEFAULT 0 COMMENT 'CAS版本', version INT NOT NULL DEFAULT 0 COMMENT '乐观锁版本',
@@ -116,9 +122,9 @@ CREATE TABLE IF NOT EXISTS bk_relation_gap (
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci COMMENT='降级备份关系缺口证据';
 
 CREATE TABLE IF NOT EXISTS bk_backup_stage (
- id BIGINT NOT NULL AUTO_INCREMENT COMMENT '主键ID', job_id BIGINT NOT NULL COMMENT '本地任务ID', source_order_id BIGINT NOT NULL COMMENT '线上订单ID', idempotency_key VARCHAR(255) NOT NULL COMMENT '线上回执幂等键', manifest_json JSON NOT NULL COMMENT '待发布清单', result_json JSON NOT NULL COMMENT '待发布订单包结果', manifest_sha256 CHAR(64) NOT NULL COMMENT '清单摘要', package_sha256 CHAR(64) NOT NULL COMMENT '包摘要', package_size BIGINT NOT NULL COMMENT '包大小', storage_volume_id BIGINT NULL COMMENT '存储卷ID', storage_key VARCHAR(1024) NOT NULL COMMENT '卷内相对键', backup_completeness VARCHAR(32) NOT NULL COMMENT 'COMPLETE/INCOMPLETE', stage_status VARCHAR(32) NOT NULL COMMENT 'STAGED/RECEIPT_ACCEPTED/AVAILABLE/SUPERSEDED', published_snapshot_id BIGINT NULL COMMENT '已发布快照ID', receipt_completed_at DATETIME(3) NOT NULL COMMENT '首次回执请求的稳定完成时间', receipt_accepted_at DATETIME(3) NULL, published_at DATETIME(3) NULL, superseded_at DATETIME(3) NULL, version INT NOT NULL DEFAULT 0,
+ id BIGINT NOT NULL AUTO_INCREMENT COMMENT '主键ID', job_id BIGINT NOT NULL COMMENT '本地任务ID', source_order_id BIGINT NOT NULL COMMENT '线上订单ID', idempotency_key VARCHAR(255) NOT NULL COMMENT '线上回执幂等键', manifest_json JSON NOT NULL COMMENT '待发布清单', result_json JSON NOT NULL COMMENT '待发布订单包结果', manifest_sha256 CHAR(64) NOT NULL COMMENT '清单摘要', package_sha256 CHAR(64) NOT NULL COMMENT '包摘要', package_size BIGINT NOT NULL COMMENT '包大小', storage_volume_id BIGINT NULL COMMENT '存储卷ID', storage_key VARCHAR(1024) NOT NULL COMMENT '卷内相对键', backup_completeness VARCHAR(32) NOT NULL COMMENT 'COMPLETE/INCOMPLETE', stage_status VARCHAR(32) NOT NULL COMMENT 'STAGED/RECEIPT_ACCEPTED/AVAILABLE/SUPERSEDED', published_snapshot_id BIGINT NULL COMMENT '已发布快照ID', receipt_completed_at DATETIME(3) NOT NULL COMMENT '首次回执请求的稳定完成时间', receipt_accepted_at DATETIME(3) NULL, published_at DATETIME(3) NULL, superseded_at DATETIME(3) NULL, cleanup_status VARCHAR(32) NULL COMMENT 'PENDING/RUNNING/SUCCEEDED/FAILED', cleanup_retry_count INT NOT NULL DEFAULT 0, cleanup_next_at DATETIME(3) NULL, cleanup_error VARCHAR(1024) NULL, cleaned_at DATETIME(3) NULL, version INT NOT NULL DEFAULT 0,
  create_time DATETIME(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3), update_time DATETIME(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3) ON UPDATE CURRENT_TIMESTAMP(3), create_by BIGINT NULL, update_by BIGINT NULL, is_deleted TINYINT NOT NULL DEFAULT 0, PRIMARY KEY(id),
- UNIQUE KEY uk_bk_backup_stage_idempotency (idempotency_key), UNIQUE KEY uk_bk_backup_stage_job_order (job_id, source_order_id), KEY idx_bk_backup_stage_order_status (source_order_id, stage_status)
+ UNIQUE KEY uk_bk_backup_stage_idempotency (idempotency_key), KEY idx_bk_backup_stage_job_order (job_id, source_order_id, id), KEY idx_bk_backup_stage_order_status (source_order_id, stage_status)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci COMMENT='订单备份回执前暂存状态';
 
 CREATE TABLE IF NOT EXISTS bk_storage_volume (
@@ -185,7 +191,7 @@ CREATE TABLE IF NOT EXISTS bk_job (
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci COMMENT='通用长任务';
 
 CREATE TABLE IF NOT EXISTS bk_job_order (
- id BIGINT NOT NULL AUTO_INCREMENT COMMENT '主键ID', job_id BIGINT NOT NULL COMMENT '任务ID', source_order_id BIGINT NOT NULL COMMENT '线上订单ID', snapshot_id BIGINT NULL COMMENT '本地快照ID', source_package_id BIGINT NULL COMMENT '恢复源订单包ID', source_storage_volume_id BIGINT NULL COMMENT '恢复源存储卷ID', source_storage_key VARCHAR(1024) NULL COMMENT '恢复源存储键快照', source_package_sha256 CHAR(64) NULL COMMENT '恢复源包哈希快照', storage_volume_id BIGINT NULL COMMENT '订单产物所在卷ID', storage_key VARCHAR(1024) NULL COMMENT '卷内相对位置', storage_volume_name VARCHAR(128) NULL COMMENT '卷名称快照', storage_tier VARCHAR(16) NULL COMMENT '卷层级快照', order_code VARCHAR(128) NULL COMMENT '订单编号', order_created_at VARCHAR(64) NULL COMMENT '订单创建时间', source_status VARCHAR(32) NULL COMMENT '线上业务状态', order_business_json JSON NULL COMMENT '完整订单业务快照', expected_file_count INT NULL COMMENT '模拟预计文件数', expected_bytes BIGINT NULL COMMENT '模拟预计文件容量', simulation_path VARCHAR(1024) NULL COMMENT '模拟制品隔离目录', status VARCHAR(32) NOT NULL COMMENT '订单级结果状态', failure_code VARCHAR(64) NULL COMMENT '失败码', failure_message VARCHAR(1024) NULL COMMENT '失败信息',
+ id BIGINT NOT NULL AUTO_INCREMENT COMMENT '主键ID', job_id BIGINT NOT NULL COMMENT '任务ID', source_order_id BIGINT NOT NULL COMMENT '线上订单ID', snapshot_id BIGINT NULL COMMENT '本地快照ID', source_package_id BIGINT NULL COMMENT '恢复源订单包ID', source_storage_volume_id BIGINT NULL COMMENT '恢复源存储卷ID', source_storage_key VARCHAR(1024) NULL COMMENT '恢复源存储键快照', source_package_sha256 CHAR(64) NULL COMMENT '恢复源包哈希快照', storage_volume_id BIGINT NULL COMMENT '订单产物所在卷ID', storage_key VARCHAR(1024) NULL COMMENT '卷内相对位置', storage_volume_name VARCHAR(128) NULL COMMENT '卷名称快照', storage_tier VARCHAR(16) NULL COMMENT '卷层级快照', order_code VARCHAR(128) NULL COMMENT '订单编号', order_created_at VARCHAR(64) NULL COMMENT '订单创建时间', source_status VARCHAR(32) NULL COMMENT '线上业务状态', order_business_json JSON NULL COMMENT '完整订单业务快照', expected_file_count INT NULL COMMENT '模拟预计文件数', expected_bytes BIGINT NULL COMMENT '模拟预计文件容量', simulation_path VARCHAR(1024) NULL COMMENT '模拟制品隔离目录', status VARCHAR(32) NOT NULL COMMENT '订单级结果状态', retry_count INT NOT NULL DEFAULT 0 COMMENT '订单级已消耗重试次数', degrade_phase VARCHAR(32) NULL COMMENT '自动降级有界状态机阶段', failure_code VARCHAR(64) NULL COMMENT '失败码', failure_message VARCHAR(1024) NULL COMMENT '失败信息',
  create_time DATETIME(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3) COMMENT '创建时间', update_time DATETIME(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3) ON UPDATE CURRENT_TIMESTAMP(3) COMMENT '更新时间', create_by BIGINT NULL COMMENT '创建人ID', update_by BIGINT NULL COMMENT '更新人ID', is_deleted TINYINT NOT NULL DEFAULT 0 COMMENT '逻辑删除；一期不删除', PRIMARY KEY(id)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci COMMENT='任务订单级结果';
 
@@ -244,6 +250,11 @@ CREATE TABLE IF NOT EXISTS bk_config (
  create_time DATETIME(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3) COMMENT '创建时间', update_time DATETIME(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3) ON UPDATE CURRENT_TIMESTAMP(3) COMMENT '更新时间', create_by BIGINT NULL COMMENT '创建人ID', update_by BIGINT NULL COMMENT '更新人ID', is_deleted TINYINT NOT NULL DEFAULT 0 COMMENT '逻辑删除', PRIMARY KEY(id)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci COMMENT='版本化配置';
 
+CREATE TABLE IF NOT EXISTS bk_config_lock (
+ lock_name VARCHAR(32) NOT NULL, update_time DATETIME(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3) ON UPDATE CURRENT_TIMESTAMP(3), PRIMARY KEY(lock_name)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci COMMENT='跨实例配置写入互斥锁';
+INSERT IGNORE INTO bk_config_lock(lock_name) VALUES ('GLOBAL');
+
 CREATE TABLE IF NOT EXISTS bk_sync_cursor (
  id BIGINT NOT NULL AUTO_INCREMENT COMMENT '主键ID', cursor_type VARCHAR(64) NOT NULL COMMENT 'CANDIDATE/USER/PERMIT_REQUEST', cursor_value VARCHAR(2048) NOT NULL COMMENT '不透明游标', high_watermark VARCHAR(2048) NULL COMMENT '分页高水位', lookback_seconds INT NOT NULL DEFAULT 0 COMMENT '回看窗口秒数', last_success_at DATETIME(3) NULL COMMENT '最近成功时间', last_attempt_at DATETIME(3) NULL COMMENT '最近尝试时间', sync_status VARCHAR(16) NOT NULL DEFAULT 'IDLE' COMMENT 'IDLE/RUNNING/SUCCEEDED/FAILED', last_item_count INT NOT NULL DEFAULT 0 COMMENT '最近一轮已提交数量', last_error_message VARCHAR(1024) NULL COMMENT '最近失败原因', version INT NOT NULL DEFAULT 0 COMMENT '乐观锁版本',
  create_time DATETIME(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3) COMMENT '创建时间', update_time DATETIME(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3) ON UPDATE CURRENT_TIMESTAMP(3) COMMENT '更新时间', create_by BIGINT NULL COMMENT '创建人ID', update_by BIGINT NULL COMMENT '更新人ID', is_deleted TINYINT NOT NULL DEFAULT 0 COMMENT '逻辑删除', PRIMARY KEY(id)
@@ -253,6 +264,22 @@ CREATE TABLE IF NOT EXISTS bk_safety_event_outbox (
  id BIGINT NOT NULL AUTO_INCREMENT COMMENT '主键ID', event_uuid CHAR(36) NOT NULL COMMENT '事件UUID', event_type VARCHAR(64) NOT NULL COMMENT '安全事件类型', artifact_type VARCHAR(32) NOT NULL COMMENT 'artifact类型', artifact_id BIGINT NOT NULL COMMENT 'artifact ID', receipt_id BIGINT NULL COMMENT '线上凭证ID', payload_digest CHAR(64) NOT NULL COMMENT '载荷摘要', payload_json JSON NOT NULL COMMENT '事件载荷', delivery_status VARCHAR(32) NOT NULL COMMENT 'PENDING/DELIVERING/DELIVERED/FAILED', retry_count INT NOT NULL DEFAULT 0 COMMENT '重试次数', next_retry_at DATETIME(3) NULL COMMENT '下次重试', delivered_at DATETIME(3) NULL COMMENT '送达时间', version INT NOT NULL DEFAULT 0 COMMENT '乐观锁版本',
  create_time DATETIME(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3) COMMENT '创建时间', update_time DATETIME(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3) ON UPDATE CURRENT_TIMESTAMP(3) COMMENT '更新时间', create_by BIGINT NULL COMMENT '创建人ID', update_by BIGINT NULL COMMENT '更新人ID', is_deleted TINYINT NOT NULL DEFAULT 0 COMMENT '逻辑删除；一期不删除', PRIMARY KEY(id)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci COMMENT='安全事件可靠出站箱';
+
+CREATE TABLE IF NOT EXISTS bk_overview_alert_dismissal (
+ id BIGINT NOT NULL AUTO_INCREMENT COMMENT '主键ID',
+ alert_key VARCHAR(191) NOT NULL COMMENT '稳定告警键',
+ alert_code VARCHAR(64) NOT NULL COMMENT '告警代码',
+ severity VARCHAR(16) NOT NULL COMMENT 'CRITICAL/WARNING/INFO',
+ title VARCHAR(255) NOT NULL COMMENT '关闭时告警标题快照',
+ dismissed_by BIGINT NOT NULL COMMENT '关闭管理员ID',
+ dismissed_at DATETIME(3) NOT NULL COMMENT '关闭时间',
+ create_time DATETIME(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3),
+ update_time DATETIME(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3) ON UPDATE CURRENT_TIMESTAMP(3),
+ PRIMARY KEY(id),
+ UNIQUE KEY uk_bk_overview_alert_dismissal_key (alert_key),
+ KEY idx_bk_overview_alert_dismissal_time (dismissed_at)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci COMMENT='管理概览当前告警关闭记录';
+
 
 CREATE TABLE IF NOT EXISTS bk_audit_log (
  id BIGINT NOT NULL AUTO_INCREMENT COMMENT '主键ID', chain_id VARCHAR(128) NOT NULL COMMENT '审计链ID', sequence_no BIGINT NOT NULL COMMENT '链内序号', actor_user_id BIGINT NULL COMMENT '用户ID', actor_role_code VARCHAR(32) NULL COMMENT '角色', client_address VARCHAR(128) NULL COMMENT '客户端地址', action VARCHAR(128) NOT NULL COMMENT '动作', object_type VARCHAR(64) NOT NULL COMMENT '对象类型', object_id VARCHAR(128) NOT NULL COMMENT '对象ID', job_id BIGINT NULL COMMENT '任务ID', input_digest CHAR(64) NOT NULL COMMENT '输入摘要', result_code VARCHAR(64) NOT NULL COMMENT '结果码', failure_reason VARCHAR(1024) NULL COMMENT '失败原因', previous_entry_hash CHAR(64) NULL COMMENT '前条哈希', entry_hash CHAR(64) NOT NULL COMMENT '本条哈希', occurred_at DATETIME(3) NOT NULL COMMENT '发生时间',
@@ -275,11 +302,11 @@ CREATE TABLE IF NOT EXISTS cos_cleanup_item (
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci COMMENT='COS清理对象明细';
 
 CREATE TABLE IF NOT EXISTS cos_delete_permit (
- id BIGINT NOT NULL AUTO_INCREMENT COMMENT '主键ID', permit_id VARCHAR(128) NOT NULL COMMENT '线上授权ID', cleanup_task_id BIGINT NOT NULL COMMENT '清理任务ID', attempt_no INT NOT NULL COMMENT '授权尝试号', status VARCHAR(32) NOT NULL COMMENT 'ISSUED/CLAIMED/CONSUMED/EXPIRED/REVOKED', snapshot_hash CHAR(64) NULL COMMENT '快照摘要', object_set_hash CHAR(64) NULL COMMENT '对象集合摘要', fencing_token VARCHAR(128) NULL COMMENT '线上隔离令牌', receipt_id VARCHAR(128) NULL COMMENT '线上凭证ID', receipt_version INT NULL COMMENT '凭证版本', package_hash CHAR(64) NULL COMMENT '包摘要', issued_at DATETIME(3) NULL COMMENT '签发时间', expires_at DATETIME(3) NULL COMMENT '过期时间', nonce VARCHAR(128) NULL COMMENT '防重放随机数', version INT NOT NULL DEFAULT 0 COMMENT '乐观锁版本',
+ id BIGINT NOT NULL AUTO_INCREMENT COMMENT '主键ID', permit_id VARCHAR(128) NOT NULL COMMENT '线上授权ID', cleanup_task_id BIGINT NOT NULL COMMENT '清理任务ID', attempt_no INT NOT NULL COMMENT '授权尝试号', status VARCHAR(32) NOT NULL COMMENT 'ISSUED/CLAIMED/CONSUMED/EXPIRED/REVOKED', snapshot_hash CHAR(64) NULL COMMENT '快照摘要', object_set_hash CHAR(64) NULL COMMENT '对象集合摘要', fencing_token VARCHAR(128) NULL COMMENT '线上隔离令牌', receipt_id VARCHAR(128) NULL COMMENT '线上凭证ID', receipt_version INT NULL COMMENT '凭证版本', package_hash CHAR(64) NULL COMMENT '包摘要', issued_at DATETIME(3) NULL COMMENT '签发时间', expires_at DATETIME(3) NULL COMMENT '过期时间', nonce VARCHAR(128) NULL COMMENT '防重放随机数', claim_owner VARCHAR(128) NULL COMMENT '本地领取实例', claim_until DATETIME(3) NULL COMMENT '本地领取租约截止', local_fencing_token BIGINT NOT NULL DEFAULT 0 COMMENT '本地单调隔离令牌', version INT NOT NULL DEFAULT 0 COMMENT '乐观锁版本',
  create_time DATETIME(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3) COMMENT '创建时间', update_time DATETIME(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3) ON UPDATE CURRENT_TIMESTAMP(3) COMMENT '更新时间', create_by BIGINT NULL COMMENT '创建人ID', update_by BIGINT NULL COMMENT '更新人ID', is_deleted TINYINT NOT NULL DEFAULT 0 COMMENT '逻辑删除', PRIMARY KEY(id)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci COMMENT='COS删除授权';
 
--- 执行后验证：应返回 30；所有表均应包含六个公共字段。
+-- 执行后验证：返回当前所有 bk_ 领域表；所有表均应包含六个公共字段。
 SELECT COUNT(*) AS local_domain_table_count FROM information_schema.tables WHERE table_schema=DATABASE() AND table_name LIKE 'bk\_%';
 SELECT t.table_name FROM information_schema.tables t WHERE t.table_schema=DATABASE() AND t.table_name LIKE 'bk\_%'
 AND EXISTS (SELECT 1 FROM (SELECT 'id' c UNION ALL SELECT 'create_time' UNION ALL SELECT 'update_time' UNION ALL SELECT 'create_by' UNION ALL SELECT 'update_by' UNION ALL SELECT 'is_deleted') required_column
@@ -319,6 +346,7 @@ CALL add_backup_index_if_missing('bk_backup_candidate','uk_bk_candidate_order','
 CALL add_backup_index_if_missing('bk_backup_candidate','uk_bk_candidate_event','CREATE UNIQUE INDEX uk_bk_candidate_event ON bk_backup_candidate(source_event_id)');
 CALL add_backup_index_if_missing('bk_backup_candidate','idx_bk_candidate_claim','CREATE INDEX idx_bk_candidate_claim ON bk_backup_candidate(candidate_status,next_retry_at,version)');
 CALL add_backup_index_if_missing('bk_backup_candidate','idx_bk_candidate_cursor','CREATE INDEX idx_bk_candidate_cursor ON bk_backup_candidate(backup_eligible_at,source_event_id)');
+CALL add_backup_index_if_missing('bk_backup_stage','idx_bk_backup_stage_cleanup','CREATE INDEX idx_bk_backup_stage_cleanup ON bk_backup_stage(stage_status,cleanup_status,cleanup_next_at,id)');
 CALL add_backup_index_if_missing('bk_order_snapshot','uk_bk_snapshot_order','CREATE UNIQUE INDEX uk_bk_snapshot_order ON bk_order_snapshot(source_order_id)');
 CALL add_backup_index_if_missing('bk_order_snapshot','idx_bk_snapshot_code','CREATE INDEX idx_bk_snapshot_code ON bk_order_snapshot(order_code)');
 CALL add_backup_index_if_missing('bk_order_snapshot','idx_bk_snapshot_completed','CREATE INDEX idx_bk_snapshot_completed ON bk_order_snapshot(backup_completed_at,id)');
@@ -379,6 +407,7 @@ CALL add_backup_index_if_missing('bk_job_order','idx_bk_job_order_source_volume'
 CALL add_backup_index_if_missing('bk_job_order','idx_bk_job_order_storage_volume','CREATE INDEX idx_bk_job_order_storage_volume ON bk_job_order(storage_volume_id,job_id)');
 CALL add_backup_index_if_missing('bk_job','idx_bk_job_overview','CREATE INDEX idx_bk_job_overview ON bk_job(job_type,finished_at,id,is_deleted)');
 CALL add_backup_index_if_missing('bk_job_order','idx_bk_job_order_overview','CREATE INDEX idx_bk_job_order_overview ON bk_job_order(source_order_id,status,job_id,is_deleted)');
+CALL add_backup_index_if_missing('bk_job_order','idx_bk_job_order_failed_retry','CREATE INDEX idx_bk_job_order_failed_retry ON bk_job_order(status,is_deleted,id,source_order_id)');
 CALL add_backup_index_if_missing('bk_order_snapshot','idx_bk_snapshot_overview','CREATE INDEX idx_bk_snapshot_overview ON bk_order_snapshot(backup_mode,snapshot_status,backup_completed_at,source_order_id,is_deleted)');
 CALL add_backup_index_if_missing('bk_order_package','idx_bk_package_overview','CREATE INDEX idx_bk_package_overview ON bk_order_package(backup_mode,status,snapshot_id,is_deleted)');
 CALL add_backup_index_if_missing('bk_artifact_copy','idx_bk_artifact_overview','CREATE INDEX idx_bk_artifact_overview ON bk_artifact_copy(artifact_type,lifecycle,state,artifact_id,storage_volume_id,is_deleted)');
@@ -414,6 +443,7 @@ CALL add_backup_index_if_missing('bk_safety_event_outbox','idx_bk_safety_receipt
 CALL add_backup_index_if_missing('bk_audit_log','uk_bk_audit_sequence','CREATE UNIQUE INDEX uk_bk_audit_sequence ON bk_audit_log(chain_id,sequence_no)');
 CALL add_backup_index_if_missing('bk_audit_log','uk_bk_audit_hash','CREATE UNIQUE INDEX uk_bk_audit_hash ON bk_audit_log(entry_hash)');
 CALL add_backup_index_if_missing('bk_audit_log','idx_bk_audit_object','CREATE INDEX idx_bk_audit_object ON bk_audit_log(object_type,object_id,occurred_at)');
+CALL add_backup_index_if_missing('bk_audit_log','idx_bk_audit_cursor','CREATE INDEX idx_bk_audit_cursor ON bk_audit_log(is_deleted,occurred_at,id)');
 CALL add_backup_index_if_missing('bk_audit_chain_head','uk_bk_audit_chain','CREATE UNIQUE INDEX uk_bk_audit_chain ON bk_audit_chain_head(chain_id)');
 
 CALL add_backup_index_if_missing('cos_cleanup_task','uk_cos_cleanup_task_no','CREATE UNIQUE INDEX uk_cos_cleanup_task_no ON cos_cleanup_task(task_no)');
@@ -425,6 +455,7 @@ CALL add_backup_index_if_missing('cos_delete_permit','uk_cos_delete_permit_id','
 CALL add_backup_index_if_missing('cos_delete_permit','uk_cos_delete_permit_attempt','CREATE UNIQUE INDEX uk_cos_delete_permit_attempt ON cos_delete_permit(cleanup_task_id,attempt_no)');
 CALL add_backup_index_if_missing('cos_delete_permit','uk_cos_delete_permit_nonce','CREATE UNIQUE INDEX uk_cos_delete_permit_nonce ON cos_delete_permit(nonce)');
 CALL add_backup_index_if_missing('cos_delete_permit','idx_cos_delete_permit_status','CREATE INDEX idx_cos_delete_permit_status ON cos_delete_permit(cleanup_task_id,status,expires_at)');
+CALL add_backup_index_if_missing('cos_delete_permit','idx_cos_delete_permit_claim','CREATE INDEX idx_cos_delete_permit_claim ON cos_delete_permit(status,claim_until,claim_owner)');
 
 DROP PROCEDURE IF EXISTS add_backup_index_if_missing;
 
@@ -494,6 +525,7 @@ SELECT v.config_key, v.config_name, v.category_code, v.category_name, 'GLOBAL', 
        CURRENT_TIMESTAMP(3), CURRENT_TIMESTAMP(3), CURRENT_TIMESTAMP(3)
 FROM (
     SELECT 'backup.schedule.enabled' config_key, '自动备份开关' config_name, 'BACKUP_COLLECTION' category_code, '备份采集策略' category_name, 'BOOLEAN' value_type, 'true' config_value, '[{"label":"启用","value":"true"},{"label":"停用","value":"false"}]' options_json, '控制是否自动发现候选订单并创建热备任务。' description, NULL secret_ref
+    UNION ALL SELECT 'backup.auto-degrade-on-relation-broken','文件关系不完整时自动降级备份','BACKUP_COLLECTION','备份采集策略','BOOLEAN','true','[{"label":"启用","value":"true"},{"label":"停用","value":"false"}]','严格备份因RELATION_BROKEN失败后，在同一任务补偿阶段自动执行不完整备份；即使没有可恢复文件也保存订单快照和关系缺口。',NULL
     UNION ALL SELECT 'backup.schedule.interval-days','自动备份周期（天）','BACKUP_COLLECTION','备份采集策略','INTEGER','1',NULL,'自动备份任务执行周期，最小1天。',NULL
     UNION ALL SELECT 'backup.schedule.start-time','自动备份开始时间','BACKUP_COLLECTION','备份采集策略','STRING','05:00',NULL,'按服务器本地时区执行，格式HH:mm；服务停机错过后当天不补跑。',NULL
     UNION ALL SELECT 'backup.collection.days-before','备份X天前的订单','BACKUP_COLLECTION','备份采集策略','INTEGER','7',NULL,'按订单创建日期和服务器本地自然日计算；配置7表示执行日往前第7天及更早创建的正式订单进入备份范围。',NULL
@@ -526,6 +558,7 @@ FROM (
     UNION ALL SELECT 'online.connect-timeout-seconds','线上连接超时（秒）','ONLINE_INTEGRATION','线上系统连接','INTEGER','10',NULL,'HTTP建连超时，范围1至300秒。',NULL
     UNION ALL SELECT 'online.request-timeout-seconds','线上请求超时（秒）','ONLINE_INTEGRATION','线上系统连接','INTEGER','60',NULL,'普通线上接口请求超时，范围1至3600秒。',NULL
     UNION ALL SELECT 'online.file-transfer-timeout-seconds','线上文件传输超时（秒）','ONLINE_INTEGRATION','线上系统连接','INTEGER','7200',NULL,'备份下载和恢复上传等大文件流式传输超时，范围60至86400秒。',NULL
+    UNION ALL SELECT 'download.ticket.ttl-seconds','下载票据有效期（秒）','DOWNLOAD_SECURITY','下载安全','INTEGER','120',NULL,'单次下载票据有效期，范围30至600秒。',NULL
     UNION ALL SELECT 'storage.read-lease.ttl-seconds','存储读取租约时长（秒）','STORAGE','存储管理','INTEGER','600',NULL,'下载和恢复读取卷时的租约时长，必须大于两倍心跳间隔。',NULL
     UNION ALL SELECT 'storage.read-lease.heartbeat-seconds','存储读取租约心跳（秒）','STORAGE','存储管理','INTEGER','30',NULL,'长文件下载期间续租间隔。',NULL
     UNION ALL SELECT 'job.dispatch-interval-ms','任务派发间隔（毫秒）','JOB_EXECUTION','任务执行策略','INTEGER','1000',NULL,'扫描并领取待执行持久化任务的间隔，最小200毫秒。',NULL
@@ -545,6 +578,11 @@ WHERE NOT EXISTS (
 -- ============================================================================
 -- FINAL VERIFICATION
 -- ============================================================================
+CREATE TABLE IF NOT EXISTS bk_download_ticket (
+ id BIGINT NOT NULL AUTO_INCREMENT COMMENT '主键ID', token_hash CHAR(64) NOT NULL COMMENT '下载令牌SHA-256摘要', actor_user_id BIGINT NOT NULL COMMENT '签发用户ID', actor_role_code VARCHAR(32) NOT NULL COMMENT '签发用户角色', artifact_type VARCHAR(32) NOT NULL COMMENT 'ORDER_PACKAGE/SUPPLEMENT_FILE', artifact_id BIGINT NOT NULL COMMENT '下载对象ID', download_name VARCHAR(255) NOT NULL COMMENT '下载文件名', status VARCHAR(16) NOT NULL COMMENT 'ISSUED/CONSUMED', expires_at DATETIME(3) NOT NULL COMMENT '过期时间', consumed_at DATETIME(3) NULL COMMENT '消费时间',
+ create_time DATETIME(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3), update_time DATETIME(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3) ON UPDATE CURRENT_TIMESTAMP(3), create_by BIGINT NULL, update_by BIGINT NULL, is_deleted TINYINT NOT NULL DEFAULT 0, version INT NOT NULL DEFAULT 0, PRIMARY KEY(id), UNIQUE KEY uk_download_ticket_hash(token_hash), KEY idx_download_ticket_expiry(status,expires_at)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci COMMENT='短时单次下载票据';
+
 -- 存量环境重复执行全量初始化脚本时，CREATE TABLE IF NOT EXISTS 不会补列，因此在校验前补齐模拟备份模式字段。
 DROP PROCEDURE IF EXISTS add_simulation_mode_column;
 DELIMITER $$

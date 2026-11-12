@@ -1,6 +1,6 @@
 /**
  * 本地备份管理 API 统一封装。
- * 负责鉴权头、响应信封解析、二进制下载和登录失效事件，页面模块不再重复处理这些细节。
+ * 负责鉴权头、响应信封解析、下载票据和登录失效事件，页面模块不再重复处理这些细节。
  */
 const API_PREFIX = '/api/v1';
 
@@ -63,7 +63,7 @@ export function uploadWithProgress(path, formData, onProgress) {
     request.onload = () => {
       let body = {};
       try { body = request.responseText ? JSON.parse(request.responseText) : {}; } catch (_) { }
-      if (request.status === 401) { unauthorizedError(); return; }
+      if (request.status === 401) { reject(unauthorizedError()); return; }
       if (request.status < 200 || request.status >= 300 || (body.code && body.code !== 'OK')) {
         reject(responseError(body, request.status === 413 ? '补传文件超过系统上传上限' : '文件上传失败'));
         return;
@@ -75,27 +75,21 @@ export function uploadWithProgress(path, formData, onProgress) {
   });
 }
 
-/** 调用文件下载 API，调用者负责读取响应流并触发浏览器保存。 */
-export async function binary(path) {
-  const token = getAuthToken();
-  const response = await fetch(API_PREFIX + path, {
-    headers: token ? { 'backup-token': token } : {}
-  });
-  if (response.status === 401) throw unauthorizedError();
-  if (!response.ok) {
-    const body = await response.json().catch(() => ({}));
-    throw responseError(body, '文件下载失败');
+/**
+ * 申请短时单次下载票据，并让浏览器直接消费响应流；文件内容不进入 JavaScript 内存。
+ */
+export async function startTicketDownload(path) {
+  const result = await api(path, { method: 'POST', body: '{}' });
+  const url = result?.data?.url;
+  if (!url || !String(url).startsWith(API_PREFIX + '/downloads/')) {
+    throw new Error('服务端未返回有效下载地址');
   }
-  return response;
-}
-
-export function saveBlob(blob, name) {
-  const url = URL.createObjectURL(blob);
-  const anchor = document.createElement('a');
-  anchor.href = url;
-  anchor.download = name;
-  document.body.appendChild(anchor);
-  anchor.click();
-  anchor.remove();
-  URL.revokeObjectURL(url);
+  const frame = document.createElement('iframe');
+  frame.hidden = true;
+  frame.setAttribute('aria-hidden', 'true');
+  frame.src = url;
+  document.body.appendChild(frame);
+  // 下载失败时错误响应也停留在隐藏 frame，不会把 SPA 导航到 JSON；超长下载留足生命周期。
+  window.setTimeout(() => frame.remove(), 24 * 60 * 60 * 1000);
+  return result.data;
 }

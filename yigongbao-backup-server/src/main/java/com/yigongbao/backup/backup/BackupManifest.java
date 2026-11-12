@@ -55,6 +55,17 @@ public record BackupManifest(String orderId, String orderCreatedAt, List<Asset> 
     /** 兼容既有业务代码；展示场景优先返回完整列表快照。 */
     public Map<String, Object> order() { return orderDisplay; }
 
+    /** 预签名下载地址是短期凭据，只允许存在于下载过程，不得入包或持久化。 */
+    public BackupManifest withoutTransientSourceKeys() {
+        List<Asset> durableAssets = assets.stream().map(asset -> new Asset(
+                asset.assetId(), asset.fileName(), asset.type(), asset.size(), null, asset.sha256(),
+                asset.platform(), asset.bucket(), asset.objectKey(), asset.versionIdentity(),
+                asset.sourceFileId(), asset.relations())).toList();
+        return new BackupManifest(orderId, orderCreatedAt, durableAssets, manifestRevision, manifestSha256,
+                relationSetHash, manifestSchemaVersion, backupCompleteness, relationGaps, relationGapCount,
+                relationGapHash, relationshipStateHash, orderRaw, orderDisplay);
+    }
+
     private static Map<String, Object> immutableNullableMap(Map<String, Object> value) {
         return java.util.Collections.unmodifiableMap(new java.util.LinkedHashMap<>(
                 value == null ? Map.of() : value));

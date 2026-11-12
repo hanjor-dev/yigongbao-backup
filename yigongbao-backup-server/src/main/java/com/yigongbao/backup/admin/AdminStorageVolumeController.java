@@ -150,6 +150,13 @@ public class AdminStorageVolumeController {
                 StorageVolumeStatus.Write.STANDBY, StpUtil.getLoginIdAsLong()), requestId());
     }
 
+    /** 取消备用并转为只读热备卷；只读卷可继续进入整盘封存流程。 */
+    @PostMapping("/{id}/cancel-standby")
+    public ApiResponse<StorageVolumeEntity> cancelStandby(@PathVariable("id") long id) {
+        admin();
+        return ApiResponse.ok(lifecycleService.cancelStandby(id, StpUtil.getLoginIdAsLong()), requestId());
+    }
+
     @PostMapping("/{id}/to-hot")
     public ApiResponse<StorageVolumeEntity> toHot(@PathVariable("id") long id) {
         admin();

@@ -2,11 +2,12 @@
 import { computed, onMounted, ref } from 'vue';
 import { useBackupContext } from '../composables/useBackupContext.js';
 import { statusLabel } from '../components/StatusBadge.js';
-import { activeVolumeConfirmation, canSetAsActiveVolume, canSetAsStandbyVolume, storageCapacityPresentation } from '../storageVolumeActions.js';
+import { activeVolumeConfirmation, activeVolumePresentation, archiveGuaranteeVolumeId, canArchiveVolume, canCancelStandbyVolume, canRepairAbnormalState, canSetAsActiveVolume, canSetAsStandbyVolume, storageCapacityPresentation } from '../storageVolumeActions.js';
 import { confirmAction, promptAction, showWarningMessage } from '../uiFeedback.js';
 
 const { isAdmin, storageVolumes, storageCandidates, loadStorageVolumes, loadStorageVolumeDetail, scanStorageVolumes, registerStorageVolume, changeStorageVolumeState, previewStorageArchive, startStorageArchive, navigate, consumeRouteQuery } = useBackupContext();
 const hotActive = computed(() => storageVolumes.value.find((item) => item.tier === 'HOT' && item.writeStatus === 'ACTIVE'));
+const activeVolumeAlert = computed(() => activeVolumePresentation(hotActive.value));
 const selectedVolume = ref(null);
 const standbyLoadingId = ref(null);
 const bytes = (value) => (value == null ? '不可用' : value < 1048576 ? `${(value / 1024).toFixed(1)} KB` : value < 1073741824 ? `${(value / 1048576).toFixed(1)} MB` : `${(value / 1073741824).toFixed(2)} GB`);
@@ -32,10 +33,13 @@ const archiveForm = ref({
   physicalLocation: '',
 });
 const standbyVolumes = computed(() => storageVolumes.value.filter((v) => v.tier === 'HOT' && v.mountStatus === 'ONLINE' && v.writeStatus === 'STANDBY'));
+const archiveGuaranteeVolume = computed(() => storageVolumes.value.find((volume) => (
+  archiveForm.value.successorVolumeId != null && String(volume.id) === String(archiveForm.value.successorVolumeId)
+)));
 async function markCold(row) {
   archiveSource.value = row;
   archiveForm.value = {
-    successorVolumeId: row.writeStatus === 'ACTIVE' ? standbyVolumes.value[0]?.id || null : null,
+    successorVolumeId: archiveGuaranteeVolumeId(row, storageVolumes.value),
     archiveNote: '',
     offlineLabelNote: '',
     physicalLocation: '',
@@ -75,6 +79,18 @@ async function setStandby(row) {
     standbyLoadingId.value = null;
   }
 }
+async function cancelStandby(row) {
+  if (!await confirmAction(`确认取消“${row.displayName}”的备用状态？取消后该卷将转为热备只读，可继续执行整盘封存。`, { title: '取消备用' })) return;
+  await changeStorageVolumeState(row.id, 'cancel-standby');
+}
+async function repairAbnormalState(row) {
+  const reason = await promptAction('该操作只适用于文件已全部校验通过、但封存业务流程提交异常的情况。系统会再次检查文件校验记录、运行任务、卷标记和健康状态。请输入修复原因：', {
+    title: '修复异常状态',
+    inputValue: '修复封存业务流程遗留的异常状态',
+    inputPlaceholder: '请输入修复原因',
+  });
+  if (reason) await changeStorageVolumeState(row.id, 'repair-abnormal-state', { reason });
+}
 async function openDetail(row) {
   selectedVolume.value = await loadStorageVolumeDetail(row.id);
 }
@@ -97,8 +113,7 @@ onMounted(async () => { await loadStorageVolumes(); const { volumeId } = consume
         >
       </div>
     </section>
-    <el-alert v-if="hotActive" type="success" :closable="false" show-icon>当前活动热备卷：{{ hotActive.displayName }}（{{ hotActive.volumeCode }}）</el-alert>
-    <el-alert v-else type="warning" :closable="false" show-icon>尚未配置活动热备卷；新的备份与补传任务会被安全拒绝。</el-alert>
+    <el-alert :type="activeVolumeAlert.type" :closable="false" show-icon>{{ activeVolumeAlert.message }}</el-alert>
     <el-card shadow="never" class="page-card"
       ><template #header
         ><div class="card-title">
@@ -137,9 +152,9 @@ onMounted(async () => { await loadStorageVolumes(); const { volumeId } = consume
         <el-table-column prop="lastErrorMessage" label="最近异常" min-width="180"
           ><template #default="{ row }">{{ row.lastErrorMessage || '—' }}</template></el-table-column
         >
-        <el-table-column label="操作" :width="isAdmin ? 520 : 90" fixed="right"
+        <el-table-column label="操作" :width="isAdmin ? 620 : 90" fixed="right"
           ><template #default="{ row }"
-            ><el-button size="small" link type="primary" @click="openDetail(row)">详情</el-button><template v-if="isAdmin"><el-button size="small" @click="operate(row, 'probe', '重新探测')">重新探测</el-button><el-button v-if="canSetAsActiveVolume(row)" size="small" type="primary" plain @click="activate(row)">{{ row.tier === 'COLD' ? '转为热备活动卷' : '设为活动卷' }}</el-button><el-button v-if="row.tier === 'HOT' && row.writeStatus === 'ACTIVE' && row.mountStatus !== 'ONLINE'" size="small" type="danger" plain @click="failover(row)">故障切换</el-button><el-button v-if="row.mountStatus !== 'ONLINE'" size="small" @click="confirmMountedAt(row)">确认挂载</el-button><el-button v-if="canSetAsStandbyVolume(row)" :loading="standbyLoadingId === row.id" size="small" @click="setStandby(row)">设为备用</el-button><el-button v-if="row.tier === 'HOT' && row.mountStatus === 'ONLINE'" size="small" @click="markCold(row)">整盘封存</el-button
+            ><el-button size="small" link type="primary" @click="openDetail(row)">详情</el-button><template v-if="isAdmin"><el-button size="small" @click="operate(row, 'probe', '重新探测')">重新探测</el-button><el-button v-if="canSetAsActiveVolume(row)" size="small" type="primary" plain @click="activate(row)">{{ row.tier === 'COLD' ? '转为热备活动卷' : '设为活动卷' }}</el-button><el-button v-if="row.tier === 'HOT' && row.writeStatus === 'ACTIVE' && row.mountStatus !== 'ONLINE'" size="small" type="danger" plain @click="failover(row)">故障切换</el-button><el-button v-if="row.mountStatus !== 'ONLINE'" size="small" @click="confirmMountedAt(row)">确认挂载</el-button><el-button v-if="canSetAsStandbyVolume(row)" :loading="standbyLoadingId === row.id" size="small" @click="setStandby(row)">设为备用</el-button><el-button v-if="canCancelStandbyVolume(row)" size="small" @click="cancelStandby(row)">取消备用</el-button><el-button v-if="canRepairAbnormalState(row)" size="small" type="warning" plain @click="repairAbnormalState(row)">修复异常状态</el-button><el-button v-if="canArchiveVolume(row)" size="small" @click="markCold(row)">整盘封存</el-button
             ><el-button v-if="row.tier === 'COLD' && row.mountStatus === 'ONLINE'" size="small" type="warning" plain @click="operate(row, 'prepare-offline', '准备离线')">准备离线</el-button></template></template
           ></el-table-column
         >
@@ -191,6 +206,8 @@ onMounted(async () => { await loadStorageVolumes(); const { volumeId } = consume
       ><el-form label-position="top" class="mt-16"
         ><el-form-item v-if="archiveSource?.writeStatus === 'ACTIVE'" label="接替活动热备卷（必选）"
           ><el-select v-model="archiveForm.successorVolumeId" style="width: 100%" @change="refreshArchivePreview"><el-option v-for="item in standbyVolumes" :key="item.id" :label="`${item.displayName} · ${item.volumeCode}`" :value="item.id" /></el-select></el-form-item
+        ><el-form-item v-else label="当前活动热备保障卷"
+          ><el-input :model-value="archiveGuaranteeVolume ? `${archiveGuaranteeVolume.displayName} · ${archiveGuaranteeVolume.volumeCode}` : '未找到在线活动热备卷'" disabled /></el-form-item
         ><el-form-item label="封存备注（必填）"><el-input v-model="archiveForm.archiveNote" maxlength="500" show-word-limit placeholder="例如：2026 年一季度订单原盘冷备" /></el-form-item><el-form-item label="线下标签备注"><el-input v-model="archiveForm.offlineLabelNote" placeholder="管理员可据此制作和粘贴物理标签" /></el-form-item><el-form-item label="线下存放位置"><el-input v-model="archiveForm.physicalLocation" placeholder="例如：档案柜 A-03" /></el-form-item></el-form
       ><el-descriptions v-if="archivePreview" :column="2" border
         ><el-descriptions-item label="订单周期" :span="2">{{ archivePreview.periodLabel || '—' }}</el-descriptions-item

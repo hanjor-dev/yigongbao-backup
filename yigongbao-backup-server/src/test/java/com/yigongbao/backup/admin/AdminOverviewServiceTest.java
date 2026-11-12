@@ -1,6 +1,7 @@
 package com.yigongbao.backup.admin;
 
 import com.yigongbao.backup.common.time.BusinessClock;
+import com.yigongbao.backup.account.BkSyncCursorEntity;
 import com.yigongbao.backup.account.BkSyncCursorMapper;
 import com.yigongbao.backup.backup.BackupExecutionMode;
 import com.yigongbao.backup.backup.BackupExecutionModeProvider;
@@ -13,10 +14,41 @@ import org.junit.jupiter.api.Test;
 import java.time.*;
 import java.util.*;
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.Mockito.*;
 
 class AdminOverviewServiceTest {
+    @Test void returnsEveryCalendarDayForMonthAndTwelveAggregatedMonthsForYear() {
+        AdminOverviewQueryMapper queries=mock(AdminOverviewQueryMapper.class);
+        when(queries.selectBackupResultBuckets(any(),any())).thenReturn(List.of(
+                new AdminOverviewQueryMapper.BackupResultBucketRow(LocalDate.of(2026,11,1),2L,1L,0L,0L,3L),
+                new AdminOverviewQueryMapper.BackupResultBucketRow(LocalDate.of(2026,11,2),4L,0L,1L,0L,5L)));
+        when(queries.selectBackupBytesBuckets(any(),any())).thenReturn(List.of(
+                new AdminOverviewQueryMapper.BackupBytesBucketRow(LocalDate.of(2026,11,1),100L,0L),
+                new AdminOverviewQueryMapper.BackupBytesBucketRow(LocalDate.of(2026,11,2),250L,1L)));
+        BusinessClock clock=new BusinessClock(Clock.fixed(Instant.parse("2026-11-11T09:30:00Z"),BusinessClock.ZONE));
+        StorageVolumeAccessPolicy access=new StorageVolumeAccessPolicy();OverviewTimePolicy time=new OverviewTimePolicy(clock);
+        BackupExecutionModeProvider executionMode=mock(BackupExecutionModeProvider.class);when(executionMode.mode()).thenReturn(BackupExecutionMode.REAL);
+        AdminOverviewService service=new AdminOverviewService(queries,mock(StorageVolumeMapper.class),mock(VolumeArchiveMapper.class),access,time,
+                new OverviewStoragePolicy(access,time),new AdminOverviewActivityService(),new AdminOverviewAlertService(clock),mock(RuntimeConfigService.class),clock,mock(BkSyncCursorMapper.class),executionMode,mock(OverviewAlertDismissalService.class));
+
+        var month=service.trend(OverviewTrendPeriod.MONTH);
+        var year=service.trend(OverviewTrendPeriod.YEAR);
+
+        assertThat(month).hasSize(30);
+        assertThat(month.getFirst().date()).isEqualTo(LocalDate.of(2026,11,1));
+        assertThat(month.get(1).completeSucceeded()).isEqualTo(4);
+        assertThat(month.getLast().date()).isEqualTo(LocalDate.of(2026,11,30));
+        assertThat(year).hasSize(12);
+        assertThat(year.get(10).date()).isEqualTo(LocalDate.of(2026,11,1));
+        assertThat(year.get(10).completeSucceeded()).isEqualTo(6);
+        assertThat(year.get(10).incompleteSucceeded()).isEqualTo(1);
+        assertThat(year.get(10).failed()).isEqualTo(1);
+        assertThat(year.get(10).addedPackageBytes()).isEqualTo(350);
+        assertThat(year.get(10).unknownPackageCount()).isEqualTo(1);
+    }
+
     @Test void cachesBusinessFactsRebindsErrorsAndRefreshBypassesCache() {
         AdminOverviewQueryMapper queries=mock(AdminOverviewQueryMapper.class);
         when(queries.selectArtifactReplicaCandidates()).thenThrow(new IllegalStateException("database path secret"));
@@ -27,7 +59,7 @@ class AdminOverviewServiceTest {
         StorageVolumeAccessPolicy access=new StorageVolumeAccessPolicy();OverviewTimePolicy time=new OverviewTimePolicy(clock);
         BackupExecutionModeProvider executionMode=mock(BackupExecutionModeProvider.class);when(executionMode.mode()).thenReturn(BackupExecutionMode.REAL);
         AdminOverviewService service=new AdminOverviewService(queries,mock(StorageVolumeMapper.class),mock(VolumeArchiveMapper.class),access,time,
-                new OverviewStoragePolicy(access,time),new AdminOverviewActivityService(),new AdminOverviewAlertService(clock),mock(RuntimeConfigService.class),clock,mock(BkSyncCursorMapper.class),executionMode);
+                new OverviewStoragePolicy(access,time),new AdminOverviewActivityService(),new AdminOverviewAlertService(clock),mock(RuntimeConfigService.class),clock,mock(BkSyncCursorMapper.class),executionMode,mock(OverviewAlertDismissalService.class));
 
         AdminOverviewView first=service.overview(false,"req-1");
         AdminOverviewView cached=service.overview(false,"req-2");
@@ -52,7 +84,7 @@ class AdminOverviewServiceTest {
         StorageVolumeAccessPolicy access=new StorageVolumeAccessPolicy();OverviewTimePolicy time=new OverviewTimePolicy(clock);
         BackupExecutionModeProvider executionMode=mock(BackupExecutionModeProvider.class);when(executionMode.mode()).thenReturn(BackupExecutionMode.REAL);
         AdminOverviewService service=new AdminOverviewService(mock(AdminOverviewQueryMapper.class),mock(StorageVolumeMapper.class),mock(VolumeArchiveMapper.class),access,time,
-                new OverviewStoragePolicy(access,time),new AdminOverviewActivityService(),new AdminOverviewAlertService(clock),mock(RuntimeConfigService.class),clock,mock(BkSyncCursorMapper.class),executionMode);
+                new OverviewStoragePolicy(access,time),new AdminOverviewActivityService(),new AdminOverviewAlertService(clock),mock(RuntimeConfigService.class),clock,mock(BkSyncCursorMapper.class),executionMode,mock(OverviewAlertDismissalService.class));
         VolumeArchiveEntity archive=new VolumeArchiveEntity();archive.setId(9L);archive.setIsDeleted(0);archive.setPhase("VERIFYING");archive.setSourceVolumeId(1L);archive.setSuccessorVolumeId(2L);
         StorageVolumeEntity source=new StorageVolumeEntity();source.setId(1L);source.setIsDeleted(0);source.setTier("HOT");source.setMountStatus("ONLINE");source.setWriteStatus("READ_ONLY");source.setAdminStatus("ENABLED");source.setOperationStatus("SEALING");source.setOperationRefId(9L);
         StorageVolumeEntity idleSuccessor=new StorageVolumeEntity();idleSuccessor.setId(2L);idleSuccessor.setIsDeleted(0);idleSuccessor.setTier("HOT");idleSuccessor.setMountStatus("ONLINE");idleSuccessor.setWriteStatus("ACTIVE");idleSuccessor.setAdminStatus("ENABLED");idleSuccessor.setOperationStatus("IDLE");
@@ -92,7 +124,10 @@ class AdminOverviewServiceTest {
         entries.put("storage.volume-health.interval-minutes",new ConfigService.Entry("storage.volume-health.interval-minutes","5",1,1,changed));
         when(configs.entry(anyString())).thenAnswer(invocation->entries.get(invocation.getArgument(0,String.class)));
         BusinessClock clock=new BusinessClock(Clock.fixed(Instant.parse("2026-11-11T09:30:00Z"),BusinessClock.ZONE));StorageVolumeAccessPolicy access=new StorageVolumeAccessPolicy();OverviewTimePolicy time=new OverviewTimePolicy(clock);BackupExecutionModeProvider executionMode=mock(BackupExecutionModeProvider.class);when(executionMode.mode()).thenReturn(BackupExecutionMode.REAL);
-        AdminOverviewService service=new AdminOverviewService(queries,volumeMapper,archiveMapper,access,time,new OverviewStoragePolicy(access,time),new AdminOverviewActivityService(),new AdminOverviewAlertService(clock),configs,clock,mock(BkSyncCursorMapper.class),executionMode);
+        BkSyncCursorEntity backupCursor=new BkSyncCursorEntity();backupCursor.setSyncStatus("SUCCEEDED");backupCursor.setLastSuccessAt(LocalDateTime.of(2026,11,11,17,0));backupCursor.setLastAttemptAt(LocalDateTime.of(2026,11,11,17,0));backupCursor.setLastItemCount(10);
+        BkSyncCursorEntity accountCursor=new BkSyncCursorEntity();accountCursor.setSyncStatus("SUCCEEDED");accountCursor.setLastSuccessAt(LocalDateTime.of(2026,11,11,17,15));accountCursor.setLastAttemptAt(LocalDateTime.of(2026,11,11,17,15));accountCursor.setLastItemCount(1);
+        BkSyncCursorMapper cursorMapper=mock(BkSyncCursorMapper.class);
+        AdminOverviewService service=new AdminOverviewService(queries,volumeMapper,archiveMapper,access,time,new OverviewStoragePolicy(access,time),new AdminOverviewActivityService(),new AdminOverviewAlertService(clock),configs,clock,cursorMapper,executionMode,mock(OverviewAlertDismissalService.class));
 
         AdminOverviewView view=service.overview(true,"dirty-config");
 
@@ -103,16 +138,58 @@ class AdminOverviewServiceTest {
         assertThat(view.dataQuality().messages()).extracting(AdminOverviewView.DataQualityMessage::code)
                 .contains("STORAGE_CONFIG_INVALID","AUTOMATION_CONFIG_EFFECTIVE_TIME_MISSING");
 
+        when(cursorMapper.find("BACKUP_CANDIDATE")).thenReturn(backupCursor);when(cursorMapper.find("USER")).thenReturn(accountCursor);
         entries.put("online.enabled",new ConfigService.Entry("online.enabled","true",1,1,Instant.parse("2026-11-11T08:00:00Z")));
         AdminOverviewView enabledLater=service.overview(true,"enabled-later");
-        assertThat(enabledLater.automation().backup().state()).isEqualTo("READY");
+        assertThat(enabledLater.automation().backup().state()).isEqualTo("NORMAL");
+        assertThat(enabledLater.automation().accountSync().state()).isEqualTo("NORMAL");
+        assertThat(recordFacts(enabledLater.automation().backup()))
+                .containsEntry("scheduleState","READY").containsEntry("lastRunStatus","SUCCEEDED");
+        assertThat(recordFacts(enabledLater.automation().accountSync()))
+                .containsEntry("scheduleState","READY").containsEntry("lastRunStatus","SUCCEEDED");
         assertThat(enabledLater.automation().backup().nextExpectedAt())
                 .isEqualTo(LocalDateTime.of(2026,11,12,5,0));
 
         RuntimeConfigService failedConfigs=mock(RuntimeConfigService.class);when(failedConfigs.entry(anyString())).thenThrow(new IllegalStateException("config database unavailable"));
-        AdminOverviewService failed=new AdminOverviewService(queries,volumeMapper,archiveMapper,access,time,new OverviewStoragePolicy(access,time),new AdminOverviewActivityService(),new AdminOverviewAlertService(clock),failedConfigs,clock,mock(BkSyncCursorMapper.class),executionMode);
+        AdminOverviewService failed=new AdminOverviewService(queries,volumeMapper,archiveMapper,access,time,new OverviewStoragePolicy(access,time),new AdminOverviewActivityService(),new AdminOverviewAlertService(clock),failedConfigs,clock,mock(BkSyncCursorMapper.class),executionMode,mock(OverviewAlertDismissalService.class));
         AdminOverviewView unavailable=failed.overview(true,"config-store-failed");
         assertThat(unavailable.sections().automation()).isEqualTo("UNAVAILABLE");
         assertThat(unavailable.sections().storage()).isEqualTo("UNAVAILABLE");
+    }
+
+    @Test void dismissesOnlyAnAlertThatIsCurrentlyVisible() {
+        BusinessClock clock=new BusinessClock(Clock.fixed(Instant.parse("2026-11-12T08:30:00Z"),BusinessClock.ZONE));
+        StorageVolumeAccessPolicy access=new StorageVolumeAccessPolicy();
+        OverviewAlertDismissalService dismissals=mock(OverviewAlertDismissalService.class);
+        BackupExecutionModeProvider executionMode=mock(BackupExecutionModeProvider.class);
+        AdminOverviewService service=spy(new AdminOverviewService(
+                mock(AdminOverviewQueryMapper.class),mock(StorageVolumeMapper.class),mock(VolumeArchiveMapper.class),access,
+                new OverviewTimePolicy(clock),new OverviewStoragePolicy(access,new OverviewTimePolicy(clock)),
+                new AdminOverviewActivityService(),new AdminOverviewAlertService(clock),mock(RuntimeConfigService.class),
+                clock,mock(BkSyncCursorMapper.class),executionMode,dismissals));
+        AdminOverviewView.Alert alert=new AdminOverviewView.Alert(
+                "CODE:ORDER:1","WARNING","TEST","CODE","标题","说明",LocalDateTime.of(2026,11,12,16,20),
+                "ORDER","1","orders",Map.of());
+        AdminOverviewView view=new AdminOverviewView(LocalDateTime.of(2026,11,12,16,30),
+                new AdminOverviewView.Health("WARNING",1,0,1),
+                new AdminOverviewView.Sections("AVAILABLE","AVAILABLE","AVAILABLE","AVAILABLE","AVAILABLE","AVAILABLE"),
+                null,null,List.of(alert),List.of(),null,List.of(),new AdminOverviewView.DataQuality(true,List.of()),List.of());
+        doReturn(view).when(service).overview(eq(true),anyString());
+
+        service.dismissAlert("CODE:ORDER:1",7L);
+
+        verify(dismissals).dismiss(alert,7L);
+        assertThatThrownBy(()->service.dismissAlert("MISSING",7L))
+                .isInstanceOf(IllegalArgumentException.class).hasMessage("告警已不存在或已关闭");
+    }
+
+    private static Map<String,Object> recordFacts(Object value) {
+        Map<String,Object> facts=new LinkedHashMap<>();
+        for (var component:value.getClass().getRecordComponents()) try {
+            facts.put(component.getName(),component.getAccessor().invoke(value));
+        } catch (ReflectiveOperationException failure) {
+            throw new AssertionError(failure);
+        }
+        return facts;
     }
 }

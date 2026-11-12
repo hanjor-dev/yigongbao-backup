@@ -14,6 +14,17 @@ import static org.mockito.Mockito.*;
 
 class BackupJobCreationServiceTest {
     @Test
+    void exposesCurrentAutomaticDegradedBackupPolicyForTaskSnapshot() {
+        var configs = mock(com.yigongbao.backup.config.RuntimeConfigService.class);
+        when(configs.getBoolean("backup.auto-degrade-on-relation-broken", true)).thenReturn(true);
+        BackupJobCreationService service = new BackupJobCreationService(
+                mock(ActiveVolumeSelectionService.class), mock(PersistentJobCoordinator.class),
+                mock(com.yigongbao.backup.order.OrderPackageMapper.class), configs);
+
+        assertThat(service.autoDegradeOnRelationBroken()).isTrue();
+    }
+
+    @Test
     void batchCreationUsesConservativeEstimatedBytesInsteadOfOneByte() {
         ActiveVolumeSelectionService volumes = mock(ActiveVolumeSelectionService.class);
         PersistentJobCoordinator jobs = mock(PersistentJobCoordinator.class);

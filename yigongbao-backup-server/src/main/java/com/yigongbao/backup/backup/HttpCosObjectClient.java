@@ -38,11 +38,18 @@ public final class HttpCosObjectClient implements CosObjectClient {
 
     @Override
     public void delete(String sourceKey, CleanupClient.Permit permit) throws IOException {
+        throw new IOException("拒绝未绑定精确版本的 COS 删除");
+    }
+
+    @Override
+    public void delete(String sourceKey, String versionIdentity, CleanupClient.Permit permit) throws IOException {
         if (sourceKey == null || sourceKey.isBlank() || permit == null
                 || permit.permitId() == null || permit.permitId().isBlank()
                 || !"ACTIVE".equals(permit.status())
-                || permit.objectKeys() == null || !permit.objectKeys().contains(sourceKey)) {
-            throw new IOException("COS对象删除缺少匹配的ACTIVE permit");
+                || versionIdentity == null || versionIdentity.isBlank()
+                || permit.objects().stream().noneMatch(item -> sourceKey.equals(item.objectKey())
+                    && versionIdentity.equals(item.versionIdentity()))) {
+            throw new IOException("COS对象删除缺少匹配对象键及版本的ACTIVE permit");
         }
         URI target;
         try {
@@ -50,6 +57,13 @@ public final class HttpCosObjectClient implements CosObjectClient {
         } catch (IllegalArgumentException ex) {
             throw new IOException("COS对象删除地址非法", ex);
         }
+        String query = target.getRawQuery();
+        if (query == null || java.util.Arrays.stream(query.split("&"))
+                .map(part -> part.split("=", 2))
+                .noneMatch(pair -> pair.length == 2 && ("versionId".equalsIgnoreCase(pair[0])
+                        || "versionIdentity".equalsIgnoreCase(pair[0]))
+                        && java.net.URLDecoder.decode(pair[1], java.nio.charset.StandardCharsets.UTF_8).equals(versionIdentity)))
+            throw new IOException("COS 删除地址未绑定 permit 指定的精确版本");
         http.ensureSuccess(http.delete(target));
     }
 }

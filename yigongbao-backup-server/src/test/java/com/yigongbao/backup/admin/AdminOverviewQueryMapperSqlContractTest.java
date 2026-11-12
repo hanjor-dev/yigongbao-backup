@@ -16,8 +16,16 @@ class AdminOverviewQueryMapperSqlContractTest {
                 "bk_volume_archive", "backup_completeness", "backup_mode='real'", "snapshot_status='available'",
                 "p.status='available'", "left join bk_artifact_copy", "operation_ref_id", "successor_volume_id",
                 "readablecopycount", "expectedofflinecopycount", "invalidmetadatacount", "v.id is null",
-                "abnormalactivecopycount", "group by s.source_order_id");
+                "abnormalactivecopycount", "hotcopycount", "coldcopycount", "group by s.source_order_id");
         assertThat(sql).doesNotContain("path(", "files.");
+    }
+
+    @Test
+    void managedAssetSummaryCountsPersistedMetadataRecords() {
+        String sql = normalized(AdminOverviewQuerySqlProvider.selectManagedArtifactSummary());
+
+        assertThat(sql).contains("managedartifactbytes", "unknownsizecopycount", "metadatarecordcount",
+                "order_package", "supplement_file");
     }
 
     @Test
@@ -38,6 +46,7 @@ class AdminOverviewQueryMapperSqlContractTest {
         assertThat(bytes).contains("backup_mode='real'", "package_size", "backup_completed_at");
         assertThat(recent).contains("with recent_jobs as", "join recent_jobs rj", "left join", "bk_job_order",
                 "bk_order_snapshot", "backup_completeness", "group by jo.job_id", "bk_storage_volume");
+        assertThat(recent).contains("job_type<>'supplement_upload'");
         assertThat(recent).doesNotContain("select count(*) from bk_job_order");
     }
 

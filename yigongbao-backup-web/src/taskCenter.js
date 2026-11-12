@@ -112,6 +112,27 @@ export function incompleteBackupLabel(order) {
   return `文件可能不完整 · 缺失关系 ${Number(order?.relationGapCount || 0)}`;
 }
 
+/** 从任务结果快照读取完整/不完整成功口径，并兼容尚未写入新字段的历史任务。 */
+export function backupResultSummary(job) {
+  let result = {};
+  try {
+    result = typeof job?.resultJson === 'string' ? JSON.parse(job.resultJson || '{}') : (job?.resultJson || {});
+  } catch (_) {
+    result = {};
+  }
+  const incompleteSucceeded = jobCount(result.incompleteSucceeded);
+  const completed = jobCount(job?.orderCompleted);
+  return {
+    completeSucceeded: result.completeSucceeded == null
+      ? Math.max(0, completed - incompleteSucceeded)
+      : jobCount(result.completeSucceeded),
+    incompleteSucceeded,
+    orderFailed: result.orderFailed == null ? jobCount(job?.orderFailed) : jobCount(result.orderFailed),
+    autoDegradedAttempted: jobCount(result.autoDegradedAttempted),
+    autoDegradedSucceeded: jobCount(result.autoDegradedSucceeded),
+  };
+}
+
 /** 将详情轮询结果同步回列表，避免取消等终态只在详情中更新。 */
 export function replaceJobById(items, refreshed) {
   if (!Array.isArray(items) || !refreshed?.id) return Array.isArray(items) ? items : [];
@@ -144,6 +165,42 @@ export function normalizePage(value) {
     ? Number(page.pages)
     : (total > 0 ? Math.ceil(total / size) : 0);
   return { records, current, size, total, pages };
+}
+
+/** 将当前失败与“曾失败但已由重试恢复”分开展示。 */
+export function jobEvidencePresentation(row) {
+  const status = String(row?.status || row?.state || '').toUpperCase();
+  const failure = [row?.failureCode, row?.failureMessage].filter(Boolean).join(' ').trim();
+  if (['DEGRADE_PENDING', 'DEGRADING'].includes(status)) {
+    return {
+      kind: 'degrading',
+      label: status === 'DEGRADING' ? '正在降级备份' : '等待降级备份',
+      detail: failure ? `触发原因：${failure}` : '订单正在进入文件可能不完整的备份流程',
+    };
+  }
+  if (String(row?.backupCompleteness || '').toUpperCase() === 'INCOMPLETE') {
+    return {
+      kind: 'incomplete',
+      label: '文件可能不完整',
+      detail: `缺失关系 ${Number(row?.relationGapCount || 0)}${row?.autoDegraded === true ? ' · 已自动降级备份' : ''}`,
+    };
+  }
+  if (row?.retryRecovered === true) {
+    return {
+      kind: 'recovered',
+      label: '已重试成功',
+      detail: failure ? `最近一次失败：${failure}` : '此前失败，重试后已成功',
+    };
+  }
+  if (['RETRY_PENDING', 'RETRYING'].includes(status)) {
+    return {
+      kind: 'retrying',
+      label: status === 'RETRYING' ? '正在重试' : '等待重试',
+      detail: failure ? `最近一次失败：${failure}` : '任务正在等待下一次重试',
+    };
+  }
+  if (failure) return { kind: 'failed', label: '失败', detail: failure };
+  return { kind: 'none', label: '', detail: '' };
 }
 
 /**
@@ -185,6 +242,19 @@ export function storageState(order) {
     return { canDownload: false, message: '文件位于离线冷备，请联系管理员调取' };
   }
   return { canDownload: false, message: hot === 'UNKNOWN' ? '热备状态未知，请联系管理员检查存储' : '热备文件不可用，请先完成冷备回迁' };
+}
+
+/**
+ * 副本汇总回答“是否存在”，当前卷可访问性回答“能否读取”；两者不能混成一个绿色状态。
+ */
+export function hotReplicaPresentation(order) {
+  const rollup = String(order?.hotRollup || 'UNKNOWN').toUpperCase();
+  const hotCopyExists = ['PRESENT', 'AVAILABLE', 'EXISTS', 'PARTIAL'].includes(rollup);
+  const selectedVolumeIsHot = String(order?.storageTier || '').toUpperCase() === 'HOT';
+  return {
+    rollup,
+    unreadable: hotCopyExists && selectedVolumeIsHot && order?.storageAccessible === false,
+  };
 }
 
 /** 离线冷备的线下查找摘要；字段同时兼容订单平铺数据与 package-location DTO。 */

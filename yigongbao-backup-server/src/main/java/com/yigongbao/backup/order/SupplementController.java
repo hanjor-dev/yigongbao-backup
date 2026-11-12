@@ -2,6 +2,7 @@ package com.yigongbao.backup.order;
 
 import cn.dev33.satoken.stp.StpUtil;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.yigongbao.backup.audit.AuditLogService;
 import com.yigongbao.backup.common.ApiResponse;
 import com.yigongbao.backup.job.Job;
 import com.yigongbao.backup.job.JobEntity;
@@ -26,6 +27,7 @@ import org.springframework.web.bind.annotation.RequestPart;
 import org.springframework.web.bind.annotation.RestController;
 import org.springframework.web.multipart.MultipartFile;
 import org.springframework.transaction.annotation.Transactional;
+import jakarta.servlet.http.HttpServletRequest;
 
 import java.io.FileNotFoundException;
 import java.io.IOException;
@@ -44,7 +46,6 @@ import java.time.Duration;
 @RequestMapping("/api/v1/orders/{orderId}/supplements")
 @RequiredArgsConstructor
 public class SupplementController {
-    private static final String STAGING_DIRECTORY = ".staging/supplements";
     private final SupplementService supplements;
     private final OrderSnapshotMapper snapshots;
     private final VolumeArtifactStore store;
@@ -53,6 +54,8 @@ public class SupplementController {
     private final PersistentJobService jobService;
     private final ObjectMapper mapper;
     private final StorageVolumeReadLeaseService readLeases;
+    private final SupplementStagingService stagingFiles;
+    private final AuditLogService audit;
 
     @GetMapping
     public ApiResponse<List<SupplementService.SupplementInfo>> list(@PathVariable("orderId") String orderId) throws IOException {
@@ -68,24 +71,23 @@ public class SupplementController {
                                            @RequestPart("file") MultipartFile file) throws IOException {
         StpUtil.checkLogin();
         if (file.isEmpty()) throw new IllegalArgumentException("补传文件为空");
+        String safeFileName = supplements.validateUpload(file.getOriginalFilename(), file.getSize());
         SnapshotRef ref = snapshot(orderId);
         long actor = StpUtil.getLoginIdAsLong();
         StorageVolumeEntity volume = activeVolumes.selectActiveForNewBackup(file.getSize());
-        Path staging = store.resolve(volume.getId(), STAGING_DIRECTORY);
-        Files.createDirectories(staging);
-        Path staged = Files.createTempFile(staging, "upload-", ".part");
+        Path staged = stagingFiles.create();
         try {
             file.transferTo(staged);
             SupplementUploadJobHandler.Payload payload = new SupplementUploadJobHandler.Payload(ref.id(), ref.code(),
-                    file.getOriginalFilename(), file.getSize(), file.getContentType(), null, staged.toString(), volume.getId());
+                    safeFileName, file.getSize(), file.getContentType(), null, staged.toString(), volume.getId());
             String config = mapper.writeValueAsString(payload);
             String stable = ref.id() + "\n" + file.getOriginalFilename() + "\n" + file.getSize() + "\n" + sha256(staged);
             JobEntity job = jobs.create("SUPPLEMENT_UPLOAD", JobIdempotency.key("SUPPLEMENT_UPLOAD", actor, stable),
                     actor, config, volume.getId());
-            if (!Objects.equals(job.getConfigSnapshotJson(), config)) Files.deleteIfExists(staged);
-            return ApiResponse.ok(new UploadTask(job.getId(), job.getJobNo(), job.getStatus(), file.getOriginalFilename(), file.getSize()), requestId());
+            if (!Objects.equals(job.getConfigSnapshotJson(), config)) stagingFiles.delete(staged);
+            return ApiResponse.ok(new UploadTask(job.getId(), job.getJobNo(), job.getStatus(), safeFileName, file.getSize()), requestId());
         } catch (Exception exception) {
-            Files.deleteIfExists(staged);
+            stagingFiles.delete(staged);
             if (exception instanceof IOException io) throw io;
             throw new IllegalStateException("补传任务创建失败", exception);
         }
@@ -105,7 +107,8 @@ public class SupplementController {
     }
 
     @GetMapping("/{fileId}/download")
-    public ResponseEntity<?> download(@PathVariable("orderId") String orderId, @PathVariable("fileId") String fileId) throws IOException {
+    public ResponseEntity<?> download(@PathVariable("orderId") String orderId, @PathVariable("fileId") String fileId,
+                                      HttpServletRequest request) throws IOException {
         StpUtil.checkLogin();
         StorageVolumeReadLeaseService.LeasedArtifact lease = null;
         try {
@@ -129,13 +132,20 @@ public class SupplementController {
             StorageVolumeReadLeaseService.LeasedArtifact heldLease = lease;
             lease = null;
             var input = readLeases.wrap(java.nio.channels.Channels.newInputStream(channel),heldLease);
-            return ResponseEntity.ok().contentType(MediaType.APPLICATION_OCTET_STREAM)
+            ResponseEntity<?> response = ResponseEntity.ok().contentType(MediaType.APPLICATION_OCTET_STREAM)
                     .header(HttpHeaders.CONTENT_DISPOSITION, "attachment; filename=\"" + fileId + "\"")
                     .contentLength(channel.size()).body(new InputStreamResource(input));
+            audit.appendActor(request, StpUtil.getLoginIdAsLong(), "USER", "SUPPLEMENT_DOWNLOAD",
+                    "SUPPLEMENT_FILE", String.valueOf(file.getId()), null, "OPENED", null);
+            return response;
         } catch (StorageVolumeUnavailableException exception) {
-            return ResponseEntity.status(409).body(ApiResponse.ok(java.util.Map.of(
-                    "code", "STORAGE_VOLUME_OFFLINE", "message", exception.getMessage()), requestId()));
+            audit.appendActor(request, StpUtil.getLoginIdAsLong(), "USER", "SUPPLEMENT_DOWNLOAD",
+                    "SUPPLEMENT_FILE", fileId, null, "FAILED", exception.getMessage());
+            return ResponseEntity.status(409).body(ApiResponse.error(
+                    "STORAGE_VOLUME_OFFLINE", exception.getMessage(), requestId()));
         } catch (NoSuchFileException | FileNotFoundException exception) {
+            audit.appendActor(request, StpUtil.getLoginIdAsLong(), "USER", "SUPPLEMENT_DOWNLOAD",
+                    "SUPPLEMENT_FILE", fileId, null, "FAILED", "文件不存在");
             return ResponseEntity.notFound().build();
         } finally {
             if (lease != null) lease.close();
