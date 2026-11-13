@@ -25,6 +25,7 @@ import java.util.Locale;
 import java.util.Objects;
 import java.util.Set;
 import java.util.UUID;
+import java.util.function.Supplier;
 
 /**
  * 线上适配器共用的 HttpClient、超时、认证和错误处理。
@@ -33,6 +34,9 @@ import java.util.UUID;
 @Slf4j
 public class RemoteHttpSupport {
     private static final int MAX_ERROR_BODY = 512;
+    private static final int MAX_ONLINE_JSON_ATTEMPTS = 3;
+    private static final List<Duration> ONLINE_JSON_RETRY_DELAYS = List.of(
+            Duration.ofSeconds(5), Duration.ofSeconds(10));
     private static final String EMPTY_BODY_HASH = hex(new byte[0]);
     private final HttpClient client;
     private final ObjectMapper mapper;
@@ -41,6 +45,7 @@ public class RemoteHttpSupport {
     private final Duration fileTransferTimeout;
     private final byte[] secret;
     private final ExternalUriPolicy externalUriPolicy;
+    private final RetrySleeper retrySleeper;
     private final java.util.function.Supplier<OnlineSettings> dynamicSettings;
     private volatile OnlineSettings cachedSettings;
     private volatile RemoteHttpSupport cachedDelegate;
@@ -61,6 +66,13 @@ public class RemoteHttpSupport {
     public RemoteHttpSupport(HttpClient client, ObjectMapper mapper, URI baseUri, Duration timeout,
                              Duration fileTransferTimeout, String sharedSecret,
                              ExternalUriPolicy externalUriPolicy) {
+        this(client, mapper, baseUri, timeout, fileTransferTimeout, sharedSecret, externalUriPolicy,
+                duration -> Thread.sleep(duration));
+    }
+
+    RemoteHttpSupport(HttpClient client, ObjectMapper mapper, URI baseUri, Duration timeout,
+                      Duration fileTransferTimeout, String sharedSecret,
+                      ExternalUriPolicy externalUriPolicy, RetrySleeper retrySleeper) {
         this.client = Objects.requireNonNull(client, "client");
         this.mapper = Objects.requireNonNull(mapper, "mapper");
         this.baseUri = normalizeBase(baseUri);
@@ -70,6 +82,7 @@ public class RemoteHttpSupport {
                 || fileTransferTimeout.isZero() ? Duration.ofHours(2) : fileTransferTimeout;
         this.secret = sharedSecret == null ? new byte[0] : sharedSecret.getBytes(StandardCharsets.UTF_8);
         this.externalUriPolicy = Objects.requireNonNull(externalUriPolicy, "externalUriPolicy");
+        this.retrySleeper = Objects.requireNonNull(retrySleeper, "retrySleeper");
         this.dynamicSettings = null;
         if (this.secret.length < 32) throw new IllegalArgumentException("共享HMAC密钥不能小于32位");
     }
@@ -85,6 +98,7 @@ public class RemoteHttpSupport {
         this.fileTransferTimeout = Duration.ofHours(2);
         this.secret = new byte[0];
         this.externalUriPolicy = ExternalUriPolicy.testCompatibility();
+        this.retrySleeper = duration -> Thread.sleep(duration);
         this.dynamicSettings = Objects.requireNonNull(dynamicSettings, "dynamicSettings");
     }
 
@@ -101,11 +115,14 @@ public class RemoteHttpSupport {
         if (dynamic != null) return dynamic.json(method, path, body, idempotencyKey);
         byte[] payload = body == null ? new byte[0] : body.getBytes(StandardCharsets.UTF_8);
         boolean noBody = "GET".equalsIgnoreCase(method) || "DELETE".equalsIgnoreCase(method);
-        HttpRequest.Builder builder = request(method, path, noBody ? EMPTY_BODY_HASH : hex(payload),
-                        noBody ? HttpRequest.BodyPublishers.noBody() : HttpRequest.BodyPublishers.ofByteArray(payload),
-                        idempotencyKey)
-                .header("Content-Type", "application/json");
-        return send(builder);
+        String stableIdempotencyKey = stableIdempotencyKey(method, idempotencyKey);
+        return sendOnlineJsonWithRetry(() -> request(method, path,
+                        noBody ? EMPTY_BODY_HASH : hex(payload),
+                        noBody ? HttpRequest.BodyPublishers.noBody()
+                                : HttpRequest.BodyPublishers.ofByteArray(payload),
+                        stableIdempotencyKey)
+                .header("Content-Type", "application/json")
+                .build());
     }
 
     public HttpResponse<String> emptyJson(String method, String path) {
@@ -374,6 +391,61 @@ public class RemoteHttpSupport {
         }
     }
 
+    private HttpResponse<String> sendOnlineJsonWithRetry(Supplier<HttpRequest> requestFactory) {
+        IOException lastFailure = null;
+        for (int attempt = 1; attempt <= MAX_ONLINE_JSON_ATTEMPTS; attempt++) {
+            HttpRequest request = requestFactory.get();
+            long startedAt = System.nanoTime();
+            try {
+                HttpResponse<String> response = client.send(request,
+                        HttpResponse.BodyHandlers.ofString(StandardCharsets.UTF_8));
+                logResponse(request, response.statusCode(), startedAt);
+                if (isRetryableHttpStatus(response.statusCode())
+                        && attempt < MAX_ONLINE_JSON_ATTEMPTS) {
+                    waitBeforeRetry(request, attempt, "HTTP_" + response.statusCode());
+                    continue;
+                }
+                return response;
+            } catch (IOException exception) {
+                lastFailure = exception;
+                if (attempt == MAX_ONLINE_JSON_ATTEMPTS) {
+                    logFailure(request, startedAt, exception);
+                    break;
+                }
+                waitBeforeRetry(request, attempt, exception.getClass().getSimpleName());
+            } catch (InterruptedException exception) {
+                Thread.currentThread().interrupt();
+                logFailure(request, startedAt, exception);
+                throw new RemoteCallException("线上服务调用被中断", exception);
+            }
+        }
+        throw new RemoteCallException("线上服务通信失败", lastFailure);
+    }
+
+    private void waitBeforeRetry(HttpRequest request, int failedAttempt, String failureType) {
+        Duration delay = ONLINE_JSON_RETRY_DELAYS.get(failedAttempt - 1);
+        log.warn("远程接口调用失败，等待后重试｜请求类型={}｜请求方法={}｜接口路径={}｜当前尝试={}/{}｜等待={}秒｜失败类型={}",
+                requestType(request.uri()), request.method(), safeEndpoint(request.uri()), failedAttempt,
+                MAX_ONLINE_JSON_ATTEMPTS, delay.toSeconds(), failureType);
+        try {
+            retrySleeper.sleep(delay);
+        } catch (InterruptedException exception) {
+            Thread.currentThread().interrupt();
+            throw new RemoteCallException("线上服务重试等待被中断", exception);
+        }
+    }
+
+    private static String stableIdempotencyKey(String method, String requestedIdempotencyKey) {
+        if ("GET".equalsIgnoreCase(method)) return null;
+        return requestedIdempotencyKey == null || requestedIdempotencyKey.isBlank()
+                ? UUID.randomUUID().toString() : requestedIdempotencyKey;
+    }
+
+    private static boolean isRetryableHttpStatus(int statusCode) {
+        return statusCode == 408 || statusCode == 429 || statusCode == 502
+                || statusCode == 503 || statusCode == 504;
+    }
+
     /** 仅记录接口路径，不记录查询参数、认证头或响应体。 */
     private void logResponse(HttpRequest request, int statusCode, long startedAt) {
         long durationMillis = Duration.ofNanos(System.nanoTime() - startedAt).toMillis();
@@ -495,5 +567,10 @@ public class RemoteHttpSupport {
     public record OnlineSettings(URI baseUri, Duration connectTimeout, Duration requestTimeout,
                                  Duration fileTransferTimeout,
                                  String sharedSecret, Set<String> externalAllowedHosts) { }
+
+    @FunctionalInterface
+    interface RetrySleeper {
+        void sleep(Duration duration) throws InterruptedException;
+    }
 
 }

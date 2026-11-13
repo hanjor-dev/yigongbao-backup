@@ -3,6 +3,7 @@ import { computed, onMounted, ref } from 'vue';
 import { useBackupContext } from '../composables/useBackupContext.js';
 import { statusLabel } from '../components/StatusBadge.js';
 import { activeVolumeConfirmation, activeVolumePresentation, archiveGuaranteeVolumeId, canArchiveVolume, canCancelStandbyVolume, canRepairAbnormalState, canSetAsActiveVolume, canSetAsStandbyVolume, storageCapacityPresentation } from '../storageVolumeActions.js';
+import { storageArchivePreviewSummary } from '../storageArchivePreview.js';
 import { confirmAction, promptAction, showWarningMessage } from '../uiFeedback.js';
 
 const { isAdmin, storageVolumes, storageCandidates, loadStorageVolumes, loadStorageVolumeDetail, scanStorageVolumes, registerStorageVolume, changeStorageVolumeState, previewStorageArchive, startStorageArchive, navigate, consumeRouteQuery } = useBackupContext();
@@ -36,6 +37,7 @@ const standbyVolumes = computed(() => storageVolumes.value.filter((v) => v.tier 
 const archiveGuaranteeVolume = computed(() => storageVolumes.value.find((volume) => (
   archiveForm.value.successorVolumeId != null && String(volume.id) === String(archiveForm.value.successorVolumeId)
 )));
+const archiveSummary = computed(() => storageArchivePreviewSummary(archivePreview.value));
 async function markCold(row) {
   archiveSource.value = row;
   archiveForm.value = {
@@ -209,11 +211,13 @@ onMounted(async () => { await loadStorageVolumes(); const { volumeId } = consume
         ><el-form-item v-else label="当前活动热备保障卷"
           ><el-input :model-value="archiveGuaranteeVolume ? `${archiveGuaranteeVolume.displayName} · ${archiveGuaranteeVolume.volumeCode}` : '未找到在线活动热备卷'" disabled /></el-form-item
         ><el-form-item label="封存备注（必填）"><el-input v-model="archiveForm.archiveNote" maxlength="500" show-word-limit placeholder="例如：2026 年一季度订单原盘冷备" /></el-form-item><el-form-item label="线下标签备注"><el-input v-model="archiveForm.offlineLabelNote" placeholder="管理员可据此制作和粘贴物理标签" /></el-form-item><el-form-item label="线下存放位置"><el-input v-model="archiveForm.physicalLocation" placeholder="例如：档案柜 A-03" /></el-form-item></el-form
-      ><el-descriptions v-if="archivePreview" :column="2" border
-        ><el-descriptions-item label="订单周期" :span="2">{{ archivePreview.periodLabel || '—' }}</el-descriptions-item
-        ><el-descriptions-item label="订单数">{{ archivePreview.orderCount }}</el-descriptions-item
-        ><el-descriptions-item label="文件数">{{ archivePreview.managedFileCount }}</el-descriptions-item
-        ><el-descriptions-item label="数据量" :span="2">{{ bytes(archivePreview.totalBytes) }}</el-descriptions-item
+      ><el-descriptions v-if="archiveSummary" :column="2" border
+        ><el-descriptions-item label="订单周期" :span="2">{{ archiveSummary.periodLabel || '—' }}</el-descriptions-item
+        ><el-descriptions-item label="订单数">{{ archiveSummary.orderCount }}</el-descriptions-item
+        ><el-descriptions-item label="订单包数">{{ archiveSummary.orderPackageCount }}</el-descriptions-item
+        ><el-descriptions-item label="补传文件数">{{ archiveSummary.supplementFileCount }}</el-descriptions-item
+        ><el-descriptions-item label="文件总数">{{ archiveSummary.managedFileCount }}</el-descriptions-item
+        ><el-descriptions-item label="数据量" :span="2">{{ bytes(archiveSummary.totalBytes) }}</el-descriptions-item
         ><el-descriptions-item label="阻塞项" :span="2"
           ><span v-if="!archivePreview.blockers?.length">无</span><el-tag v-for="item in archivePreview.blockers" :key="item.code" type="danger" class="mr-8">{{ item.message }}</el-tag></el-descriptions-item
         ></el-descriptions

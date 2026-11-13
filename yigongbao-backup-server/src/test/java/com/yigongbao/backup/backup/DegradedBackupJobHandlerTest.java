@@ -17,6 +17,7 @@ import org.springframework.mock.env.MockEnvironment;
 
 import java.util.List;
 import java.util.Map;
+import java.nio.file.Files;
 import java.nio.file.Path;
 
 import static org.assertj.core.api.Assertions.assertThat;
@@ -474,6 +475,45 @@ class DegradedBackupJobHandlerTest {
                 ManualBackupJobHandler.receiptIdempotencyKey(Long.MAX_VALUE, Long.MAX_VALUE,
                         "r".repeat(256), "COMPLETE"));
         assertThat(incomplete).hasSize(71).isNotEqualTo(complete);
+    }
+
+    @Test
+    void stagePersistenceFailureDeletesThePackageThatWasAlreadyWritten() throws Exception {
+        OnlineManifestClient manifests = mock(OnlineManifestClient.class);
+        when(manifests.fetch("42")).thenReturn(completeManifest());
+        ObjectProvider<OnlineManifestClient> manifestProvider = mock(ObjectProvider.class);
+        when(manifestProvider.getIfAvailable()).thenReturn(manifests);
+        ObjectProvider<CosObjectClient> cosProvider = mock(ObjectProvider.class);
+        when(cosProvider.getIfAvailable()).thenReturn(mock(CosObjectClient.class));
+        RuntimeConfigService configs = mock(RuntimeConfigService.class);
+        when(configs.getInt("backup.retry.max-retries", 3, 0)).thenReturn(0);
+        when(configs.getInt("storage.backup-reservation-percent", 200, 100)).thenReturn(100);
+        SpaceReservationService reservations = mock(SpaceReservationService.class);
+        when(reservations.reserve(eq("hot"), anyLong(), eq(6L)))
+                .thenReturn(new SpaceReservation("hot", 1L, "reservation-stage-failure"));
+        BackupStageService stages = mock(BackupStageService.class);
+        when(stages.stage(eq(6L), eq(42L), any(), any(), isNull(), anyString()))
+                .thenThrow(new IllegalStateException("database unavailable"));
+        Path storeRoot = temporaryStore.resolve("stage-failure");
+        ObjectMapper objectMapper = new ObjectMapper().findAndRegisterModules();
+        ManualBackupJobHandler handler = new ManualBackupJobHandler(manifestProvider, cosProvider,
+                new LocalDirectoryArtifactStore(storeRoot), objectMapper, reservations,
+                mock(BackupEvidenceService.class), stages, configs,
+                new BackupExecutionModeProvider(new MockEnvironment()));
+        JobEntity job = new JobEntity();
+        job.setId(6L); job.setJobNo("JOB-6"); job.setJobType("MANUAL_BACKUP");
+        job.setConfigSnapshotJson(objectMapper.writeValueAsString(
+                ManualBackupJobHandler.Payload.strictOrders(List.of(42L), true)));
+        JobExecutionContext context = mock(JobExecutionContext.class);
+        when(context.orderStates()).thenReturn(List.of());
+
+        assertThatThrownBy(() -> handler.execute(context, job))
+                .isInstanceOf(PartialJobFailureException.class);
+
+        try (java.util.stream.Stream<Path> files = Files.exists(storeRoot)
+                ? Files.walk(storeRoot) : java.util.stream.Stream.empty()) {
+            assertThat(files.filter(path -> path.toString().endsWith(".zip"))).isEmpty();
+        }
     }
 
     private ManualBackupJobHandler simulationHandler(OnlineManifestClient manifests, BackupEvidenceService evidence) {

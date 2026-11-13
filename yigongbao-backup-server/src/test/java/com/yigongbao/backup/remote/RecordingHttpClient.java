@@ -2,6 +2,7 @@ package com.yigongbao.backup.remote;
 
 import javax.net.ssl.SSLContext;
 import javax.net.ssl.SSLParameters;
+import java.io.IOException;
 import java.net.Authenticator;
 import java.net.CookieHandler;
 import java.net.ProxySelector;
@@ -15,15 +16,19 @@ import java.util.List;
 import java.util.Optional;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.Executor;
-import java.util.function.Function;
 
 /** 无网络单元测试用的 HttpClient；只记录请求并返回预设响应。 */
 public final class RecordingHttpClient extends HttpClient {
     public final List<HttpRequest> requests = new ArrayList<>();
-    private final Function<HttpRequest, HttpResponse<String>> responder;
+    private final Responder responder;
 
-    public RecordingHttpClient(Function<HttpRequest, HttpResponse<String>> responder) {
+    public RecordingHttpClient(Responder responder) {
         this.responder = responder;
+    }
+
+    @FunctionalInterface
+    public interface Responder {
+        HttpResponse<String> respond(HttpRequest request) throws IOException, InterruptedException;
     }
 
     @Override public Optional<CookieHandler> cookieHandler() { return Optional.empty(); }
@@ -38,9 +43,10 @@ public final class RecordingHttpClient extends HttpClient {
 
     @Override
     @SuppressWarnings("unchecked")
-    public <T> HttpResponse<T> send(HttpRequest request, HttpResponse.BodyHandler<T> handler) {
+    public <T> HttpResponse<T> send(HttpRequest request, HttpResponse.BodyHandler<T> handler)
+            throws IOException, InterruptedException {
         requests.add(request);
-        return (HttpResponse<T>) responder.apply(request);
+        return (HttpResponse<T>) responder.respond(request);
     }
 
     @Override public <T> CompletableFuture<HttpResponse<T>> sendAsync(HttpRequest request, HttpResponse.BodyHandler<T> handler) { throw new UnsupportedOperationException(); }

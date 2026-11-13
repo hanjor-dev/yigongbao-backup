@@ -4,8 +4,6 @@ import com.baomidou.mybatisplus.core.toolkit.Wrappers;
 import com.yigongbao.backup.order.*;
 import com.yigongbao.backup.storage.location.ArtifactCopyEntity;
 import com.yigongbao.backup.storage.location.ArtifactCopyMapper;
-import com.yigongbao.backup.storage.volume.StorageVolumeEntity;
-import com.yigongbao.backup.storage.volume.StorageVolumeMapper;
 import lombok.RequiredArgsConstructor;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
@@ -24,7 +22,6 @@ public class ManagedVolumeArtifactCatalog {
     private final BkSupplementFileMapper supplementMapper;
     private final OrderSnapshotMapper snapshotMapper;
     private final VolumeArchiveItemMapper itemMapper;
-    private final StorageVolumeMapper volumeMapper;
 
     @Transactional
     public FrozenManifest freeze(long archiveId, long volumeId) {
@@ -39,6 +36,15 @@ public class ManagedVolumeArtifactCatalog {
 
     /** 构造与 freeze 完全相同的清单，但不落库，供预览使用。 */
     public FrozenManifest inspect(long archiveId, long volumeId) {
+        return inspectInternal(archiveId, volumeId).manifest();
+    }
+
+    /** 预览只统计已登记受管文件；未登记物理文件由后台巡检清理，不阻塞封存。 */
+    public PreviewInspection preview(long volumeId) {
+        return inspectInternal(0, volumeId);
+    }
+
+    private PreviewInspection inspectInternal(long archiveId, long volumeId) {
         List<ArtifactCopyEntity> allActiveCopies = copyMapper.selectList(Wrappers.<ArtifactCopyEntity>lambdaQuery()
                 .eq(ArtifactCopyEntity::getStorageVolumeId, volumeId)
                 .eq(ArtifactCopyEntity::getLifecycle, "ACTIVE")
@@ -61,7 +67,6 @@ public class ManagedVolumeArtifactCatalog {
             }
         }
         if (unique.isEmpty()) throw new IllegalStateException("存储卷没有可封存的受管文件");
-        assertNoOrphanBusinessFiles(volumeId, unique.keySet());
         List<VolumeArchiveItemEntity> items = new ArrayList<>(unique.values());
         Set<Long> orders = new HashSet<>();
         long bytes = 0;
@@ -78,16 +83,14 @@ public class ManagedVolumeArtifactCatalog {
             canonical.append(item.getStorageKey()).append('|').append(item.getExpectedSize()).append('|')
                     .append(item.getExpectedSha256()).append('\n');
         }
-        return new FrozenManifest(List.copyOf(items), orders.size(), bytes, from, to,
+        FrozenManifest manifest = new FrozenManifest(List.copyOf(items), orders.size(), bytes, from, to,
                 hex(sha256(canonical.toString().getBytes(java.nio.charset.StandardCharsets.UTF_8))));
+        return new PreviewInspection(manifest, List.of());
     }
 
-    /** 提交 COLD 前再次核对业务目录，防止冻结后新增或替换未登记文件。 */
+    /** 提交 COLD 前再次核对已登记受管副本，未登记物理文件不参与清单也不阻塞封存。 */
     public void validateFrozen(long archiveId, long volumeId, String expectedManifestSha256,
                                List<VolumeArchiveItemEntity> items) {
-        Set<String> keys = new HashSet<>();
-        for (VolumeArchiveItemEntity item : items) keys.add(normalizeStorageKey(item.getStorageKey()));
-        assertNoOrphanBusinessFiles(volumeId, keys);
         long invalid = copyMapper.selectCount(Wrappers.<ArtifactCopyEntity>lambdaQuery()
                 .eq(ArtifactCopyEntity::getStorageVolumeId, volumeId).eq(ArtifactCopyEntity::getLifecycle, "ACTIVE")
                 .notIn(ArtifactCopyEntity::getState, "VERIFIED", "PRESENT").eq(ArtifactCopyEntity::getIsDeleted, 0));
@@ -95,24 +98,6 @@ public class ManagedVolumeArtifactCatalog {
         FrozenManifest current = inspect(archiveId, volumeId);
         if (!Objects.equals(expectedManifestSha256, current.sha256())) {
             throw new IllegalStateException("冻结后受管副本清单已变化，拒绝提交 COLD");
-        }
-    }
-
-    private void assertNoOrphanBusinessFiles(long volumeId, Set<String> managedKeys) {
-        StorageVolumeEntity volume = volumeMapper.selectById(volumeId);
-        if (volume == null || volume.getRootPath() == null) throw new IllegalStateException("存储卷根目录不存在");
-        Path root = Path.of(volume.getRootPath()).toAbsolutePath().normalize();
-        for (String businessRoot : List.of("orders", "supplements")) {
-            Path directory = root.resolve(businessRoot);
-            if (!java.nio.file.Files.exists(directory)) continue;
-            try (var files = java.nio.file.Files.walk(directory)) {
-                String orphan = files.filter(path -> java.nio.file.Files.isRegularFile(path, java.nio.file.LinkOption.NOFOLLOW_LINKS))
-                        .map(path -> root.relativize(path.toAbsolutePath().normalize()).toString().replace('\\', '/'))
-                        .filter(key -> !managedKeys.contains(key)).findFirst().orElse(null);
-                if (orphan != null) throw new IllegalStateException("业务目录存在未登记文件：" + orphan);
-            } catch (java.io.IOException failure) {
-                throw new IllegalStateException("无法扫描业务目录：" + businessRoot, failure);
-            }
         }
     }
 
@@ -165,4 +150,6 @@ public class ManagedVolumeArtifactCatalog {
 
     public record FrozenManifest(List<VolumeArchiveItemEntity> items, long orderCount, long totalBytes,
                                  LocalDateTime orderCreatedFrom, LocalDateTime orderCreatedTo, String sha256) { }
+
+    public record PreviewInspection(FrozenManifest manifest, List<String> blockers) { }
 }

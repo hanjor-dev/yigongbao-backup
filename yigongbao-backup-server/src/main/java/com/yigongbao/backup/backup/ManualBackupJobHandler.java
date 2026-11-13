@@ -480,6 +480,7 @@ public class ManualBackupJobHandler implements JobHandler {
         java.util.Set<String> failedAssets = new java.util.HashSet<>();
         RuntimeException businessFailure = null;
         OrderBackupPipeline.Result generatedPackage = null;
+        boolean stagePersisted = false;
         try {
             OrderBackupPipeline.Result result = new OrderBackupPipeline(manifestsClient, cos, store, mapper)
                     .backupWithResult(String.valueOf(orderId), manifest, backupDate,
@@ -528,6 +529,7 @@ public class ManualBackupJobHandler implements JobHandler {
                     durableManifest.manifestRevision(), durableManifest.backupCompleteness());
             BackupStageEntity stage = backupStages.stage(job.getId(), orderId, durableManifest, result,
                     isLegacyStore() ? null : targetStorageVolumeId, receiptKey);
+            stagePersisted = true;
             context.orderAtVolume(orderId, targetStorageVolumeId, result.storageKey());
             if (!isLegacyStore()) {
                 for (BackupManifest.Asset asset : manifest.assets()) {
@@ -548,6 +550,9 @@ public class ManualBackupJobHandler implements JobHandler {
             generatedPackage = published.result();
         } catch (RuntimeException failure) {
             businessFailure = failure;
+            if (generatedPackage != null && !stagePersisted) {
+                cleanupUnregisteredPackage(targetStorageVolumeId, generatedPackage, job.getId(), orderId);
+            }
             // 保留真正失败文件的底层原因，其他文件明确标记为随整单回滚。
             for (BackupManifest.Asset asset : manifest.assets()) {
                 if (!failedAssets.contains(asset.assetId())) {
@@ -611,6 +616,18 @@ public class ManualBackupJobHandler implements JobHandler {
         log.info("订单热备快照已发布｜任务ID={}｜订单ID={}｜快照ID={}｜热备状态=AVAILABLE（可用）",
                 job.getId(), orderId, snapshot.getId());
         return new PublishedStage(snapshot, manifest, result);
+    }
+
+    private void cleanupUnregisteredPackage(long storageVolumeId, OrderBackupPipeline.Result result,
+                                             Long jobId, Long orderId) {
+        try {
+            store.delete(storageVolumeId, result.storageKey());
+            log.warn("已清理未登记备份包｜任务ID={}｜订单ID={}｜存储键={}",
+                    jobId, orderId, result.storageKey());
+        } catch (Exception cleanupFailure) {
+            log.error("未登记备份包即时清理失败，等待后台巡检｜任务ID={}｜订单ID={}｜存储键={}｜异常原因={}",
+                    jobId, orderId, result.storageKey(), safe(cleanupFailure), cleanupFailure);
+        }
     }
 
     /**

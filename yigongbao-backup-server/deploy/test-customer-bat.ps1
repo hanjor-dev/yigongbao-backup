@@ -27,6 +27,29 @@ function Wait-Until {
     throw $FailureMessage
 }
 
+function Test-OutputContainsText {
+    param(
+        [Parameter(Mandatory)] [string] $Path,
+        [Parameter(Mandatory)] [string] $Expected
+    )
+    if (-not (Test-Path -LiteralPath $Path)) { return $false }
+    $stream = [IO.File]::Open($Path, [IO.FileMode]::Open, [IO.FileAccess]::Read, [IO.FileShare]::ReadWrite)
+    try {
+        $bytes = New-Object byte[] $stream.Length
+        [void] $stream.Read($bytes, 0, $bytes.Length)
+    }
+    finally { $stream.Dispose() }
+    $encodings = @(
+        (New-Object Text.UTF8Encoding($false)),
+        [Text.Encoding]::GetEncoding([Globalization.CultureInfo]::CurrentCulture.TextInfo.ANSICodePage),
+        [Text.Encoding]::GetEncoding([Globalization.CultureInfo]::CurrentCulture.TextInfo.OEMCodePage)
+    )
+    foreach ($encoding in $encodings) {
+        if ($encoding.GetString($bytes).Contains($Expected)) { return $true }
+    }
+    return $false
+}
+
 function Stop-ProcessTree {
     param([System.Diagnostics.Process] $Process)
     if ($null -eq $Process -or $Process.HasExited) { return }
@@ -64,20 +87,26 @@ try {
 
     $probeSource = @'
 import java.nio.charset.StandardCharsets;
+import java.nio.channels.Selector;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.StandardOpenOption;
 
 public final class Probe {
     public static void main(String[] args) throws Exception {
+        try (Selector ignored = Selector.open()) {
+            // 验证客户环境能够创建 Tomcat NIO 所需的 Selector。
+        }
         Path run = Path.of(System.getProperty("user.dir"), "run");
         Files.createDirectories(run);
         Files.writeString(run.resolve("probe-start-count.txt"), "started\n", StandardCharsets.UTF_8,
                 StandardOpenOption.CREATE, StandardOpenOption.APPEND);
         Files.writeString(run.resolve("probe-java-home.txt"), System.getProperty("java.home"), StandardCharsets.UTF_8,
                 StandardOpenOption.CREATE, StandardOpenOption.TRUNCATE_EXISTING);
+        Files.writeString(run.resolve("probe-unixdomain-tmpdir.txt"), System.getProperty("jdk.net.unixdomain.tmpdir", ""), StandardCharsets.UTF_8,
+                StandardOpenOption.CREATE, StandardOpenOption.TRUNCATE_EXISTING);
         while (true) {
-            System.out.println("PROBE_HEARTBEAT");
+            System.out.write("PROBE_HEARTBEAT 中文日志编码检查\n".getBytes(StandardCharsets.UTF_8));
             System.out.flush();
             Thread.sleep(200L);
         }
@@ -97,9 +126,11 @@ public final class Probe {
     $pidFile = Join-Path $testRoot "run\backup-server.pid"
     $consoleLog = Join-Path $testRoot "log\console.log"
     Wait-Until { Test-Path -LiteralPath $pidFile } "启动脚本未生成 PID 文件"
-    Wait-Until { (Test-Path -LiteralPath $consoleLog) -and ((Get-Content -Raw -LiteralPath $consoleLog) -match 'PROBE_HEARTBEAT') } "启动脚本未实时写入 Java 控制台日志"
-
     $backendPid = [int](Get-Content -Raw -LiteralPath $pidFile).Trim()
+    Wait-Until { (Test-Path -LiteralPath $consoleLog) -and ((Get-Content -Raw -LiteralPath $consoleLog) -match 'PROBE_HEARTBEAT') } "启动脚本未实时写入 Java 控制台日志"
+    Wait-Until { Test-OutputContainsText -Path $monitorOneOut -Expected '中文日志编码检查' } `
+        "实时日志窗口未按 UTF-8 正确显示中文日志"
+
     if (-not (Get-Process -Id $backendPid -ErrorAction SilentlyContinue)) {
         throw "PID 文件指向的后台进程不存在: $backendPid"
     }
@@ -125,6 +156,10 @@ public final class Probe {
     $actualJavaHome = (Get-Content -Raw -LiteralPath (Join-Path $testRoot "run\probe-java-home.txt")).TrimEnd('\')
     if (-not [IO.Path]::GetFullPath($actualJavaHome).Equals([IO.Path]::GetFullPath($javaHome).TrimEnd('\'), [StringComparison]::OrdinalIgnoreCase)) {
         throw "启动脚本未使用 JAVA_HOME_CUSTOM 指定的 Java: $actualJavaHome"
+    }
+    $unixDomainTmpDir = (Get-Content -Raw -LiteralPath (Join-Path $testRoot "run\probe-unixdomain-tmpdir.txt")).Trim()
+    if ([string]::IsNullOrWhiteSpace($unixDomainTmpDir)) {
+        throw "启动脚本未设置 jdk.net.unixdomain.tmpdir，Windows 长临时目录可能导致 NIO Selector 启动失败"
     }
 
     $stop = Start-Process -FilePath $env:ComSpec -ArgumentList @('/d', '/c', 'stop-backup.bat --no-pause') -WorkingDirectory $testRoot -WindowStyle Hidden -Wait -PassThru

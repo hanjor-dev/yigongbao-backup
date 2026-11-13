@@ -24,6 +24,7 @@ set "ARGS_FILE=%RUN_DIR%\backup-server.args"
 set "CONSOLE_LOG=%LOG_DIR%\console.log"
 set "CONSOLE_ERROR_LOG=%LOG_DIR%\console-error.log"
 set "JAVA_EXE=%JAVA_HOME_CUSTOM%\bin\java.exe"
+set "NIO_TMP_DIR=%SystemRoot%\Temp"
 
 cd /d "%APP_HOME%"
 
@@ -129,7 +130,8 @@ set "BACKUP_START_PID_FILE=%PID_FILE%"
 set "BACKUP_START_ERROR_LOG=%CONSOLE_ERROR_LOG%"
 set "BACKUP_START_MARKER_FILE=%MARKER_FILE%"
 set "BACKUP_START_ARGS_FILE=%ARGS_FILE%"
-powershell.exe -NoLogo -NoProfile -ExecutionPolicy Bypass -Command "$utf8=New-Object Text.UTF8Encoding($false); $marker=[Guid]::NewGuid().ToString('N'); [IO.File]::WriteAllText($env:BACKUP_START_MARKER_FILE,$marker,$utf8); $portableJar=$env:BACKUP_START_JAR.Replace([char]92,[char]47); $quotedJar=([char]34)+$portableJar+([char]34); [IO.File]::WriteAllLines($env:BACKUP_START_ARGS_FILE,@('-jar',$quotedJar,'--spring.profiles.active=prod'),$utf8); $p=Start-Process -FilePath $env:BACKUP_START_JAVA -ArgumentList @(('-Dyigongbao.launch.marker='+$marker),'@run\backup-server.args') -WorkingDirectory $env:BACKUP_START_HOME -WindowStyle Hidden -RedirectStandardOutput $env:BACKUP_START_LOG -RedirectStandardError $env:BACKUP_START_ERROR_LOG -PassThru; if($null -eq $p){exit 1}; [IO.File]::WriteAllText($env:BACKUP_START_PID_FILE,[string]$p.Id,$utf8)"
+set "BACKUP_START_NIO_TMP=%NIO_TMP_DIR%"
+powershell.exe -NoLogo -NoProfile -ExecutionPolicy Bypass -Command "$utf8=New-Object Text.UTF8Encoding($false); $marker=[Guid]::NewGuid().ToString('N'); [IO.File]::WriteAllText($env:BACKUP_START_MARKER_FILE,$marker,$utf8); $portableJar=$env:BACKUP_START_JAR.Replace([char]92,[char]47); $quotedJar=([char]34)+$portableJar+([char]34); $nioTmp=$env:BACKUP_START_NIO_TMP.Replace([char]92,[char]47); [IO.File]::WriteAllLines($env:BACKUP_START_ARGS_FILE,@(('-Djdk.net.unixdomain.tmpdir='+$nioTmp),'-jar',$quotedJar,'--spring.profiles.active=prod'),$utf8); $p=Start-Process -FilePath $env:BACKUP_START_JAVA -ArgumentList @(('-Dyigongbao.launch.marker='+$marker),'@run\backup-server.args') -WorkingDirectory $env:BACKUP_START_HOME -WindowStyle Hidden -RedirectStandardOutput $env:BACKUP_START_LOG -RedirectStandardError $env:BACKUP_START_ERROR_LOG -PassThru; if($null -eq $p){exit 1}; [IO.File]::WriteAllText($env:BACKUP_START_PID_FILE,[string]$p.Id,$utf8)"
 if errorlevel 1 (
     echo [ERROR] Cannot create the background process.
     pause
@@ -157,5 +159,5 @@ echo [LOG] Following: %CONSOLE_LOG%
 echo [LOG] Ctrl+C or closing this window stops log display only.
 echo [LOG] Double-click stop-backup.bat to stop the backend server.
 echo.
-powershell.exe -NoLogo -NoProfile -ExecutionPolicy Bypass -Command "Get-Content -LiteralPath $env:BACKUP_START_LOG -Tail 100 -Wait"
+powershell.exe -NoLogo -NoProfile -ExecutionPolicy Bypass -Command "Get-Content -Encoding UTF8 -LiteralPath $env:BACKUP_START_LOG -Tail 100 -Wait"
 exit /b 0

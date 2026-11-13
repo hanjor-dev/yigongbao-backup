@@ -10,6 +10,7 @@ import java.net.http.HttpRequest;
 import java.nio.ByteBuffer;
 import java.io.ByteArrayOutputStream;
 import java.time.Duration;
+import java.util.HashSet;
 import java.util.List;
 import java.util.concurrent.Flow;
 
@@ -116,7 +117,12 @@ class HttpOnlineRestoreClientTest {
         assertThat(transport.requests).extracting(request -> request.uri().getPath()).containsExactly(
                 "/internal/restore/v1/orders/order-unknown/prepare",
                 "/internal/restore/v1/sessions/session-unknown/commit",
+                "/internal/restore/v1/sessions/session-unknown/commit",
+                "/internal/restore/v1/sessions/session-unknown/commit",
                 "/internal/restore/v1/sessions/session-unknown");
+        assertThat(new HashSet<>(transport.requests.subList(1, 4).stream()
+                .map(request -> request.headers().firstValue("Idempotency-Key").orElseThrow())
+                .toList())).hasSize(1);
     }
 
     @Test
