@@ -1,7 +1,9 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
+import { readFileSync } from 'node:fs';
 
 const access = await import('../src/stores/routeStore.js');
+const read = (path) => readFileSync(new URL(path, import.meta.url), 'utf8');
 
 test('role landing page sends administrators to overview and users to orders', () => {
   assert.equal(typeof access.defaultPageForRole, 'function');
@@ -30,6 +32,8 @@ test('ordinary users receive one orders menu without empty menu groups', () => {
     'overview', 'orders', 'backup', 'restore', 'cold-storage', 'cleanup',
     'accounts', 'storage-volumes', 'configs'
   ]);
+  assert.equal(adminItems.find((item) => item.key === 'cleanup')?.label, '云端清理');
+  assert.match(read('../src/views/CleanupView.vue'), /<h2>云端清理<\/h2>/);
 });
 
 test('route store redirects ordinary users away from admin pages including direct hash access', () => {
@@ -63,4 +67,15 @@ test('route store redirects ordinary users away from admin pages including direc
     if (previousWindow === undefined) delete globalThis.window;
     else globalThis.window = previousWindow;
   }
+});
+
+test('left navigation stays fixed while the main content scrolls', () => {
+  const styles = read('../src/style-production.css');
+  const asideRule = styles.match(/\.console-aside\s*\{([^}]*)\}/)?.[1] || '';
+
+  assert.match(asideRule, /position:sticky/);
+  assert.match(asideRule, /top:0/);
+  assert.match(asideRule, /height:100vh/);
+  assert.match(asideRule, /overflow-y:auto/);
+  assert.match(asideRule, /align-self:flex-start/);
 });

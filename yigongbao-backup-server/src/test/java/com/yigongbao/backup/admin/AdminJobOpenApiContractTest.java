@@ -47,7 +47,7 @@ class AdminJobOpenApiContractTest {
         assertThat(map(map(schemas.get("OverviewSummary")).get("properties")))
                 .containsKey("orderStatistics");
         assertThat(map(map(schemas.get("OverviewReadableFiles")).get("properties")))
-                .containsKey("metadataRecordCount");
+                .containsKeys("orderPackageCount", "metadataRecordCount");
         Map<String,Object> dismiss=map(map(map(spec.get("paths"))
                 .get("/api/v1/admin/overview/alerts/{alertKey}/dismiss")).get("post"));
         assertThat(dismiss.get("operationId")).isEqualTo("dismissAdminOverviewAlert");

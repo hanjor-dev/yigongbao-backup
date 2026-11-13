@@ -3,9 +3,12 @@ import { useBackupContext } from '../../composables/useBackupContext.js';
 import {
   formatJobOrderCreatedAt,
   incompleteBackupLabel,
+  incompleteBackupTooltip,
   offlineStorageSummary,
   storageMountState,
+  supplementStoragePresentation,
 } from '../../taskCenter.js';
+import { formatBytes } from '../../overviewModel.js';
 import { statusLabel } from '../StatusBadge.js';
 import OrderBusinessFields from './OrderBusinessFields.vue';
 
@@ -25,6 +28,10 @@ const {
 
 function uploadFile(file) {
   uploadSupplement({ target: { files: [file.raw] } });
+}
+
+function supplementState(file) {
+  return supplementStoragePresentation(file);
 }
 </script>
 
@@ -46,7 +53,14 @@ function uploadFile(file) {
         <div class="drawer-heading__title">
           <h3>{{ selectedOrder.orderCode || selectedOrder.sourceOrderId }}</h3>
           <el-tag v-if="selectedOrder.backupMode === 'METADATA_SIMULATION'" type="warning" effect="plain">模拟备份</el-tag>
-          <el-tag v-if="incompleteBackupLabel(selectedOrder)" type="warning" effect="dark">文件可能不完整</el-tag>
+          <el-tooltip
+            v-if="incompleteBackupTooltip(selectedOrder)"
+            :content="incompleteBackupTooltip(selectedOrder)"
+            placement="top"
+            :show-after="250"
+          >
+            <el-tag type="warning" effect="dark">文件可能不完整</el-tag>
+          </el-tooltip>
         </div>
         <small>创建时间：{{ formatJobOrderCreatedAt(selectedOrder.orderCreatedAt) }}</small>
       </div>
@@ -115,10 +129,25 @@ function uploadFile(file) {
           </el-table>
         </section>
 
-        <section class="order-detail-section">
-          <h4>补传工程文件 <el-tag size="small" type="info" effect="plain">仅本地</el-tag></h4>
-          <el-upload :auto-upload="false" :show-file-list="false" :on-change="uploadFile">
-            <el-button plain :loading="supplementUpload.status === 'UPLOADING'"><el-icon><FolderAdd /></el-icon>选择文件上传</el-button>
+        <section class="order-detail-section supplement-section">
+          <div class="supplement-heading">
+            <h4>补传工程文件</h4>
+            <el-tag size="small" type="info" effect="plain">{{ supplements.length }} 个文件</el-tag>
+          </div>
+          <el-upload
+            class="supplement-upload"
+            drag
+            :auto-upload="false"
+            :show-file-list="false"
+            :disabled="supplementUpload.status === 'UPLOADING' || supplementUpload.status === 'PROCESSING'"
+            :on-change="uploadFile"
+          >
+            <el-icon class="el-icon--upload"><UploadFilled /></el-icon>
+            <div class="el-upload__text">
+              <strong>点击或拖拽工程文件到此处</strong>
+              <span>选择后立即上传并记录到当前订单</span>
+            </div>
+            <template #tip><div class="el-upload__tip">请保持页面开启，上传完成后可在下方查看文件状态。</div></template>
           </el-upload>
           <div v-if="supplementUpload.status !== 'IDLE'" class="supplement-progress">
             <div class="progress-line"><span>{{ supplementUpload.message }}</span><strong>{{ supplementUpload.percent }}%</strong></div>
@@ -129,16 +158,54 @@ function uploadFile(file) {
             />
             <small v-if="supplementUpload.jobId">任务 {{ supplementUpload.jobId }} · <status-badge :value="supplementUpload.status" /></small>
           </div>
-          <div v-if="!supplements.length" class="empty-mini">尚无补传文件</div>
-          <div v-for="file in supplements" :key="file.fileId" class="supplement-row">
-            <div>
-              <strong>{{ file.fileName }}</strong>
-              <small>{{ file.size }} bytes</small>
-              <small>{{ file.storageVolumeName || file.storageVolumeId || '-' }}<span v-if="file.storageTier"> · {{ statusLabel(file.storageTier) }}</span><span v-if="file.storageMountStatus"> · {{ statusLabel(file.storageMountStatus) }}</span> · {{ file.storageKey || '未记录位置' }}</small>
-              <small v-if="file.storageAccessible === false">{{ file.storageUnavailableReason || '存储卷不可访问' }}</small>
-            </div>
-            <el-button link type="primary" :disabled="file.storageAccessible === false" @click="downloadSupplement(file)">下载</el-button>
-          </div>
+          <el-empty v-if="!supplements.length" description="尚无补传文件" :image-size="64" />
+          <el-space v-else direction="vertical" fill :size="12" class="supplement-list">
+            <el-card v-for="file in supplements" :key="file.fileId" shadow="never" class="supplement-file-card">
+              <template #header>
+                <el-row :gutter="12" align="middle" justify="space-between">
+                  <el-col :span="16">
+                    <el-space class="supplement-file-name">
+                      <el-icon><Document /></el-icon>
+                      <el-text tag="strong" truncated>{{ file.fileName }}</el-text>
+                    </el-space>
+                  </el-col>
+                  <el-col :span="8" class="supplement-file-status">
+                    <el-tag size="small" :type="supplementState(file).tagType" effect="light">
+                      {{ supplementState(file).label }}
+                    </el-tag>
+                  </el-col>
+                </el-row>
+              </template>
+
+              <el-descriptions :column="1" size="small" border>
+                <el-descriptions-item label="文件大小">{{ formatBytes(file.size) }}</el-descriptions-item>
+                <el-descriptions-item label="存储卷">{{ file.storageVolumeName || file.storageVolumeId || '未记录' }}</el-descriptions-item>
+                <el-descriptions-item label="相对位置">
+                  <el-text class="supplement-storage-key" truncated>{{ file.storageKey || '未记录位置' }}</el-text>
+                </el-descriptions-item>
+              </el-descriptions>
+
+              <el-row class="supplement-file-actions" align="middle" justify="space-between" :gutter="12">
+                <el-col :span="18"><el-text size="small" type="info">{{ supplementState(file).message }}</el-text></el-col>
+                <el-col :span="6" class="supplement-download-action">
+                  <el-tooltip
+                    :disabled="supplementState(file).canDownload"
+                    :content="supplementState(file).message"
+                    placement="top"
+                  >
+                    <span>
+                      <el-button
+                        link
+                        type="primary"
+                        :disabled="!supplementState(file).canDownload"
+                        @click="downloadSupplement(file)"
+                      ><el-icon><Download /></el-icon>下载</el-button>
+                    </span>
+                  </el-tooltip>
+                </el-col>
+              </el-row>
+            </el-card>
+          </el-space>
         </section>
       </div>
     </div>
@@ -172,6 +239,23 @@ function uploadFile(file) {
 .order-detail-grid { display: grid; grid-template-columns: minmax(0, 3fr) minmax(300px, 2fr); gap: 24px; align-items: start; }
 .order-detail-section { min-width: 0; }
 .order-detail-section h4 { margin: 0 0 14px; color: var(--el-text-color-primary); }
+.supplement-heading { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
+.supplement-upload { width: 100%; }
+.supplement-upload :deep(.el-upload), .supplement-upload :deep(.el-upload-dragger) { width: 100%; }
+.supplement-upload :deep(.el-upload-dragger) { padding: 22px 16px 18px; }
+.supplement-upload .el-icon--upload { margin-bottom: 8px; font-size: 38px; }
+.supplement-upload .el-upload__text { display: grid; gap: 5px; }
+.supplement-upload .el-upload__text strong { color: var(--el-text-color-primary); font-size: 14px; }
+.supplement-upload .el-upload__text span { color: var(--el-text-color-secondary); font-size: 12px; }
+.supplement-progress { margin-top: 12px; }
+.supplement-list { width: 100%; margin-top: 14px; }
+.supplement-file-card :deep(.el-card__header) { padding: 12px 14px; }
+.supplement-file-card :deep(.el-card__body) { padding: 14px; }
+.supplement-file-name { width: 100%; min-width: 0; }
+.supplement-file-name .el-text { max-width: 100%; }
+.supplement-file-status, .supplement-download-action { text-align: right; }
+.supplement-storage-key { display: block; max-width: 260px; }
+.supplement-file-actions { margin-top: 12px; }
 .drawer-footer { display: flex; justify-content: flex-end; gap: 10px; }
 .drawer-footer .el-button + .el-button { margin-left: 0; }
 @media (max-width: 820px) {

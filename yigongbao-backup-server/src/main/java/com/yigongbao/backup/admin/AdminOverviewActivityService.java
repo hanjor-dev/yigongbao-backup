@@ -7,10 +7,14 @@ import java.util.*;
 
 @Service
 public final class AdminOverviewActivityService {
+    private static final Set<String> VISIBLE_JOB_TYPES=Set.of(
+            "ORDER_BACKUP","MANUAL_BACKUP","DEGRADED_BACKUP","RESTORE",
+            "CLEANUP_DRY_RUN","CLEANUP_EXECUTE","AUTO_CLEANUP");
+
     public List<AdminOverviewView.Activity> merge(List<AdminOverviewQueryMapper.RecentJobRow> jobs,List<VolumeArchiveEntity> archives){
         List<AdminOverviewView.Activity> result=new ArrayList<>();
         if(jobs!=null) jobs.stream().filter(Objects::nonNull)
-                .filter(j->!"SUPPLEMENT_UPLOAD".equals(j.jobType()))
+                .filter(j->VISIBLE_JOB_TYPES.contains(j.jobType()))
                 .map(this::job).forEach(result::add);
         if(archives!=null) archives.stream().filter(Objects::nonNull).map(this::archive).forEach(result::add);
         return result.stream().sorted(Comparator.comparing(this::sortTime,Comparator.nullsLast(Comparator.reverseOrder())))

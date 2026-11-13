@@ -111,7 +111,7 @@ public final class AdminOverviewQuerySqlProvider {
     }
 
     public static String selectRecentJobs() {
-        return recentJobsSql("AND job_type<>'SUPPLEMENT_UPLOAD'", "#{limit}");
+        return recentJobsSql("AND job_type IN ('ORDER_BACKUP','MANUAL_BACKUP','DEGRADED_BACKUP','RESTORE','CLEANUP_DRY_RUN','CLEANUP_EXECUTE','AUTO_CLEANUP')", "#{limit}");
     }
 
     public static String selectLatestAutoCleanup() {

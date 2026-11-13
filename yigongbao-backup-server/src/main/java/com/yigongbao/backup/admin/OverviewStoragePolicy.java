@@ -28,9 +28,10 @@ public final class OverviewStoragePolicy {
         boolean high=activeFresh&&activeUsed!=null&&activeUsed.compareTo(BigDecimal.valueOf(threshold))>=0;
         List<StorageVolumeEntity> standby=volumes.stream().filter(v->access.standbyReady(v,time.capacityFresh(v.getCapacityObservedAt(),intervalMinutes),threshold))
                 .sorted(Comparator.comparing(StorageVolumeEntity::getPriority,Comparator.nullsLast(Integer::compareTo))).toList();
-        long coldOnline=volumes.stream().filter(v->"COLD".equals(v.getTier())&&"ONLINE".equals(v.getMountStatus())).count();
+        List<StorageVolumeEntity> cold=volumes.stream().filter(v->"COLD".equals(v.getTier())).toList();
+        long coldOnline=cold.stream().filter(v->"ONLINE".equals(v.getMountStatus())).count();
         long expectedOffline=volumes.stream().filter(access::expectedOffline).count();
-        long repair=volumes.stream().filter(v->"COLD".equals(v.getTier())&&"REPAIR_REQUIRED".equals(v.getOperationStatus())).count();
+        long repair=cold.stream().filter(v->"REPAIR_REQUIRED".equals(v.getOperationStatus())).count();
         long successArchives=archives==null?0:archives.stream().filter(a->a!=null&&!Integer.valueOf(1).equals(a.getIsDeleted())&&"SUCCEEDED".equals(a.getPhase())).count();
         LocalDateTime latestArchive=archives==null?null:archives.stream().filter(a->a!=null&&"SUCCEEDED".equals(a.getPhase()))
                 .map(VolumeArchiveEntity::getArchivedAt).filter(Objects::nonNull).max(LocalDateTime::compareTo).orElse(null);
@@ -42,7 +43,7 @@ public final class OverviewStoragePolicy {
         long usable=capacity.stream().map(StorageVolumeEntity::getUsableBytes).reduce(0L,Math::addExact);
         AdminOverviewView.Storage view=new AdminOverviewView.Storage(volume(current,threshold,activeFresh),
                 new AdminOverviewView.Standby(standby.size(),standby.isEmpty()?null:volume(standby.getFirst(),threshold,true)),
-                new AdminOverviewView.ColdMedia(coldOnline,expectedOffline,repair,successArchives,latestArchive),
+                new AdminOverviewView.ColdMedia(cold.size(),coldOnline,expectedOffline,repair,successArchives,latestArchive),
                 new AdminOverviewView.OnlineCapacity(total-usable,usable,total,
                         StorageVolumeCapacitySnapshotPolicy.usedPercent(total,usable),capacity.size(),volumes.size()-capacity.size()));
         long unexpected=volumes.stream().filter(v->!access.expectedOffline(v)).filter(v->v.getAdminStatus()==null||"ENABLED".equals(v.getAdminStatus()))
@@ -62,7 +63,7 @@ public final class OverviewStoragePolicy {
                          boolean activeWritable,boolean activeCapacityHigh,boolean activeCapacityUnknown,
                          long standbyReadyCount,long expectedOnlineUnavailableCount){
         public static Result emptyManagedWithoutActive(long managed,long expectedOffline){
-            return new Result(new AdminOverviewView.Storage(null,new AdminOverviewView.Standby(0,null),new AdminOverviewView.ColdMedia(0,expectedOffline,0,0,null),new AdminOverviewView.OnlineCapacity(0L,0L,0L,null,0,managed)),managed,0,false,false,true,0,0);
+            return new Result(new AdminOverviewView.Storage(null,new AdminOverviewView.Standby(0,null),new AdminOverviewView.ColdMedia(0,0,expectedOffline,0,0,null),new AdminOverviewView.OnlineCapacity(0L,0L,0L,null,0,managed)),managed,0,false,false,true,0,0);
         }
     }
 }

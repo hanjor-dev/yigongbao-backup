@@ -207,14 +207,15 @@ const buildLegacyAudit = (snapshot, prefix) => ({
 
 export function buildOrderBusinessPresentation(value) {
   const snapshot = parseSnapshot(value);
-  const sections = buildSections(snapshot);
-  const rebuildProjects = buildProjects(snapshot);
-  const audits = compact([
+  const hasSnapshot = Object.keys(snapshot).length > 0;
+  const sections = hasSnapshot ? buildSections(snapshot) : [];
+  const rebuildProjects = hasSnapshot ? buildProjects(snapshot) : [];
+  const audits = hasSnapshot ? compact([
     buildAudit('设计审核', snapshot.designAudit)
       || buildAudit('设计审核', buildLegacyAudit(snapshot, 'designAudit')),
     buildAudit('历史区域审核', snapshot.regionalAudit)
       || buildAudit('历史区域审核', buildLegacyAudit(snapshot, 'regionalAudit')),
-  ]);
+  ]) : [];
   return {
     sections,
     rebuildProjects,

@@ -112,8 +112,25 @@ class AdminOverviewProjectionTest {
                 .containsEntry("hot", 2L)
                 .containsEntry("cold", 2L);
         assertThat((Map<String, Object>) json.get("readableFiles"))
+                .containsEntry("orderPackageCount", 3L)
                 .containsEntry("logicalFileCount", 3L)
                 .containsEntry("metadataRecordCount", 6L);
+    }
+
+    @Test
+    void countsStoredOrderPackagesSeparatelyFromDistinctBackedUpOrders() {
+        LocalDateTime completed = LocalDateTime.of(2026, 11, 11, 8, 0);
+        List<AdminOverviewQueryMapper.ArtifactReplicaCandidateRow> rows = List.of(
+                aggregateWithTiers(1, 10, 100, completed, 1, 0),
+                aggregateWithTiers(1, 11, 101, completed.plusHours(1), 1, 0)
+        );
+
+        AdminOverviewView.Summary summary = AdminOverviewProjection.summary(rows,
+                new AdminOverviewQueryMapper.ManagedArtifactSummaryRow(2048L, 0L, 2L),
+                new StorageVolumeAccessPolicy());
+
+        assertThat(summary.orderStatistics().total()).isEqualTo(1);
+        assertThat(summary.readableFiles().orderPackageCount()).isEqualTo(2);
     }
 
     private static AdminOverviewQueryMapper.ArtifactReplicaCandidateRow aggregate(

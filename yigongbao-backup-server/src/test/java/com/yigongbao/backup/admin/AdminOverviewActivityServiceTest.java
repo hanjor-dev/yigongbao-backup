@@ -7,16 +7,15 @@ import java.util.List;
 import static org.assertj.core.api.Assertions.assertThat;
 
 class AdminOverviewActivityServiceTest {
-    @Test void mergesJobsAndArchivesSortsNewestAndFallsBackForUnknownTypes() {
+    @Test void excludesUnknownJobTypesWhileKeepingKnownArchiveActivities() {
         LocalDateTime now=LocalDateTime.of(2026,11,11,17,30);
         var unknown=new AdminOverviewQueryMapper.RecentJobRow(1L,"J1","FUTURE_JOB","SUCCEEDED",1L,1L,0L,0L,0L,0L,now.minusHours(2),now.minusHours(2),now.minusHours(1),null,null,null,null,null);
         VolumeArchiveEntity archive=new VolumeArchiveEntity();archive.setId(9L);archive.setPhase("VERIFYING");archive.setCreateTime(now);archive.setIsDeleted(0);
         List<AdminOverviewView.Activity> activities=new AdminOverviewActivityService().merge(List.of(unknown),List.of(archive));
-        assertThat(activities).hasSize(2);
+        assertThat(activities).hasSize(1);
         assertThat(activities.getFirst().sourceType()).isEqualTo("VOLUME_ARCHIVE");
         assertThat(activities.getFirst().actionRoute()).isEqualTo("cold-storage");
-        assertThat(activities.get(1).name()).isEqualTo("其他任务");
-        assertThat(activities.get(1).actionRoute()).isNull();
+        assertThat(activities).noneSatisfy(item->assertThat(item.name()).isEqualTo("其他任务"));
     }
 
     @Test void routesKnownJobTypesToTheirExistingDetailPages() {

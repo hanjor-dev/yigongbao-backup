@@ -4,7 +4,7 @@ const ROUTE_KEY = 'backup-current-page';
 const ROUTES = new Set(['overview', 'backup', 'restore', 'orders', 'accounts', 'storage', 'storage-volumes', 'cold-storage', 'cleanup', 'configs']);
 const NAVIGATION_GROUPS = Object.freeze([
   { title: '工作台', items: [{ key: 'overview', label: '管理概览', icon: 'DataAnalysis', admin: true }, { key: 'orders', label: '订单文件', icon: 'Files' }] },
-  { title: '运营中心', items: [{ key: 'backup', label: '订单备份', icon: 'Download', admin: true }, { key: 'restore', label: '线上恢复', icon: 'Upload', admin: true }, { key: 'cold-storage', label: '冷备管理', icon: 'Box', admin: true }, { key: 'cleanup', label: 'COS 清理', icon: 'Delete', admin: true }] },
+  { title: '运营中心', items: [{ key: 'backup', label: '订单备份', icon: 'Download', admin: true }, { key: 'restore', label: '线上恢复', icon: 'Upload', admin: true }, { key: 'cold-storage', label: '冷备管理', icon: 'Box', admin: true }, { key: 'cleanup', label: '云端清理', icon: 'Delete', admin: true }] },
   { title: '系统管理', items: [{ key: 'accounts', label: '本地账号', icon: 'User', admin: true }, { key: 'storage-volumes', label: '存储卷管理', icon: 'Coin', admin: true }, { key: 'configs', label: '系统配置', icon: 'Setting', admin: true }] }
 ]);
 const QUERY_KEYS = Object.freeze({

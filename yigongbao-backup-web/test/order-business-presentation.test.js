@@ -83,6 +83,15 @@ test('流程时间固定展示全部时间项并用横线占位空值', () => {
   });
 });
 
+test('订单业务快照整体缺失时不生成流程时间并返回空态', () => {
+  for (const value of [null, '', {}, '{}']) {
+    const presentation = build(value);
+
+    assert.equal(presentation.hasContent, false);
+    assert.deepEqual(presentation.sections, []);
+  }
+});
+
 test('原始JSON保留所有原始字段并格式化为代码文本', () => {
   const source = {
     id: 19,

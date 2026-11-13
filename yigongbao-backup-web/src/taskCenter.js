@@ -112,6 +112,11 @@ export function incompleteBackupLabel(order) {
   return `文件可能不完整 · 缺失关系 ${Number(order?.relationGapCount || 0)}`;
 }
 
+export function incompleteBackupTooltip(order) {
+  if (!incompleteBackupLabel(order)) return '';
+  return '文件可能不完整不代表备份文件已经丢失或必然缺失；该标记通常表示医工宝中的订单与文件关联关系可能存在异常，请在恢复或使用前核对文件清单。';
+}
+
 /** 从任务结果快照读取完整/不完整成功口径，并兼容尚未写入新字段的历史任务。 */
 export function backupResultSummary(job) {
   let result = {};
@@ -165,6 +170,33 @@ export function normalizePage(value) {
     ? Number(page.pages)
     : (total > 0 ? Math.ceil(total / size) : 0);
   return { records, current, size, total, pages };
+}
+
+/** 根据补传文件自己的副本与存储卷现状决定展示和下载能力。 */
+export function supplementStoragePresentation(file) {
+  const tier = String(file?.storageTier || '').toUpperCase();
+  const mount = String(file?.storageMountStatus || '').toUpperCase();
+  const volume = file?.storageVolumeName || file?.storageVolumeId || '未命名存储卷';
+  const tierLabel = tier === 'COLD' ? '冷备' : tier === 'HOT' ? '热备' : '存储卷';
+  const mountLabel = mount === 'ONLINE' ? '在线' : mount === 'OFFLINE' ? '离线' : '不可用';
+  const canDownload = file?.storageAccessible === true;
+  if (canDownload) {
+    return { canDownload, label: `${tierLabel} · ${mountLabel}`, tagType: 'success', message: '工程文件当前可下载。' };
+  }
+  if (tier === 'COLD' && mount === 'OFFLINE') {
+    return {
+      canDownload,
+      label: '冷备 · 离线',
+      tagType: 'warning',
+      message: `工程文件位于离线冷备卷“${volume}”，请接入对应介质并在存储卷管理中确认挂载后下载。`,
+    };
+  }
+  return {
+    canDownload,
+    label: `${tierLabel} · ${mountLabel}`,
+    tagType: 'danger',
+    message: file?.storageUnavailableReason || `工程文件所在存储卷“${volume}”当前不可访问，暂不能下载。`,
+  };
 }
 
 /** 将当前失败与“曾失败但已由重试恢复”分开展示。 */

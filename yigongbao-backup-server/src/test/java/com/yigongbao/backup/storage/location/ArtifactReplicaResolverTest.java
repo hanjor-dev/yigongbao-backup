@@ -88,6 +88,33 @@ class ArtifactReplicaResolverTest {
         assertThat(projection.diagnosticReason()).contains("STORAGE_VOLUME_MISSING").contains("99");
     }
 
+    @Test void exposesArchiveNoteOnlyForCurrentlyOfflineColdMedia() {
+        ArtifactCopyMapper copies = mock(ArtifactCopyMapper.class);
+        StorageVolumeMapper volumes = mock(StorageVolumeMapper.class);
+        ArtifactCopyEntity hotCopy = copy(1L, 10L, LocalDateTime.now());
+        ArtifactCopyEntity onlineColdCopy = copy(2L, 20L, LocalDateTime.now());
+        onlineColdCopy.setArtifactId(10L);
+        ArtifactCopyEntity offlineColdCopy = copy(3L, 30L, LocalDateTime.now());
+        offlineColdCopy.setArtifactId(11L);
+        StorageVolumeEntity hot = volume(10L, "HOT", "IDLE");
+        StorageVolumeEntity onlineCold = volume(20L, "COLD", "IDLE");
+        StorageVolumeEntity offlineCold = volume(30L, "COLD", "IDLE");
+        hot.setArchiveNote("历史封存-A");
+        onlineCold.setArchiveNote("历史封存-B");
+        offlineCold.setArchiveNote("当前离线封存-C");
+        offlineCold.setMountStatus("OFFLINE");
+        when(copies.selectList(any())).thenReturn(List.of(hotCopy, onlineColdCopy, offlineColdCopy));
+        when(volumes.selectBatchIds(anyCollection())).thenReturn(List.of(hot, onlineCold, offlineCold));
+
+        Map<Long, ArtifactReplicaResolver.ArtifactStorageProjection> projections =
+                resolver(copies, volumes, mock(VolumeArchiveMapper.class))
+                        .project("ORDER_PACKAGE", List.of(9L, 10L, 11L));
+
+        assertThat(projections.get(9L).archiveNote()).isNull();
+        assertThat(projections.get(10L).archiveNote()).isNull();
+        assertThat(projections.get(11L).archiveNote()).isEqualTo("当前离线封存-C");
+    }
+
     @Test void readsArchiveGuardsInOneBatchAndAcceptsOnlyTheMatchingActiveGuard() {
         ArtifactCopyMapper copies = mock(ArtifactCopyMapper.class);
         StorageVolumeMapper volumes = mock(StorageVolumeMapper.class);

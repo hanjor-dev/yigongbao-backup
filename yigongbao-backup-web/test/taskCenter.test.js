@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import * as taskCenter from '../src/taskCenter.js';
-import { canRetryFailedOrders, coldBatchCapabilities, coldImportDiagnostic, extractJobId, hotReplicaPresentation, incompleteBackupLabel, isTerminalJob, jobProgress, normalizePage, offlineStorageSummary, replaceJobById, storageMountState, storageState, storageVolumeView, supplementTaskState, taskFailureSummary } from '../src/taskCenter.js';
+import { canRetryFailedOrders, coldBatchCapabilities, coldImportDiagnostic, extractJobId, hotReplicaPresentation, incompleteBackupLabel, isTerminalJob, jobProgress, normalizePage, offlineStorageSummary, replaceJobById, storageMountState, storageState, storageVolumeView, supplementStoragePresentation, supplementTaskState, taskFailureSummary } from '../src/taskCenter.js';
 import { statusLabel, statusTone, workflowLabel } from '../src/components/StatusBadge.js';
 
 test('extractJobId handles command response envelope', () => {
@@ -47,6 +47,32 @@ test('normalizePage preserves server pagination metadata and safe defaults', () 
     records: [{ id: 1 }], current: 2, size: 20, total: 41, pages: 3
   });
   assert.deepEqual(normalizePage(undefined), { records: [], current: 1, size: 20, total: 0, pages: 0 });
+});
+
+test('supplementStoragePresentation follows the supplemental file current volume state', () => {
+  assert.deepEqual(supplementStoragePresentation({
+    storageVolumeName: 'D盘冷备',
+    storageTier: 'COLD',
+    storageMountStatus: 'OFFLINE',
+    storageAccessible: false,
+  }), {
+    canDownload: false,
+    label: '冷备 · 离线',
+    tagType: 'warning',
+    message: '工程文件位于离线冷备卷“D盘冷备”，请接入对应介质并在存储卷管理中确认挂载后下载。',
+  });
+
+  assert.deepEqual(supplementStoragePresentation({
+    storageVolumeName: 'C盘热备',
+    storageTier: 'HOT',
+    storageMountStatus: 'ONLINE',
+    storageAccessible: true,
+  }), {
+    canDownload: true,
+    label: '热备 · 在线',
+    tagType: 'success',
+    message: '工程文件当前可下载。',
+  });
 });
 
 test('job evidence distinguishes retry recovery from a terminal failure', () => {
@@ -333,4 +359,11 @@ test('degraded backup remains separate from strict retry and exposes completenes
   assert.equal(canRetryFailedOrders({ jobType: 'DEGRADED_BACKUP', state: 'FAILED', orderFailed: 1 }), false);
   assert.equal(incompleteBackupLabel({ backupCompleteness: 'INCOMPLETE', relationGapCount: 2 }), '文件可能不完整 · 缺失关系 2');
   assert.equal(incompleteBackupLabel({ backupCompleteness: 'COMPLETE' }), '');
+});
+
+test('incomplete backup explanation distinguishes relation uncertainty from actual file loss', () => {
+  assert.equal(typeof taskCenter.incompleteBackupTooltip, 'function');
+  assert.match(taskCenter.incompleteBackupTooltip({ backupCompleteness: 'INCOMPLETE' }), /不代表备份文件已经丢失或必然缺失/);
+  assert.match(taskCenter.incompleteBackupTooltip({ backupCompleteness: 'INCOMPLETE' }), /订单与文件关联关系可能存在异常/);
+  assert.equal(taskCenter.incompleteBackupTooltip({ backupCompleteness: 'COMPLETE' }), '');
 });

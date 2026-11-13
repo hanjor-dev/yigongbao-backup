@@ -270,12 +270,15 @@ test('overview health result is compact and summary values use stronger visual h
     const metrics = await renderer.render('/src/components/overview/OverviewMetrics.vue', {
       summary:{
         orderStatistics:{ total:10, hot:10, cold:0 },
-        readableFiles:{ logicalFileCount:167, managedArtifactBytes:2555505541, metadataRecordCount:13 },
+        readableFiles:{ orderPackageCount:10, logicalFileCount:167, managedArtifactBytes:2555505541, metadataRecordCount:13 },
         todayBackup:{ total:10, completeSucceeded:10, incompleteSucceeded:0, failed:0 }
       }
     }, ['ArrowRight']);
     const emphasizedValues = metrics.match(/class="el-statistic__number" style="[^"]*font-size:32px[^"]*font-weight:700[^"]*"/g) || [];
     assert.equal(emphasizedValues.length, 3);
+    assert.match(metrics, /订单包[\s\S]*10/);
+    assert.match(metrics, /文件明细[\s\S]*167/);
+    assert.doesNotMatch(metrics, /el-descriptions--small/);
   } finally {
     await renderer.close();
   }
@@ -328,6 +331,11 @@ test('recent activity aligns its fixed viewport with automation and keeps each r
 
 test('automation separates schedule timing from the task description', () => {
   const automation = read('../src/components/overview/OverviewAutomation.vue');
+  assert.match(automation, /<el-table-column label="调度状态"/);
+  assert.match(automation, /statusLabel\(row\.scheduleStatus\)/);
+  assert.match(automation, /<el-table-column label="最近一次执行状态"/);
+  assert.match(automation, /statusLabel\(row\.lastRunStatus\)/);
+  assert.doesNotMatch(automation, /<el-table-column label="状态"/);
   assert.match(automation, /<el-table-column label="调度时间"/);
   assert.match(automation, />周期：\{\{ schedulePeriodText\(row\) \}\}</);
   assert.match(automation, />最近成功：\{\{ formatTime\(row\.lastSuccessAt\) \}\}</);
@@ -379,16 +387,18 @@ test('overview automation and capacity helpers present operator-facing values', 
   assert.equal(model.remainingCapacity(1000, 600), 400);
   assert.equal(model.remainingCapacity(null, 600), null);
   assert.equal(model.remainingCapacity(100, 120), 0);
+  assert.equal(model.currentColdMediaCount({ totalCount: 1, successfulArchiveCount: 2 }), 1);
+  assert.equal(model.currentColdMediaCount({ successfulArchiveCount: 2 }), null);
   assert.equal(typeof model.automationRows, 'function');
   const automation = model.automationRows({
     backup: { enabled:true, state:'NORMAL', scheduleState:'READY', lastRunStatus:'SUCCEEDED' },
     accountSync: { enabled:true, state:'NORMAL', scheduleState:'READY', lastRunStatus:'SUCCEEDED' },
     cleanup: { enabled:true, state:'NORMAL', scheduleState:'READY', lastRunStatus:'SUCCEEDED' }
   });
-  assert.deepEqual(automation.map(item => [item.key,item.label,item.state,item.lastRunStatus]), [
-    ['backup','自动备份','NORMAL','SUCCEEDED'],
-    ['accountSync','账号同步','NORMAL','SUCCEEDED'],
-    ['cleanup','云端清理','NORMAL','SUCCEEDED']
+  assert.deepEqual(automation.map(item => [item.key,item.label,item.state,item.scheduleStatus,item.lastRunStatus]), [
+    ['backup','自动备份','NORMAL','NORMAL','SUCCEEDED'],
+    ['accountSync','账号同步','NORMAL','NORMAL','SUCCEEDED'],
+    ['cleanup','云端清理','NORMAL','NORMAL','SUCCEEDED']
   ]);
   const legacyReady = model.automationRows({
     backup: { enabled:true, state:'READY', lastSuccessAt:'2026-11-12T09:29:07' },

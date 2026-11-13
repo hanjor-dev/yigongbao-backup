@@ -19,12 +19,14 @@ const schedulePeriodText = item => [
     <template #header><el-text tag="strong">自动化状态</el-text></template>
     <el-table :data="rows" size="small">
       <el-table-column prop="label" label="任务" width="96" />
-      <el-table-column label="状态" width="124">
+      <el-table-column label="调度状态" width="108">
         <template #default="{ row }">
-          <el-space direction="vertical" alignment="flex-start" :size="4">
-            <el-tag size="small" :type="elementTagType(row.state)">调度 {{ statusLabel(row.state) }}</el-tag>
-            <el-tag size="small" :type="elementTagType(row.lastRunStatus)">执行 {{ statusLabel(row.lastRunStatus) }}</el-tag>
-          </el-space>
+          <el-tag size="small" :type="elementTagType(row.scheduleStatus)">{{ statusLabel(row.scheduleStatus) }}</el-tag>
+        </template>
+      </el-table-column>
+      <el-table-column label="最近一次执行状态" width="142">
+        <template #default="{ row }">
+          <el-tag size="small" :type="elementTagType(row.lastRunStatus)">{{ statusLabel(row.lastRunStatus) }}</el-tag>
         </template>
       </el-table-column>
       <el-table-column label="任务说明" min-width="220">

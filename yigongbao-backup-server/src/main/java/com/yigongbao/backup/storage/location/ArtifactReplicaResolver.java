@@ -116,9 +116,11 @@ public class ArtifactReplicaResolver {
         }
         StorageVolumeEntity volume = selected.volume;
         boolean readable = readable(selected, guardByArchiveId);
+        String currentArchiveNote = "COLD".equals(volume.getTier()) && "OFFLINE".equals(volume.getMountStatus())
+                ? volume.getArchiveNote() : null;
         return new ArtifactStorageProjection(selected.copy.getId(), volume.getId(), selected.copy.getStorageKey(), selected.copy.getSha256(),
                 volume.getDisplayName(), volume.getTier(), volume.getMountStatus(), volume.getWriteStatus(),
-                volume.getAdminStatus(), volume.getOperationStatus(), volume.getArchiveNote(), volume.getOfflineLabelNote(),
+                volume.getAdminStatus(), volume.getOperationStatus(), currentArchiveNote, volume.getOfflineLabelNote(),
                 volume.getPhysicalLocation(),
                 volume.getOrderCreatedFrom(), volume.getOrderCreatedTo(), volume.periodLabel(),
                 hotPresent, coldPresent, hotRollup, coldRollup, readable,

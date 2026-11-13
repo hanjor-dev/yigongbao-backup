@@ -1,7 +1,7 @@
 <script setup>
 import { nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue';
 import { useBackupContext } from '../../composables/useBackupContext.js';
-import { formatJobOrderCreatedAt, hotReplicaPresentation, incompleteBackupLabel, offlineStorageSummary, stickyTableScrollbarState, storageMountState } from '../../taskCenter.js';
+import { formatJobOrderCreatedAt, hotReplicaPresentation, incompleteBackupTooltip, offlineStorageSummary, stickyTableScrollbarState, storageMountState } from '../../taskCenter.js';
 
 /* finesse · component: order-file-table · register=product
  * states: populated · empty · selected · unavailable · uploading
@@ -113,7 +113,7 @@ onBeforeUnmount(() => {
   <div ref="tableShell" class="order-table-shell">
     <el-table ref="tableRef" :data="orders" class="data-table" row-key="id" highlight-current-row @row-click="selectOrder" @scroll="syncFromTable">
     <el-table-column label="选择" width="62" align="center"><template #default="{ row }"><el-tooltip :disabled="row.backupMode !== 'METADATA_SIMULATION' && row.storageAccessible !== false" :content="row.storageAccessible === false ? (row.storageUnavailableReason || '存储卷不可访问') : '模拟备份不可用于线上恢复'"><el-checkbox :disabled="row.backupMode === 'METADATA_SIMULATION' || row.storageAccessible === false" :model-value="selectedIds.includes(row.id)" @click.stop @change="toggleSelected(row)" /></el-tooltip></template></el-table-column>
-    <el-table-column label="订单号" min-width="210"><template #default="{ row }"><div class="order-code">{{ row.orderCode || row.sourceOrderId }}</div><small class="muted">快照 #{{ row.id }}</small><el-tag v-if="row.backupMode === 'METADATA_SIMULATION'" size="small" type="warning" effect="plain" class="simulation-tag">模拟备份</el-tag><el-tag v-if="incompleteBackupLabel(row)" size="small" type="warning" effect="dark">文件可能不完整</el-tag><small v-if="incompleteBackupLabel(row)" class="muted">缺失关系 {{ row.relationGapCount || 0 }}</small></template></el-table-column>
+    <el-table-column label="订单号" min-width="210"><template #default="{ row }"><div class="order-code">{{ row.orderCode || row.sourceOrderId }}</div><small class="muted">快照 #{{ row.id }}</small><el-tag v-if="row.backupMode === 'METADATA_SIMULATION'" size="small" type="warning" effect="plain" class="simulation-tag">模拟备份</el-tag><el-tooltip v-if="incompleteBackupTooltip(row)" :content="incompleteBackupTooltip(row)" placement="top" :show-after="250"><el-tag size="small" type="warning" effect="dark">文件可能不完整</el-tag></el-tooltip></template></el-table-column>
     <el-table-column label="创建时间" width="168"><template #default="{ row }"><time class="table-time" :datetime="row.orderCreatedAt">{{ formatJobOrderCreatedAt(row.orderCreatedAt) }}</time></template></el-table-column>
     <el-table-column label="机构 / 医院" width="170" show-overflow-tooltip><template #default="{ row }"><div>{{ row.orgName || '-' }}</div><small class="muted">{{ row.hospitalName || '-' }}</small></template></el-table-column>
     <el-table-column label="患者 / 医生" width="120" show-overflow-tooltip><template #default="{ row }"><div>{{ row.patientName || '-' }}</div><small class="muted">医生：{{ row.doctorName || '-' }}</small></template></el-table-column>

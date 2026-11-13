@@ -65,6 +65,11 @@ export function remainingCapacity(totalBytes, usedBytes) {
   return Math.max(0, total - used);
 }
 
+export function currentColdMediaCount(coldMedia) {
+  const value = Number(coldMedia?.totalCount);
+  return Number.isFinite(value) && value >= 0 ? value : null;
+}
+
 const AUTOMATION_DEFINITIONS = Object.freeze([
   { key:'backup', label:'自动备份', note:'错过计划时间不补跑' },
   { key:'accountSync', label:'账号同步', note:'按计划拉取线上账号' },
@@ -79,10 +84,12 @@ export function automationRows(value) {
     const rawState = String(item.state || 'UNKNOWN').toUpperCase();
     const inferredRun = item.lastError ? 'FAILED' : item.lastSuccessAt ? 'SUCCEEDED' : runStates.has(rawState) ? rawState : 'NOT_RUN';
     const lastRunStatus = String(item.lastRunStatus || inferredRun).toUpperCase();
+    const rawScheduleStatus = String(item.scheduleState || (item.enabled === false ? 'DISABLED' : rawState)).toUpperCase();
+    const scheduleStatus = ['READY','IDLE'].includes(rawScheduleStatus) ? 'NORMAL' : rawScheduleStatus;
     let state = item.enabled === false ? 'DISABLED' : rawState;
     if (item.enabled !== false && successStates.has(state)) state = 'NORMAL';
     if (item.enabled !== false && (state === 'READY' || state === 'IDLE')) state = successStates.has(lastRunStatus) ? 'NORMAL' : 'WAITING';
-    return { ...definition, ...item, state, lastRunStatus };
+    return { ...definition, ...item, state, scheduleStatus, lastRunStatus };
   });
 }
 

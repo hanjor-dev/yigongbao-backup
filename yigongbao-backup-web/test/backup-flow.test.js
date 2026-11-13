@@ -43,15 +43,19 @@ test('admin backup page renders automatic backup tasks without candidate selecti
   assert.match(detail, /模拟完成/);
   assert.match(read('../src/components/orders/OrderDetail.vue'), /displayJson/);
   assert.match(orderTable, /文件可能不完整/);
+  assert.doesNotMatch(orderTable, /缺失关系/);
+  assert.match(orderTable, /<el-tooltip[\s\S]*incompleteBackupTooltip\(row\)/);
   assert.match(orderDrawer, /degradedBackupEligible/);
   assert.match(orderDrawer, /降级备份/);
   assert.match(detail, /canRetryFailedOrders/);
-  assert.match(read('../src/components/orders/OrderDetail.vue'), /文件可能不完整/);
+  const orderDetail = read('../src/components/orders/OrderDetail.vue');
+  assert.match(orderDetail, /文件可能不完整/);
+  assert.match(orderDetail, /<el-tooltip[\s\S]*incompleteBackupTooltip\(selectedOrder\)/);
   assert.match(read('../src/components/jobs/JobTable.vue'), /canRetryFailedOrders/);
   const businessFields = read('../src/components/orders/OrderBusinessFields.vue');
   assert.match(businessFields, /订单信息（备份时）/);
   assert.doesNotMatch(businessFields, /全部业务字段|Object\.entries|JSON\.stringify/);
-  assert.match(businessFields, /<el-collapse v-if="presentation\.rawJson" class="business-raw-json">/);
+  assert.match(businessFields, /<el-collapse v-if="presentation\.hasContent && presentation\.rawJson" class="business-raw-json">/);
   assert.match(businessFields, /原始JSON快照/);
   assert.doesNotMatch(businessFields, /原始 JSON（按需查看）/);
   assert.match(businessFields, /\.business-raw-json\s*\{(?=[^}]*margin:\s*20px 0 0;)(?=[^}]*width:\s*100%;)[^}]*\}/);
@@ -95,6 +99,16 @@ test('order file details open in a drawer without coupling bulk selection to det
   assert.doesNotMatch(table, /type="expand"|OrderBusinessFields/);
   assert.match(consoleSource, /function closeOrderDetail\(\)/);
   assert.doesNotMatch(toggleSelectedSource, /selectOrder\(/);
+});
+
+test('order detail supplement area uses Element Plus upload and file cards', () => {
+  const detail = read('../src/components/orders/OrderDetail.vue');
+
+  assert.match(detail, /<el-upload[\s\S]*\sdrag(?:\s|>)/);
+  assert.match(detail, /<el-empty[^>]*description="尚无补传文件"/);
+  assert.match(detail, /<el-card\s+v-for="file in supplements"/);
+  assert.match(detail, /<el-descriptions[\s\S]*label="文件大小"[\s\S]*label="存储卷"[\s\S]*label="相对位置"/);
+  assert.doesNotMatch(detail, /仅本地/);
 });
 
 test('raw JSON snapshot keeps the same parent width before and after expansion', () => {

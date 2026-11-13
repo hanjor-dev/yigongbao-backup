@@ -59,9 +59,9 @@ const presentation = computed(() => buildOrderBusinessPresentation(props.value))
         </div>
       </section>
     </div>
-    <el-empty v-else description="暂无可展示的订单信息" :image-size="48" />
+    <el-empty v-else description="暂无订单业务信息" :image-size="64" />
 
-    <el-collapse v-if="presentation.rawJson" class="business-raw-json">
+    <el-collapse v-if="presentation.hasContent && presentation.rawJson" class="business-raw-json">
       <el-collapse-item name="raw-json">
         <template #title>
           <span class="business-raw-json__title">原始JSON快照</span>

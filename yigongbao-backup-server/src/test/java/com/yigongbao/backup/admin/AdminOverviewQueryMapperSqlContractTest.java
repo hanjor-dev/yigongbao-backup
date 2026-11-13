@@ -46,7 +46,8 @@ class AdminOverviewQueryMapperSqlContractTest {
         assertThat(bytes).contains("backup_mode='real'", "package_size", "backup_completed_at");
         assertThat(recent).contains("with recent_jobs as", "join recent_jobs rj", "left join", "bk_job_order",
                 "bk_order_snapshot", "backup_completeness", "group by jo.job_id", "bk_storage_volume");
-        assertThat(recent).contains("job_type<>'supplement_upload'");
+        assertThat(recent).contains("job_type in ('order_backup','manual_backup','degraded_backup','restore','cleanup_dry_run','cleanup_execute','auto_cleanup')");
+        assertThat(recent).doesNotContain("future_job", "其他任务");
         assertThat(recent).doesNotContain("select count(*) from bk_job_order");
     }
 

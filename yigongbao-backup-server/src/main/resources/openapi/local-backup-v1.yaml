@@ -809,6 +809,7 @@ components:
       type: object
       additionalProperties: false
       properties:
+        orderPackageCount: {type: integer, format: int64, minimum: 0}
         logicalFileCount: {type: integer, format: int64}
         managedArtifactBytes: {type: integer, format: int64}
         unknownFileCountPackageCount: {type: integer, format: int64}
@@ -830,7 +831,7 @@ components:
       properties:
         activeVolume: {oneOf: [{$ref: '#/components/schemas/OverviewVolume'}, {type: 'null'}]}
         standby: {type: object, additionalProperties: false, properties: {readyCount: {type: integer, format: int64}, preferred: {oneOf: [{$ref: '#/components/schemas/OverviewVolume'}, {type: 'null'}]}}}
-        coldMedia: {type: object, additionalProperties: false, properties: {onlineCount: {type: integer, format: int64}, expectedOfflineCount: {type: integer, format: int64}, repairRequiredCount: {type: integer, format: int64}, successfulArchiveCount: {type: integer, format: int64}, latestArchivedAt: {type: [string, 'null'], format: date-time}}}
+        coldMedia: {type: object, additionalProperties: false, properties: {totalCount: {type: integer, format: int64}, onlineCount: {type: integer, format: int64}, expectedOfflineCount: {type: integer, format: int64}, repairRequiredCount: {type: integer, format: int64}, successfulArchiveCount: {type: integer, format: int64}, latestArchivedAt: {type: [string, 'null'], format: date-time}}}
         onlineCapacity: {type: object, additionalProperties: false, properties: {usedBytes: {type: [integer, 'null'], format: int64}, usableBytes: {type: [integer, 'null'], format: int64}, totalBytes: {type: [integer, 'null'], format: int64}, usedPercent: {type: [number, 'null']}, includedVolumeCount: {type: integer, format: int64}, excludedVolumeCount: {type: integer, format: int64}}}
     OverviewVolume:
       type: object

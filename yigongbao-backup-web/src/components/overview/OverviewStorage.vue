@@ -1,6 +1,6 @@
 <script setup>
 import { computed } from 'vue';
-import { formatBytes, formatCount, formatPercent, formatTime, remainingCapacity } from '../../overviewModel.js';
+import { currentColdMediaCount, formatBytes, formatCount, formatPercent, formatTime, remainingCapacity } from '../../overviewModel.js';
 
 const props = defineProps({ storage: Object });
 defineEmits(['navigate']);
@@ -47,7 +47,7 @@ const remaining = computed(() => remainingCapacity(props.storage?.onlineCapacity
         <el-descriptions-item label="首选备用卷">{{ storage?.standby?.preferred?.name || '暂无' }}</el-descriptions-item>
         <el-descriptions-item label="冷备介质">
           <el-space wrap>
-            <el-text>{{ formatCount(storage?.coldMedia?.successfulArchiveCount) }}</el-text>
+            <el-text>{{ formatCount(currentColdMediaCount(storage?.coldMedia)) }}</el-text>
             <el-button link type="primary" @click="$emit('navigate', { actionRoute: 'cold-storage' })">查看</el-button>
           </el-space>
         </el-descriptions-item>

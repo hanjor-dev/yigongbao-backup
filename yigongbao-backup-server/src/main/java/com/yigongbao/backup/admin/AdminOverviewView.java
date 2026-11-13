@@ -39,13 +39,13 @@ public record AdminOverviewView(LocalDateTime observedAt,
                                  long temporarilyOffline, long abnormalUnreadable,
                                  long degradedRedundancy) { }
     public record OrderStatistics(long total, long hot, long cold) { }
-    public record ReadableFiles(long logicalFileCount, long managedArtifactBytes,
+    public record ReadableFiles(long orderPackageCount, long logicalFileCount, long managedArtifactBytes,
                                 long unknownFileCountPackageCount, long unknownSizeCopyCount,
                                 long invalidCopyMetadataCount, long metadataRecordCount) {
         public ReadableFiles(long logicalFileCount, long managedArtifactBytes,
                              long unknownFileCountPackageCount, long unknownSizeCopyCount,
                              long invalidCopyMetadataCount) {
-            this(logicalFileCount, managedArtifactBytes, unknownFileCountPackageCount,
+            this(0, logicalFileCount, managedArtifactBytes, unknownFileCountPackageCount,
                     unknownSizeCopyCount, invalidCopyMetadataCount, 0);
         }
     }
@@ -56,7 +56,7 @@ public record AdminOverviewView(LocalDateTime observedAt,
                          BigDecimal usedPercent, Integer thresholdPercent, LocalDateTime lastProbedAt,
                          LocalDateTime capacityObservedAt, boolean capacityFresh, String capacityLabel) { }
     public record Standby(long readyCount, Volume preferred) { }
-    public record ColdMedia(long onlineCount, long expectedOfflineCount, long repairRequiredCount,
+    public record ColdMedia(long totalCount, long onlineCount, long expectedOfflineCount, long repairRequiredCount,
                             long successfulArchiveCount, LocalDateTime latestArchivedAt) { }
     public record OnlineCapacity(Long usedBytes, Long usableBytes, Long totalBytes,
                                  BigDecimal usedPercent, long includedVolumeCount, long excludedVolumeCount) { }
@@ -103,11 +103,13 @@ final class AdminOverviewProjection {
         }
         long total = 0, complete = 0, incomplete = 0, offline = 0, abnormal = 0, degraded = 0;
         long backedUpOrders = 0, hotOrders = 0, coldOrders = 0;
-        long logicalFiles = 0, unknownFiles = 0;
+        long orderPackages = 0, logicalFiles = 0, unknownFiles = 0;
         long invalidCopyMetadata = candidates == null ? 0 : candidates.stream().filter(Objects::nonNull)
                 .map(AdminOverviewQueryMapper.ArtifactReplicaCandidateRow::invalidMetadataCount)
                 .filter(Objects::nonNull).reduce(0L,Math::addExact);
         for (Map<Long, List<AdminOverviewQueryMapper.ArtifactReplicaCandidateRow>> packages : orders.values()) {
+            orderPackages = Math.addExact(orderPackages, packages.values().stream()
+                    .filter(rows -> rows.stream().anyMatch(AdminOverviewProjection::hasStoredCopy)).count());
             boolean hasHot = packages.values().stream().flatMap(List::stream)
                     .anyMatch(row -> row.hotCopyCount() != null && row.hotCopyCount() > 0);
             boolean hasCold = packages.values().stream().flatMap(List::stream)
@@ -142,7 +144,7 @@ final class AdminOverviewProjection {
         return new AdminOverviewView.Summary(
                 new AdminOverviewView.ReadableOrders(total, complete, incomplete, offline, abnormal, degraded),
                 new AdminOverviewView.OrderStatistics(backedUpOrders, hotOrders, coldOrders),
-                new AdminOverviewView.ReadableFiles(logicalFiles, managedBytes, unknownFiles, unknownSize,
+                new AdminOverviewView.ReadableFiles(orderPackages, logicalFiles, managedBytes, unknownFiles, unknownSize,
                         invalidCopyMetadata, metadataRecords),
                 new AdminOverviewView.TodayBackup(0, 0, 0, 0, 0));
     }

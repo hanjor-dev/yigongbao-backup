@@ -48,7 +48,7 @@ test('offline orders and supplements cannot start unavailable operations', () =>
   const orderDetail = fs.readFileSync(path.join(root, 'src', 'components', 'orders', 'OrderDetail.vue'), 'utf8');
   const ordersView = fs.readFileSync(path.join(root, 'src', 'views', 'OrdersView.vue'), 'utf8');
   assert.match(orderTable, /storageAccessible === false/);
-  assert.match(orderDetail, /file\.storageAccessible === false/);
+  assert.match(orderDetail, /!supplementState\(file\)\.canDownload/);
   assert.match(ordersView, /hasUnavailableSelection/);
 });
 
